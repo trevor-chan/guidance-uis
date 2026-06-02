@@ -1,2 +1,4 @@
 # guidance-uis
-user study for evaluating 3D pose guidance user interfaces
+Guidance User Interface Study
+
+Code for evaluating a range of 3D pose guidance graphical interfaces
