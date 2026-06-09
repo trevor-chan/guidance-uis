@@ -29,7 +29,8 @@ _KEY_MAP = {
 }
 
 GAME_DURATION = 180.0   # 3 minutes
-CUBE_SIZE     = 0.8     # metres, side length
+CUBE_SIZE     = 0.5     # metres, side length (cube centred on calibration origin)
+HOLD_DURATION = 1.0     # seconds of continuous match required to register a hit
 
 
 def _rot_x(a):
@@ -51,18 +52,17 @@ _ROT_FNS = [_rot_x, _rot_y, _rot_z]
 
 
 def _random_target_pose(origin: np.ndarray) -> np.ndarray:
-    """Random target within a 0.8 m cube placed in front of the calibration origin.
+    """Random target within a 0.5 m cube centred on the calibration origin.
 
-    The cube's near face starts at the origin; its far face is 0.8 m ahead
-    along the origin's local +Z axis.  Left/right and up/down span ±0.4 m.
-    Orientation is randomised up to 30° off the calibration orientation on a
-    randomly chosen axis, giving each target a distinct angular goal.
+    Each axis offset is ±0.25 m (local X/Y/Z), so the calibration pose is the
+    centroid and targets spread in all directions equally.  Orientation is
+    randomised up to 30° off the calibration orientation on a randomly chosen axis.
     """
     half = CUBE_SIZE / 2
     local_pos = np.array([
-        random.uniform(-half, half),           # left / right  (local X)
-        random.uniform(-half, half),           # up   / down   (local Y)
-        half + random.uniform(-half, half),    # 0 – 0.8 m forward (local Z)
+        random.uniform(-half, half),   # left / right  (local X)
+        random.uniform(-half, half),   # up   / down   (local Y)
+        random.uniform(-half, half),   # fore / aft    (local Z)
     ])
     world_pos = origin[:3, 3] + origin[:3, :3] @ local_pos
     target = np.eye(4, dtype=float)
@@ -115,7 +115,7 @@ async def handler(websocket, fetcher_cls):
         await websocket.close(1011, "tracker unavailable")
         return
 
-    trial = Trial(fetcher)
+    trial = Trial(fetcher, linear_tol=0.01)
     trial.start()
     print(f"Client connected ({fetcher_cls.__name__}) — trial started.")
 
@@ -126,6 +126,7 @@ async def handler(websocket, fetcher_cls):
         "game_over":  False,
         "origin":     None,   # 4x4 ndarray: calibration pose
         "hit_count":  0,
+        "hold_start": None,   # time.monotonic() when current continuous match began
         "start_time": None,   # time.monotonic() at calibration
     }
 
@@ -135,13 +136,15 @@ async def handler(websocket, fetcher_cls):
         comp["active"]     = True
         comp["game_over"]  = False
         comp["hit_count"]  = 0
+        comp["hold_start"] = None
         comp["start_time"] = time.monotonic()
         trial.target_pose  = _random_target_pose(comp["origin"])
         trial.start()
 
     def _new_target() -> None:
         if comp["calibrated"] and not comp["game_over"]:
-            trial.target_pose = _random_target_pose(comp["origin"])
+            comp["hold_start"] = None
+            trial.target_pose  = _random_target_pose(comp["origin"])
             trial.start()
 
     def _reset() -> None:
@@ -150,6 +153,7 @@ async def handler(websocket, fetcher_cls):
         comp["game_over"]  = False
         comp["origin"]     = None
         comp["hit_count"]  = 0
+        comp["hold_start"] = None
         comp["start_time"] = None
         trial.target_pose  = TARGET_POSE
         trial.start()
@@ -160,16 +164,26 @@ async def handler(websocket, fetcher_cls):
 
             # Competition overlay
             tr = None
+            hold_progress = 0.0
             if comp["active"]:
                 elapsed_game = time.monotonic() - comp["start_time"]
                 tr = max(0.0, GAME_DURATION - elapsed_game)
                 if tr <= 0.0:
                     comp["active"]    = False
                     comp["game_over"] = True
+                    comp["hold_start"] = None
                 elif state["matched"]:
-                    comp["hit_count"] += 1
-                    trial.target_pose = _random_target_pose(comp["origin"])
-                    trial.start()
+                    if comp["hold_start"] is None:
+                        comp["hold_start"] = time.monotonic()
+                    hold_dur = time.monotonic() - comp["hold_start"]
+                    hold_progress = min(1.0, hold_dur / HOLD_DURATION)
+                    if hold_progress >= 1.0:
+                        comp["hit_count"] += 1
+                        trial.target_pose  = _random_target_pose(comp["origin"])
+                        trial.start()
+                        comp["hold_start"] = None
+                else:
+                    comp["hold_start"] = None
             elif comp["game_over"]:
                 tr = 0.0
 
@@ -186,6 +200,7 @@ async def handler(websocket, fetcher_cls):
             if comp["active"]:
                 state["timed_out"] = False
 
+            state["hold_progress"]       = hold_progress
             state["comp_calibrated"]     = comp["calibrated"]
             state["comp_active"]         = comp["active"]
             state["comp_game_over"]      = comp["game_over"]

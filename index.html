@@ -153,9 +153,22 @@
     .badge-comp-active { background: #14532d; color: #4ade80; }
     .badge-comp-over   { background: #450a0a; color: #f87171; }
     .badge-comp-idle   { background: #2a2a2a; color: var(--dim); }
+
+    /* ── Hold indicator: green fill rising from bottom ── */
+    #hold-bg {
+      position: fixed;
+      bottom: 0;
+      left: 0;
+      right: 0;
+      height: 0%;
+      background: rgba(34, 197, 94, 0.35);
+      z-index: -1;
+      pointer-events: none;
+    }
   </style>
 </head>
 <body>
+  <div id="hold-bg"></div>
   <h1>TRIAL MONITOR</h1>
 
   <!-- Competition card -->
@@ -254,6 +267,34 @@
       return `${m}:${String(s).padStart(2, "0")}`;
     }
 
+    // ── Hold indicator ──
+    const holdBg = document.getElementById("hold-bg");
+    let holdFlashTimer = null;
+
+    function updateHold(progress) {
+      if (progress >= 1.0) {
+        // Hit registered — flash solid bright green then fade out
+        clearTimeout(holdFlashTimer);
+        holdBg.style.transition = "none";
+        holdBg.style.height = "100%";
+        holdBg.style.backgroundColor = "rgba(34, 197, 94, 0.85)";
+        holdFlashTimer = setTimeout(() => {
+          holdBg.style.transition = "height 250ms ease-in";
+          holdBg.style.height = "0%";
+          holdFlashTimer = null;
+        }, 600);
+      } else if (progress > 0 && holdFlashTimer === null) {
+        // Actively holding — fill from bottom
+        holdBg.style.transition = "height 40ms linear";
+        holdBg.style.height = `${(progress * 100).toFixed(1)}%`;
+        holdBg.style.backgroundColor = "rgba(34, 197, 94, 0.35)";
+      } else if (progress <= 0 && holdFlashTimer === null) {
+        // Match broke — snap to zero immediately
+        holdBg.style.transition = "none";
+        holdBg.style.height = "0%";
+      }
+    }
+
     function connect() {
       const ws = new WebSocket(WS_URL);
 
@@ -284,6 +325,9 @@
           }, 2000);
           return;
         }
+
+        // Hold indicator
+        updateHold(d.hold_progress ?? 0);
 
         // Distance bars
         nullNotice.style.display = (d.linear === null) ? "block" : "none";

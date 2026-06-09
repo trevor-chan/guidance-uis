@@ -27,9 +27,12 @@ TIMEOUT_SECONDS = 60.0
 class Trial:
     """Runs one target-match test against a live pose source."""
 
-    def __init__(self, fetcher: LivePoseFetcher, target_pose: np.ndarray = TARGET_POSE):
+    def __init__(self, fetcher: LivePoseFetcher, target_pose: np.ndarray = TARGET_POSE,
+                 linear_tol: float = LINEAR_TOLERANCE, angular_tol: float = ANGULAR_TOLERANCE):
         self.fetcher = fetcher
         self.target_pose = target_pose
+        self.linear_tol = linear_tol
+        self.angular_tol = angular_tol
         self.start_time = None
 
     def start(self) -> None:
@@ -56,7 +59,7 @@ class Trial:
 
         lin = linear_distance(live_pose, self.target_pose)
         ang = angular_distance(live_pose, self.target_pose)
-        matched = lin <= LINEAR_TOLERANCE and ang <= ANGULAR_TOLERANCE
+        matched = lin <= self.linear_tol and ang <= self.angular_tol
 
         return {
             "linear": lin,
