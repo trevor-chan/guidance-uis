@@ -1,0 +1,362 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>Trial Monitor</title>
+  <style>
+    :root {
+      --bg: #111;
+      --surface: #1e1e1e;
+      --text: #ddd;
+      --dim: #555;
+      --track: #2a2a2a;
+    }
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      background: var(--bg);
+      color: var(--text);
+      font-family: 'Courier New', monospace;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      min-height: 100vh;
+      gap: 20px;
+      padding: 32px;
+    }
+    h1 { font-size: 1rem; letter-spacing: 0.15em; color: var(--dim); }
+
+    .card {
+      background: var(--surface);
+      border-radius: 8px;
+      padding: 24px 28px;
+      width: 460px;
+    }
+
+    .metric { margin-bottom: 20px; }
+    .metric:last-child { margin-bottom: 0; }
+
+    .metric-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: baseline;
+      margin-bottom: 8px;
+    }
+    .metric-label {
+      font-size: 0.75rem;
+      text-transform: uppercase;
+      letter-spacing: 0.1em;
+      color: var(--dim);
+    }
+    .metric-value { font-size: 1rem; font-weight: bold; }
+
+    .bar-track {
+      height: 22px;
+      background: var(--track);
+      border-radius: 4px;
+      overflow: hidden;
+    }
+    .bar-fill {
+      height: 100%;
+      width: 0%;
+      border-radius: 4px;
+      transition: width 80ms ease-out, background-color 80ms ease-out;
+    }
+
+    .null-notice {
+      display: none;
+      text-align: center;
+      font-size: 0.8rem;
+      color: var(--dim);
+      padding: 6px 0 0;
+      letter-spacing: 0.05em;
+    }
+
+    .status-row {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+    }
+    #elapsed { font-size: 1.1rem; }
+
+    .badge {
+      padding: 4px 12px;
+      border-radius: 4px;
+      font-size: 0.8rem;
+      font-weight: bold;
+      letter-spacing: 0.08em;
+    }
+    .badge-running  { background: #2a2a2a; color: var(--dim); }
+    .badge-matched  { background: #14532d; color: #4ade80; }
+    .badge-timeout  { background: #450a0a; color: #f87171; }
+
+    #ws-status {
+      font-size: 0.7rem;
+      color: var(--dim);
+      letter-spacing: 0.05em;
+    }
+    .ws-ok  { color: #4ade80 !important; }
+    .ws-err { color: #f87171 !important; }
+
+    /* ── Competition card ── */
+    .comp-scoreboard {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 20px;
+    }
+    .comp-stat { text-align: center; }
+    .comp-big {
+      font-size: 2rem;
+      font-weight: bold;
+      letter-spacing: 0.05em;
+      margin-top: 4px;
+    }
+    #comp-time-val  { color: #facc15; }
+    #comp-hits-val  { color: #4ade80; }
+
+    #comp-final {
+      display: none;
+      text-align: center;
+      padding: 12px 0 20px;
+      border-bottom: 1px solid #333;
+      margin-bottom: 20px;
+    }
+    #comp-final-score {
+      font-size: 3rem;
+      font-weight: bold;
+      color: #4ade80;
+      margin-top: 4px;
+    }
+
+    .comp-buttons {
+      display: flex;
+      gap: 10px;
+    }
+    .comp-btn {
+      flex: 1;
+      padding: 10px 0;
+      background: #2a2a2a;
+      color: var(--text);
+      border: 1px solid #444;
+      border-radius: 6px;
+      font-family: 'Courier New', monospace;
+      font-size: 0.8rem;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+      cursor: pointer;
+      transition: background 120ms;
+    }
+    .comp-btn:hover  { background: #383838; }
+    .comp-btn:active { background: #4a4a4a; }
+
+    .badge-comp-active { background: #14532d; color: #4ade80; }
+    .badge-comp-over   { background: #450a0a; color: #f87171; }
+    .badge-comp-idle   { background: #2a2a2a; color: var(--dim); }
+  </style>
+</head>
+<body>
+  <h1>TRIAL MONITOR</h1>
+
+  <!-- Competition card -->
+  <div class="card">
+    <div class="comp-scoreboard">
+      <div class="comp-stat">
+        <div class="metric-label">Time</div>
+        <div class="comp-big" id="comp-time-val">3:00</div>
+      </div>
+      <div class="comp-stat">
+        <div class="metric-label">Score</div>
+        <div class="comp-big" id="comp-hits-val">0</div>
+      </div>
+      <div>
+        <span class="badge badge-comp-idle" id="comp-badge">UNCALIBRATED</span>
+      </div>
+    </div>
+
+    <div id="comp-final">
+      <div class="metric-label">Final Score</div>
+      <div id="comp-final-score"></div>
+    </div>
+
+    <div class="comp-buttons">
+      <button class="comp-btn" id="btn-calibrate">Calibrate</button>
+      <button class="comp-btn" id="btn-new-target">New Target</button>
+      <button class="comp-btn" id="btn-reset">Reset</button>
+    </div>
+  </div>
+
+  <!-- Distance bars -->
+  <div class="card">
+    <div class="metric">
+      <div class="metric-header">
+        <span class="metric-label">Linear distance</span>
+        <span class="metric-value" id="linear-value">—</span>
+      </div>
+      <div class="bar-track">
+        <div class="bar-fill" id="linear-bar"></div>
+      </div>
+    </div>
+
+    <div class="metric">
+      <div class="metric-header">
+        <span class="metric-label">Angular distance</span>
+        <span class="metric-value" id="angular-value">—</span>
+      </div>
+      <div class="bar-track">
+        <div class="bar-fill" id="angular-bar"></div>
+      </div>
+    </div>
+
+    <div class="null-notice" id="null-notice">tracker not visible</div>
+  </div>
+
+  <!-- Trial status -->
+  <div class="card status-row">
+    <span id="elapsed">—</span>
+    <span class="badge badge-running" id="trial-state">WAITING</span>
+  </div>
+
+  <div id="ws-status">connecting…</div>
+
+  <script>
+    const WS_URL      = "ws://localhost:8765";
+    const MAX_LINEAR  = 0.5;   // meters  — full cold at or beyond this
+    const MAX_ANGULAR = 90;    // degrees — full cold at or beyond this
+    const TRIGGER_KEYS = new Set("123456qwerty".split(""));
+
+    // Interpolate between cold (#1e3a8a) and hot (#dc2626) by closeness [0,1]
+    function barColor(closeness) {
+      const r = Math.round(30  + (220 - 30)  * closeness);
+      const g = Math.round(58  + (38  - 58)  * closeness);
+      const b = Math.round(138 + (38  - 138) * closeness);
+      return `rgb(${r},${g},${b})`;
+    }
+
+    function updateBar(barId, valueId, value, maxVal, fmt) {
+      const bar = document.getElementById(barId);
+      const val = document.getElementById(valueId);
+      if (value === null) {
+        bar.style.width = "0%";
+        bar.style.backgroundColor = "#333";
+        val.textContent = "—";
+        return;
+      }
+      const closeness = Math.max(0, 1 - value / maxVal);
+      bar.style.width = `${(closeness * 100).toFixed(1)}%`;
+      bar.style.backgroundColor = barColor(closeness);
+      val.textContent = fmt(value);
+    }
+
+    function fmtTime(secs) {
+      const m = Math.floor(secs / 60);
+      const s = Math.floor(secs % 60);
+      return `${m}:${String(s).padStart(2, "0")}`;
+    }
+
+    function connect() {
+      const ws = new WebSocket(WS_URL);
+
+      const statusEl        = document.getElementById("ws-status");
+      const elapsedEl       = document.getElementById("elapsed");
+      const stateEl         = document.getElementById("trial-state");
+      const nullNotice      = document.getElementById("null-notice");
+      const compTimeEl      = document.getElementById("comp-time-val");
+      const compHitsEl      = document.getElementById("comp-hits-val");
+      const compBadgeEl     = document.getElementById("comp-badge");
+      const compFinalEl     = document.getElementById("comp-final");
+      const compFinalScore  = document.getElementById("comp-final-score");
+
+      ws.onopen = () => {
+        statusEl.textContent = "connected";
+        statusEl.className   = "ws-ok";
+      };
+
+      ws.onmessage = (evt) => {
+        const d = JSON.parse(evt.data);
+
+        if (d.error === "tracker_not_visible") {
+          statusEl.textContent = "tracker not visible — try again";
+          statusEl.className   = "ws-err";
+          setTimeout(() => {
+            statusEl.textContent = "connected";
+            statusEl.className   = "ws-ok";
+          }, 2000);
+          return;
+        }
+
+        // Distance bars
+        nullNotice.style.display = (d.linear === null) ? "block" : "none";
+        updateBar("linear-bar",  "linear-value",  d.linear,  MAX_LINEAR,
+                  v => `${v.toFixed(4)} m`);
+        updateBar("angular-bar", "angular-value", d.angular, MAX_ANGULAR,
+                  v => `${v.toFixed(2)}°`);
+
+        // Trial elapsed / match badge
+        elapsedEl.textContent = `${d.elapsed.toFixed(1)} s`;
+        if (d.matched) {
+          stateEl.textContent = "MATCHED";
+          stateEl.className   = "badge badge-matched";
+        } else if (d.timed_out) {
+          stateEl.textContent = "TIMED OUT";
+          stateEl.className   = "badge badge-timeout";
+        } else {
+          stateEl.textContent = "RUNNING";
+          stateEl.className   = "badge badge-running";
+        }
+
+        // Competition panel
+        compHitsEl.textContent = d.comp_hits ?? 0;
+
+        if (d.comp_game_over) {
+          compTimeEl.textContent       = "0:00";
+          compBadgeEl.textContent      = "GAME OVER";
+          compBadgeEl.className        = "badge badge-comp-over";
+          compFinalEl.style.display    = "block";
+          compFinalScore.textContent   = d.comp_hits ?? 0;
+        } else if (d.comp_active) {
+          compTimeEl.textContent       = fmtTime(d.comp_time_remaining);
+          compBadgeEl.textContent      = "ACTIVE";
+          compBadgeEl.className        = "badge badge-comp-active";
+          compFinalEl.style.display    = "none";
+        } else {
+          compTimeEl.textContent       = "3:00";
+          compBadgeEl.textContent      = "UNCALIBRATED";
+          compBadgeEl.className        = "badge badge-comp-idle";
+          compFinalEl.style.display    = "none";
+        }
+      };
+
+      ws.onclose = () => {
+        statusEl.textContent = "disconnected";
+        statusEl.className   = "ws-err";
+      };
+
+      ws.onerror = () => {
+        statusEl.textContent = "connection error";
+        statusEl.className   = "ws-err";
+      };
+
+      // Keyboard nudge controls (unchanged)
+      document.addEventListener("keydown", (e) => {
+        if (TRIGGER_KEYS.has(e.key) && ws.readyState === WebSocket.OPEN) {
+          ws.send(JSON.stringify({ key: e.key }));
+        }
+      });
+
+      // Competition buttons
+      function sendCmd(cmd) {
+        if (ws.readyState === WebSocket.OPEN) {
+          ws.send(JSON.stringify({ cmd }));
+        }
+      }
+
+      document.getElementById("btn-calibrate").addEventListener("click",  () => sendCmd("calibrate"));
+      document.getElementById("btn-new-target").addEventListener("click", () => sendCmd("new_target"));
+      document.getElementById("btn-reset").addEventListener("click",      () => sendCmd("reset"));
+    }
+
+    connect();
+  </script>
+</body>
+</html>
