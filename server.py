@@ -1,4 +1,4 @@
-"""WebSocket bridge: runs a Trial at ~30 Hz and streams state to the browser."""
+"""WebSocket bridge: runs Trial at ~30 Hz in competition or study mode."""
 
 import argparse
 import asyncio
@@ -13,6 +13,9 @@ from trial import Trial, TARGET_POSE
 from pose_math import angular_distance
 from core import (CUBE_SIZE, HOLD_DURATION, LINEAR_TOL,
                   _rot_x, _rot_y, _rot_z, _ROT_FNS, _random_target_pose)
+from study.sequence import SequenceRunner
+from study.archiver import NoOpArchiver
+from study.activities import PreferenceActivity
 
 HOST = "localhost"
 PORT = 8765
@@ -29,7 +32,8 @@ _KEY_MAP = {
     'r': (3, -1), 't': (4, -1), 'y': (5, -1),
 }
 
-GAME_DURATION = 180.0   # 3 minutes
+GAME_DURATION  = 180.0   # 3 minutes
+N_STUDY_TRIALS = 7
 
 
 class FakePoseFetcher(LivePoseFetcher):
@@ -66,18 +70,12 @@ class FakePoseFetcher(LivePoseFetcher):
         pass
 
 
-async def handler(websocket, fetcher_cls):
-    fetcher = fetcher_cls()
-    try:
-        fetcher.connect()
-    except Exception as exc:
-        print(f"Fetcher connect failed: {exc}")
-        await websocket.close(1011, "tracker unavailable")
-        return
+# ── Competition mode ───────────────────────────────────────────────────────────
 
+async def _competition_handler(websocket, fetcher):
     trial = Trial(fetcher, linear_tol=LINEAR_TOL)
     trial.start()
-    print(f"Client connected ({fetcher_cls.__name__}) — trial started.")
+    print(f"Client connected ({type(fetcher).__name__}) — competition mode.")
 
     # Competition state — all mutable via commands received in recv_loop
     comp = {
@@ -166,6 +164,7 @@ async def handler(websocket, fetcher_cls):
             state["comp_game_over"]      = comp["game_over"]
             state["comp_hits"]           = comp["hit_count"]
             state["comp_time_remaining"] = tr
+            state["mode"]                = "competition"
 
             await websocket.send(json.dumps(state))
             await asyncio.sleep(STEP_INTERVAL)
@@ -198,25 +197,183 @@ async def handler(websocket, fetcher_cls):
         await asyncio.gather(send_loop(), recv_loop())
     except websockets.exceptions.ConnectionClosed:
         pass
-    finally:
-        fetcher.disconnect()
-        print("Client disconnected.")
 
 
-async def main(fetcher_cls):
+# ── Study mode ─────────────────────────────────────────────────────────────────
+
+async def _study_handler(websocket, fetcher, runner):
+    """Study-mode WebSocket session. Runner is already started (fetcher connected)."""
+    print(f"Client connected ({type(fetcher).__name__}) — study mode.")
+
+    # Phase transitions are owned exclusively by send_loop to avoid races.
+    study = {
+        "phase":             "await_calibrate",
+        "calibrate_pending": False,   # set by recv_loop, cleared by send_loop
+        "pending_rating":    None,    # int set by recv_loop, cleared by send_loop
+        "preference_act":    None,    # PreferenceActivity ref for set_rating()
+        "last_trial_state":  None,    # most recent TrialActivity step dict
+        "trial_index":       None,    # current 0-based trial index
+    }
+
+    def _blank(activity_type):
+        return {
+            "mode":          "study",
+            "activity_type": activity_type,
+            "linear":        None,
+            "angular":       None,
+            "hold_progress": 0.0,
+            "matched":       False,
+            "timed_out":     False,
+            "elapsed":       0.0,
+            "trial_index":   None,
+            "trial_count":   N_STUDY_TRIALS,
+        }
+
+    async def send_loop():
+        while True:
+            phase = study["phase"]
+
+            if phase == "await_calibrate":
+                if study["calibrate_pending"]:
+                    study["calibrate_pending"] = False
+                    runner.step()   # CalibrationActivity captures origin → done in one tick
+                    study["phase"] = "running"
+                    # Edge case: n_trials=0 → preference appears immediately
+                    block = runner._blocks[runner._block_idx]
+                    if isinstance(block.current_activity, PreferenceActivity):
+                        study["phase"]          = "await_preference"
+                        study["preference_act"] = block.current_activity
+                state = _blank("calibration")
+
+            elif phase == "running":
+                runner_data = runner.step()
+                block_data  = runner_data["data"]
+                act_type    = block_data["activity_type"]
+                act_data    = block_data["data"]
+
+                if act_type == "trial":
+                    study["trial_index"]      = block_data["trial_index"]
+                    study["last_trial_state"] = act_data
+
+                # Peek: did Block just advance to PreferenceActivity?
+                block = runner._blocks[runner._block_idx]
+                if isinstance(block.current_activity, PreferenceActivity):
+                    study["phase"]          = "await_preference"
+                    study["preference_act"] = block.current_activity
+                elif runner.done:
+                    study["phase"] = "complete"
+
+                td = study["last_trial_state"] or {}
+                state = {
+                    "mode":          "study",
+                    "activity_type": "trial",
+                    "linear":        td.get("linear"),
+                    "angular":       td.get("angular"),
+                    "hold_progress": td.get("hold_progress", 0.0),
+                    "matched":       td.get("matched", False),
+                    "timed_out":     td.get("timed_out", False),
+                    "elapsed":       td.get("elapsed") or 0.0,
+                    "trial_index":   study["trial_index"],
+                    "trial_count":   N_STUDY_TRIALS,
+                }
+
+            elif phase == "await_preference":
+                if study["pending_rating"] is not None:
+                    rating = study["pending_rating"]
+                    study["pending_rating"] = None
+                    if study["preference_act"]:
+                        study["preference_act"].set_rating(rating)
+                    runner.step()   # PreferenceActivity → done → runner done
+                    study["phase"] = "complete"
+                state = _blank("preference")
+
+            else:  # complete
+                state = _blank("complete")
+
+            await websocket.send(json.dumps(state))
+            await asyncio.sleep(STEP_INTERVAL)
+
+    async def recv_loop():
+        async for raw in websocket:
+            try:
+                data = json.loads(raw)
+                key  = data.get("key")
+                cmd  = data.get("cmd")
+
+                if key and hasattr(fetcher, "nudge"):
+                    fetcher.nudge(key)
+
+                if cmd == "calibrate":
+                    live_pose = fetcher.get_pose()
+                    if live_pose is None:
+                        await websocket.send(json.dumps({"error": "tracker_not_visible"}))
+                    else:
+                        study["calibrate_pending"] = True
+                elif cmd == "rate":
+                    rating = data.get("rating")
+                    if isinstance(rating, int) and 1 <= rating <= 5:
+                        study["pending_rating"] = rating
+
+            except (json.JSONDecodeError, AttributeError):
+                pass
+
+    try:
+        await asyncio.gather(send_loop(), recv_loop())
+    except websockets.exceptions.ConnectionClosed:
+        pass
+
+
+# ── Transport layer ────────────────────────────────────────────────────────────
+
+async def handler(websocket, fetcher_cls, mode):
+    fetcher = fetcher_cls()
+
+    if mode == "competition":
+        try:
+            fetcher.connect()
+        except Exception as exc:
+            print(f"Fetcher connect failed: {exc}")
+            await websocket.close(1011, "tracker unavailable")
+            return
+        try:
+            await _competition_handler(websocket, fetcher)
+        finally:
+            fetcher.disconnect()
+            print("Client disconnected.")
+
+    else:  # study
+        runner = SequenceRunner(fetcher, n_trials=N_STUDY_TRIALS, archiver=NoOpArchiver())
+        try:
+            runner.start()  # connects fetcher + starts first block (CalibrationActivity)
+        except Exception as exc:
+            print(f"Fetcher connect failed: {exc}")
+            await websocket.close(1011, "tracker unavailable")
+            return
+        try:
+            await _study_handler(websocket, fetcher, runner)
+        finally:
+            runner.stop()  # disconnects fetcher
+            print("Client disconnected.")
+
+
+async def main(fetcher_cls, mode):
     async def _handler(websocket):
-        await handler(websocket, fetcher_cls)
+        await handler(websocket, fetcher_cls, mode)
 
     async with websockets.serve(_handler, HOST, PORT):
-        print(f"Listening on ws://{HOST}:{PORT}  [{fetcher_cls.__name__}]")
+        print(f"Listening on ws://{HOST}:{PORT}  [{fetcher_cls.__name__}] [{mode}]")
         await asyncio.Future()
 
 
 if __name__ == "__main__":
     p = argparse.ArgumentParser()
+    g = p.add_mutually_exclusive_group(required=True)
+    g.add_argument("--study",       action="store_true", help="Run in study mode")
+    g.add_argument("--competition", action="store_true", help="Run in competition mode")
     p.add_argument("--fake", action="store_true",
                    help="Use FakePoseFetcher instead of TrackerPoseFetcher (no SteamVR needed)")
     args = p.parse_args()
 
+    mode        = "study" if args.study else "competition"
     fetcher_cls = FakePoseFetcher if args.fake else TrackerPoseFetcher
-    asyncio.run(main(fetcher_cls))
+    asyncio.run(main(fetcher_cls, mode))
