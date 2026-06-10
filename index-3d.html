@@ -1,0 +1,506 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>3D Pose Guidance</title>
+  <style>
+    :root {
+      --bg: #111;
+      --surface: #1e1e1e;
+      --text: #ddd;
+      --dim: #777;
+      --border: #333;
+      --live: #38bdf8;
+      --ghost: #4ade80;
+    }
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      min-height: 100vh;
+      padding: 24px;
+      background: var(--bg);
+      color: var(--text);
+      font-family: "Courier New", monospace;
+    }
+    main {
+      width: min(1100px, 100%);
+      margin: 0 auto;
+      display: grid;
+      gap: 16px;
+    }
+    h1 {
+      color: var(--dim);
+      font-size: 1rem;
+      letter-spacing: 0.15em;
+      text-align: center;
+    }
+    .card {
+      padding: 18px 22px;
+      background: var(--surface);
+      border-radius: 8px;
+    }
+    .scoreboard {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      align-items: center;
+      gap: 24px;
+    }
+    .stat { text-align: center; }
+    .label {
+      color: var(--dim);
+      font-size: 0.72rem;
+      letter-spacing: 0.1em;
+      text-transform: uppercase;
+    }
+    .big {
+      margin-top: 4px;
+      font-size: 1.8rem;
+      font-weight: bold;
+    }
+    #time-value { color: #facc15; }
+    #score-value { color: var(--ghost); }
+    .badge {
+      display: inline-block;
+      padding: 5px 12px;
+      border-radius: 4px;
+      background: #2a2a2a;
+      color: var(--dim);
+      font-size: 0.78rem;
+      font-weight: bold;
+      letter-spacing: 0.08em;
+    }
+    .badge-active { background: #14532d; color: var(--ghost); }
+    .badge-over { background: #450a0a; color: #f87171; }
+    .scene-card { padding: 0; overflow: hidden; }
+    #scene {
+      position: relative;
+      height: min(68vh, 700px);
+      min-height: 480px;
+      background: #151515;
+    }
+    #scene canvas { display: block; width: 100%; height: 100%; }
+    .scene-overlay {
+      position: absolute;
+      top: 16px;
+      left: 16px;
+      pointer-events: none;
+    }
+    .legend {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 16px;
+      margin-bottom: 8px;
+      font-size: 0.72rem;
+      letter-spacing: 0.06em;
+    }
+    .legend span::before {
+      display: inline-block;
+      width: 9px;
+      height: 9px;
+      margin-right: 6px;
+      border-radius: 50%;
+      content: "";
+    }
+    .legend-live::before { background: var(--live); }
+    .legend-ghost::before { background: var(--ghost); }
+    .legend-axes::before {
+      background: linear-gradient(90deg, #ef4444 0 33%, #22c55e 33% 66%, #3b82f6 66%);
+    }
+    #model-status, #pose-readout {
+      color: var(--dim);
+      font-size: 0.7rem;
+      line-height: 1.5;
+    }
+    .controls {
+      display: grid;
+      grid-template-columns: 1fr auto;
+      align-items: center;
+      gap: 20px;
+    }
+    .key-grid {
+      display: grid;
+      grid-template-columns: repeat(3, max-content);
+      gap: 7px 18px;
+      color: var(--dim);
+      font-size: 0.72rem;
+    }
+    kbd {
+      display: inline-block;
+      min-width: 20px;
+      margin-right: 3px;
+      padding: 2px 5px;
+      border: 1px solid #555;
+      border-radius: 3px;
+      background: #292929;
+      color: var(--text);
+      text-align: center;
+    }
+    .buttons { display: flex; gap: 8px; }
+    button {
+      padding: 9px 14px;
+      border: 1px solid #444;
+      border-radius: 5px;
+      background: #2a2a2a;
+      color: var(--text);
+      font: 0.75rem "Courier New", monospace;
+      letter-spacing: 0.06em;
+      text-transform: uppercase;
+      cursor: pointer;
+    }
+    button:hover { background: #383838; }
+    #connection {
+      color: var(--dim);
+      font-size: 0.7rem;
+      letter-spacing: 0.05em;
+      text-align: center;
+    }
+    .ok { color: var(--ghost) !important; }
+    .error { color: #f87171 !important; }
+    @media (max-width: 760px) {
+      body { padding: 12px; }
+      .scoreboard { gap: 8px; }
+      .controls { grid-template-columns: 1fr; }
+      .buttons { flex-wrap: wrap; }
+      #scene { min-height: 420px; }
+    }
+  </style>
+  <script type="importmap">
+    {
+      "imports": {
+        "three": "./vendor/three.module.js"
+      }
+    }
+  </script>
+</head>
+<body>
+  <main>
+    <h1>3D POSE GUIDANCE</h1>
+
+    <section class="card scoreboard">
+      <div class="stat">
+        <div class="label">Time</div>
+        <div class="big" id="time-value">3:00</div>
+      </div>
+      <div class="stat">
+        <div class="label">Score</div>
+        <div class="big" id="score-value">0</div>
+      </div>
+      <div class="stat">
+        <span class="badge" id="competition-state">UNCALIBRATED</span>
+      </div>
+    </section>
+
+    <section class="card scene-card">
+      <div id="scene">
+        <div class="scene-overlay">
+          <div class="legend">
+            <span class="legend-live">LIVE TRANSDUCER</span>
+            <span class="legend-ghost">GHOST TARGET</span>
+            <span class="legend-axes">X RED / Y GREEN / Z BLUE</span>
+          </div>
+          <div id="model-status">loading transducer.obj...</div>
+          <div id="pose-readout">50 x 50 x 50 cm workspace</div>
+        </div>
+      </div>
+    </section>
+
+    <section class="card controls">
+      <div class="key-grid">
+        <span><kbd>1</kbd>/<kbd>Q</kbd> X +/-</span>
+        <span><kbd>2</kbd>/<kbd>W</kbd> Y +/-</span>
+        <span><kbd>3</kbd>/<kbd>E</kbd> Z +/-</span>
+        <span><kbd>4</kbd>/<kbd>R</kbd> Roll +/-</span>
+        <span><kbd>5</kbd>/<kbd>T</kbd> Pitch +/-</span>
+        <span><kbd>6</kbd>/<kbd>Y</kbd> Yaw +/-</span>
+      </div>
+      <div class="buttons">
+        <button id="calibrate">Calibrate</button>
+        <button id="new-target">New Target</button>
+        <button id="reset">Reset</button>
+      </div>
+    </section>
+
+    <div id="connection">connecting...</div>
+  </main>
+
+  <script type="module">
+    import * as THREE from "three";
+    import { OBJLoader } from "./vendor/OBJLoader.js";
+    import { OrbitControls } from "./vendor/OrbitControls.js";
+
+    const WS_URL = "ws://localhost:8765";
+    const MODEL_URL = "./assets/transducer.obj";
+    const MODEL_SCALE = 0.01; // The supplied OBJ is modeled in centimeters.
+    const TRIGGER_KEYS = new Set("123456qwerty".split(""));
+
+    const sceneHost = document.getElementById("scene");
+    const modelStatus = document.getElementById("model-status");
+    const poseReadout = document.getElementById("pose-readout");
+    const connection = document.getElementById("connection");
+    const competitionState = document.getElementById("competition-state");
+    const timeValue = document.getElementById("time-value");
+    const scoreValue = document.getElementById("score-value");
+
+    const scene = new THREE.Scene();
+    scene.background = new THREE.Color(0x151515);
+
+    const camera = new THREE.PerspectiveCamera(42, 1, 0.01, 10);
+    camera.position.set(0.72, 0.42, 0.72);
+    camera.up.set(0, 1, 0);
+
+    const renderer = new THREE.WebGLRenderer({ antialias: true });
+    renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+    renderer.outputColorSpace = THREE.SRGBColorSpace;
+    sceneHost.prepend(renderer.domElement);
+
+    const controls = new OrbitControls(camera, renderer.domElement);
+    controls.enableDamping = true;
+    controls.target.set(0, 0, 0);
+    controls.update();
+
+    scene.add(new THREE.HemisphereLight(0xffffff, 0x202028, 2.2));
+    const keyLight = new THREE.DirectionalLight(0xffffff, 2.5);
+    keyLight.position.set(0.5, 0.8, 0.6);
+    scene.add(keyLight);
+
+    const cubeGeometry = new THREE.BoxGeometry(0.5, 0.5, 0.5);
+    const cubeEdges = new THREE.LineSegments(
+      new THREE.EdgesGeometry(cubeGeometry),
+      new THREE.LineBasicMaterial({ color: 0x64748b, transparent: true, opacity: 0.7 })
+    );
+    scene.add(cubeEdges);
+
+    const grid = new THREE.GridHelper(0.5, 10, 0x475569, 0x273244);
+    grid.position.y = -0.25;
+    scene.add(grid);
+
+    const liveGroup = new THREE.Group();
+    const ghostGroup = new THREE.Group();
+    liveGroup.matrixAutoUpdate = false;
+    ghostGroup.matrixAutoUpdate = false;
+    liveGroup.visible = false;
+    ghostGroup.visible = false;
+    scene.add(liveGroup, ghostGroup);
+
+    function createPoseAxes(opacity) {
+      const axes = new THREE.Group();
+      const length = 0.14;
+      const headLength = 0.025;
+      const headWidth = 0.012;
+      const definitions = [
+        [new THREE.Vector3(1, 0, 0), 0xef4444],
+        [new THREE.Vector3(0, 1, 0), 0x22c55e],
+        [new THREE.Vector3(0, 0, 1), 0x3b82f6]
+      ];
+
+      for (const [direction, color] of definitions) {
+        const arrow = new THREE.ArrowHelper(
+          direction,
+          new THREE.Vector3(),
+          length,
+          color,
+          headLength,
+          headWidth
+        );
+        arrow.line.material.transparent = opacity < 1;
+        arrow.line.material.opacity = opacity;
+        arrow.line.material.depthTest = false;
+        arrow.cone.material.transparent = opacity < 1;
+        arrow.cone.material.opacity = opacity;
+        arrow.cone.material.depthTest = false;
+        arrow.renderOrder = 10;
+        arrow.line.renderOrder = 10;
+        arrow.cone.renderOrder = 10;
+        axes.add(arrow);
+      }
+
+      const center = new THREE.Mesh(
+        new THREE.SphereGeometry(0.009, 16, 12),
+        new THREE.MeshBasicMaterial({
+          color: 0xffffff,
+          transparent: opacity < 1,
+          opacity,
+          depthTest: false
+        })
+      );
+      center.renderOrder = 11;
+      axes.add(center);
+      return axes;
+    }
+
+    liveGroup.add(createPoseAxes(1.0));
+    ghostGroup.add(createPoseAxes(0.65));
+
+    function centeredModel(object, material) {
+      const bounds = new THREE.Box3().setFromObject(object);
+      const center = bounds.getCenter(new THREE.Vector3());
+      object.traverse(child => {
+        if (child.isMesh) {
+          child.material = material;
+          child.castShadow = false;
+          child.receiveShadow = false;
+        }
+      });
+      object.scale.setScalar(MODEL_SCALE);
+      object.position.copy(center).multiplyScalar(-MODEL_SCALE);
+      return object;
+    }
+
+    new OBJLoader().load(
+      MODEL_URL,
+      object => {
+        const ghostObject = object.clone();
+        const liveMaterial = new THREE.MeshStandardMaterial({
+          color: 0x38bdf8,
+          roughness: 0.48,
+          metalness: 0.08
+        });
+        const ghostMaterial = new THREE.MeshStandardMaterial({
+          color: 0x4ade80,
+          emissive: 0x123d23,
+          transparent: true,
+          opacity: 0.3,
+          depthWrite: false,
+          side: THREE.DoubleSide
+        });
+
+        liveGroup.add(centeredModel(object, liveMaterial));
+        ghostGroup.add(centeredModel(ghostObject, ghostMaterial));
+        liveGroup.visible = true;
+        modelStatus.textContent = "transducer.obj loaded";
+      },
+      progress => {
+        if (progress.total) {
+          const percent = Math.round((progress.loaded / progress.total) * 100);
+          modelStatus.textContent = `loading transducer.obj... ${percent}%`;
+        }
+      },
+      error => {
+        console.error(error);
+        modelStatus.textContent = "could not load transducer.obj";
+        modelStatus.className = "error";
+      }
+    );
+
+    function matrixFromRows(rows) {
+      if (!rows) return null;
+      return new THREE.Matrix4().set(...rows.flat());
+    }
+
+    function setRelativePose(group, poseRows, referenceRows) {
+      const pose = matrixFromRows(poseRows);
+      const reference = matrixFromRows(referenceRows);
+      if (!pose || !reference) {
+        group.visible = false;
+        return;
+      }
+      const relative = reference.clone().invert().multiply(pose);
+      group.matrix.copy(relative);
+      group.matrixWorldNeedsUpdate = true;
+    }
+
+    function fmtTime(seconds) {
+      const safe = Math.max(0, seconds ?? 180);
+      const minutes = Math.floor(safe / 60);
+      const secs = Math.floor(safe % 60);
+      return `${minutes}:${String(secs).padStart(2, "0")}`;
+    }
+
+    let socket;
+
+    function send(message) {
+      if (socket?.readyState === WebSocket.OPEN) {
+        socket.send(JSON.stringify(message));
+      }
+    }
+
+    function connect() {
+      socket = new WebSocket(WS_URL);
+
+      socket.onopen = () => {
+        connection.textContent = "connected";
+        connection.className = "ok";
+      };
+
+      socket.onmessage = event => {
+        const data = JSON.parse(event.data);
+        if (data.error) {
+          connection.textContent = data.error.replaceAll("_", " ");
+          connection.className = "error";
+          return;
+        }
+
+        setRelativePose(liveGroup, data.live_pose, data.reference_pose);
+        liveGroup.visible = Boolean(data.live_pose && liveGroup.children.length);
+
+        if (data.comp_calibrated && data.target_pose) {
+          setRelativePose(ghostGroup, data.target_pose, data.reference_pose);
+          ghostGroup.visible = Boolean(ghostGroup.children.length);
+        } else {
+          ghostGroup.visible = false;
+        }
+
+        poseReadout.textContent = data.linear === null
+          ? "tracker not visible"
+          : `position error ${(data.linear * 100).toFixed(1)} cm | angle error ${data.angular.toFixed(1)} deg`;
+
+        scoreValue.textContent = data.comp_hits ?? 0;
+        if (data.comp_game_over) {
+          timeValue.textContent = "0:00";
+          competitionState.textContent = "GAME OVER";
+          competitionState.className = "badge badge-over";
+        } else if (data.comp_active) {
+          timeValue.textContent = fmtTime(data.comp_time_remaining);
+          competitionState.textContent = data.matched ? "MATCHED" : "ACTIVE";
+          competitionState.className = "badge badge-active";
+        } else {
+          timeValue.textContent = "3:00";
+          competitionState.textContent = "UNCALIBRATED";
+          competitionState.className = "badge";
+        }
+      };
+
+      socket.onclose = () => {
+        connection.textContent = "disconnected";
+        connection.className = "error";
+      };
+
+      socket.onerror = () => {
+        connection.textContent = "connection error";
+        connection.className = "error";
+      };
+    }
+
+    document.addEventListener("keydown", event => {
+      const key = event.key.toLowerCase();
+      if (TRIGGER_KEYS.has(key)) {
+        event.preventDefault();
+        send({ key });
+      }
+    });
+
+    document.getElementById("calibrate").addEventListener("click", () => send({ cmd: "calibrate" }));
+    document.getElementById("new-target").addEventListener("click", () => send({ cmd: "new_target" }));
+    document.getElementById("reset").addEventListener("click", () => send({ cmd: "reset" }));
+
+    function resize() {
+      const width = sceneHost.clientWidth;
+      const height = sceneHost.clientHeight;
+      renderer.setSize(width, height, false);
+      camera.aspect = width / height;
+      camera.updateProjectionMatrix();
+    }
+
+    function animate() {
+      requestAnimationFrame(animate);
+      controls.update();
+      renderer.render(scene, camera);
+    }
+
+    window.addEventListener("resize", resize);
+    resize();
+    animate();
+    connect();
+  </script>
+</body>
+</html>

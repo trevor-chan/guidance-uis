@@ -55,6 +55,7 @@ class Trial:
                 "matched": False,
                 "timed_out": elapsed >= TIMEOUT_SECONDS,
                 "elapsed": elapsed,
+                "live_pose": None,
             }
 
         lin = linear_distance(live_pose, self.target_pose)
@@ -67,4 +68,5 @@ class Trial:
             "matched": matched,
             "timed_out": elapsed >= TIMEOUT_SECONDS,
             "elapsed": elapsed,
+            "live_pose": live_pose.tolist(),
         }

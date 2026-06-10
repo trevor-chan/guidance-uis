@@ -2,9 +2,13 @@
 
 import argparse
 import asyncio
+from functools import partial
+from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 import json
 import math
+from pathlib import Path
 import random
+import threading
 import time
 import numpy as np
 import websockets
@@ -15,6 +19,7 @@ from pose_math import angular_distance
 
 HOST = "localhost"
 PORT = 8765
+HTTP_PORT = 8000
 STEP_INTERVAL = 1 / 30
 
 TRANS_STEP = 0.01             # 1 cm per keypress
@@ -87,6 +92,7 @@ class FakePoseFetcher(LivePoseFetcher):
         self._pose[:3, 3] = TARGET_POSE[:3, 3] + np.array([0.15, 0.10, -0.08])
         R_offset = _rot_x(math.radians(12)) @ _rot_y(math.radians(12)) @ _rot_z(math.radians(12))
         self._pose[:3, :3] = R_offset @ TARGET_POSE[:3, :3]
+        self._control_frame = self._pose[:3, :3].copy()
 
     def get_pose(self):
         return self._pose.copy()
@@ -96,10 +102,11 @@ class FakePoseFetcher(LivePoseFetcher):
             return
         dof, sign = _KEY_MAP[key]
         if dof < 3:
-            self._pose[dof, 3] += sign * TRANS_STEP
+            # Move along the calibrated local axes shown by the 3D workspace.
+            self._pose[:3, 3] += self._control_frame[:, dof] * sign * TRANS_STEP
         else:
             R_delta = _ROT_FNS[dof - 3](sign * ROT_STEP)
-            self._pose[:3, :3] = R_delta @ self._pose[:3, :3]
+            self._pose[:3, :3] = self._pose[:3, :3] @ R_delta
             print(f"[nudge] rot key={key!r}  angular={angular_distance(self._pose, TARGET_POSE):.2f}°")
 
     def disconnect(self):
@@ -115,6 +122,7 @@ async def handler(websocket, fetcher_cls):
         await websocket.close(1011, "tracker unavailable")
         return
 
+    scene_origin = fetcher.get_pose()
     trial = Trial(fetcher, linear_tol=0.01)
     trial.start()
     print(f"Client connected ({fetcher_cls.__name__}) — trial started.")
@@ -206,6 +214,12 @@ async def handler(websocket, fetcher_cls):
             state["comp_game_over"]      = comp["game_over"]
             state["comp_hits"]           = comp["hit_count"]
             state["comp_time_remaining"] = tr
+            state["target_pose"]         = trial.target_pose.tolist()
+            reference_pose = comp["origin"] if comp["origin"] is not None else scene_origin
+            state["reference_pose"]      = (
+                reference_pose.tolist() if reference_pose is not None else None
+            )
+            state["cube_size"]           = CUBE_SIZE
 
             await websocket.send(json.dumps(state))
             await asyncio.sleep(STEP_INTERVAL)
@@ -247,9 +261,21 @@ async def main(fetcher_cls):
     async def _handler(websocket):
         await handler(websocket, fetcher_cls)
 
-    async with websockets.serve(_handler, HOST, PORT):
-        print(f"Listening on ws://{HOST}:{PORT}  [{fetcher_cls.__name__}]")
-        await asyncio.Future()
+    root = Path(__file__).resolve().parent
+    request_handler = partial(SimpleHTTPRequestHandler, directory=str(root))
+    http_server = ThreadingHTTPServer((HOST, HTTP_PORT), request_handler)
+    http_thread = threading.Thread(target=http_server.serve_forever, daemon=True)
+    http_thread.start()
+
+    try:
+        async with websockets.serve(_handler, HOST, PORT):
+            print(f"WebSocket: ws://{HOST}:{PORT}  [{fetcher_cls.__name__}]")
+            print(f"1D UI:     http://{HOST}:{HTTP_PORT}/index.html")
+            print(f"3D UI:     http://{HOST}:{HTTP_PORT}/index-3d.html")
+            await asyncio.Future()
+    finally:
+        http_server.shutdown()
+        http_server.server_close()
 
 
 if __name__ == "__main__":
