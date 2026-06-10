@@ -11,8 +11,9 @@
       --text: #ddd;
       --dim: #777;
       --border: #333;
-      --live: #38bdf8;
-      --ghost: #4ade80;
+      --live: #ffffff;
+      --ghost: #7dd3fc;
+      --success: #4ade80;
     }
     * { box-sizing: border-box; margin: 0; padding: 0; }
     body {
@@ -58,7 +59,7 @@
       font-weight: bold;
     }
     #time-value { color: #facc15; }
-    #score-value { color: var(--ghost); }
+    #score-value { color: var(--success); }
     .badge {
       display: inline-block;
       padding: 5px 12px;
@@ -69,7 +70,7 @@
       font-weight: bold;
       letter-spacing: 0.08em;
     }
-    .badge-active { background: #14532d; color: var(--ghost); }
+    .badge-active { background: #14532d; color: var(--success); }
     .badge-over { background: #450a0a; color: #f87171; }
     .scene-card { padding: 0; overflow: hidden; }
     #scene {
@@ -167,7 +168,7 @@
       letter-spacing: 0.05em;
       text-align: center;
     }
-    .ok { color: var(--ghost) !important; }
+    .ok { color: var(--success) !important; }
     .error { color: #f87171 !important; }
     @media (max-width: 760px) {
       body { padding: 12px; }
@@ -250,6 +251,7 @@
     const MODEL_SCALE = 0.01; // The supplied OBJ is modeled in centimeters.
     const MODEL_Z_ROTATION = -Math.PI / 2; // Visual alignment only.
     const DISPLAY_FRAME_X_ROTATION = -Math.PI / 2; // Local Z is visually vertical.
+    const DISPLAY_FRAME_Z_ROTATION = Math.PI / 2; // Local X forward, local Y left.
     const TRIGGER_KEYS = new Set("adwsqeuokijl".split(""));
 
     const sceneHost = document.getElementById("scene");
@@ -286,9 +288,11 @@
     scene.add(keyLight);
 
     // Convert the calibrated frame to the visualizer frame. This is display-only:
-    // local X/Y lie on the floor grid and local +Z points upward.
+    // local X/Y lie on the floor grid, local +Z points upward, local +X points
+    // forward into the default view, and local +Y points left.
     const displayFrame = new THREE.Group();
     displayFrame.rotation.x = DISPLAY_FRAME_X_ROTATION;
+    displayFrame.rotation.z = DISPLAY_FRAME_Z_ROTATION;
     scene.add(displayFrame);
 
     const cubeGeometry = new THREE.BoxGeometry(0.5, 0.5, 0.5);
@@ -387,13 +391,13 @@
       object => {
         const ghostObject = object.clone();
         const liveMaterial = new THREE.MeshStandardMaterial({
-          color: 0x38bdf8,
+          color: 0xffffff,
           roughness: 0.48,
           metalness: 0.08
         });
         const ghostMaterial = new THREE.MeshStandardMaterial({
-          color: 0x4ade80,
-          emissive: 0x123d23,
+          color: 0x7dd3fc,
+          emissive: 0x0c3346,
           transparent: true,
           opacity: 0.3,
           depthWrite: false,
