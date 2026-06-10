@@ -248,6 +248,8 @@
     const WS_URL = "ws://localhost:8765";
     const MODEL_URL = "./assets/transducer.obj";
     const MODEL_SCALE = 0.01; // The supplied OBJ is modeled in centimeters.
+    const MODEL_Z_ROTATION = -Math.PI / 2; // Visual alignment only.
+    const DISPLAY_FRAME_X_ROTATION = -Math.PI / 2; // Local Z is visually vertical.
     const TRIGGER_KEYS = new Set("adwsqeuokijl".split(""));
 
     const sceneHost = document.getElementById("scene");
@@ -283,13 +285,21 @@
     keyLight.position.set(0.5, 0.8, 0.6);
     scene.add(keyLight);
 
+    // Convert the calibrated frame to the visualizer frame. This is display-only:
+    // local X/Y lie on the floor grid and local +Z points upward.
+    const displayFrame = new THREE.Group();
+    displayFrame.rotation.x = DISPLAY_FRAME_X_ROTATION;
+    scene.add(displayFrame);
+
     const cubeGeometry = new THREE.BoxGeometry(0.5, 0.5, 0.5);
     const cubeEdges = new THREE.LineSegments(
       new THREE.EdgesGeometry(cubeGeometry),
       new THREE.LineBasicMaterial({ color: 0x64748b, transparent: true, opacity: 0.7 })
     );
-    scene.add(cubeEdges);
+    displayFrame.add(cubeEdges);
 
+    // GridHelper is an XZ plane in Three.js. After the display-frame rotation,
+    // it represents calibrated local X/Y at the cube's local Z = -25 cm face.
     const grid = new THREE.GridHelper(0.5, 10, 0x475569, 0x273244);
     grid.position.y = -0.25;
     scene.add(grid);
@@ -300,7 +310,7 @@
     ghostGroup.matrixAutoUpdate = false;
     liveGroup.visible = false;
     ghostGroup.visible = false;
-    scene.add(liveGroup, ghostGroup);
+    displayFrame.add(liveGroup, ghostGroup);
 
     function createPoseAxes(opacity) {
       const axes = new THREE.Group();
@@ -363,7 +373,13 @@
       });
       object.scale.setScalar(MODEL_SCALE);
       object.position.copy(center).multiplyScalar(-MODEL_SCALE);
-      return object;
+
+      // Rotate the already-centered geometry without changing the tracked pose
+      // frame or the RGB axes attached to it.
+      const visualAlignment = new THREE.Group();
+      visualAlignment.rotation.z = MODEL_Z_ROTATION;
+      visualAlignment.add(object);
+      return visualAlignment;
     }
 
     new OBJLoader().load(
