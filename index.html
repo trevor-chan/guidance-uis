@@ -236,7 +236,7 @@
     const WS_URL      = "ws://localhost:8765";
     const MAX_LINEAR  = 0.5;   // meters  — full cold at or beyond this
     const MAX_ANGULAR = 90;    // degrees — full cold at or beyond this
-    const TRIGGER_KEYS = new Set("123456qwerty".split(""));
+    const TRIGGER_KEYS = new Set("adwsqeuokijl".split(""));
 
     // Interpolate between cold (#1e3a8a) and hot (#dc2626) by closeness [0,1]
     function barColor(closeness) {
@@ -381,10 +381,12 @@
         statusEl.className   = "ws-err";
       };
 
-      // Keyboard nudge controls (unchanged)
+      // Fake-mode keyboard nudge controls
       document.addEventListener("keydown", (e) => {
-        if (TRIGGER_KEYS.has(e.key) && ws.readyState === WebSocket.OPEN) {
-          ws.send(JSON.stringify({ key: e.key }));
+        const key = e.key.toLowerCase();
+        if (TRIGGER_KEYS.has(key) && ws.readyState === WebSocket.OPEN) {
+          e.preventDefault();
+          ws.send(JSON.stringify({ key }));
         }
       });
 

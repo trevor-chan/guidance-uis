@@ -7,6 +7,8 @@ or None if no valid pose is currently available.
 from abc import ABC, abstractmethod
 import numpy as np
 
+from calibration import DEFAULT_CALIBRATION, compute_transducer_from_tracker
+
 
 class LivePoseFetcher(ABC):
     """Interface for anything that supplies live poses on demand."""
@@ -36,10 +38,12 @@ class TrackerPoseFetcher(LivePoseFetcher):
     source_mode = "tracker"
     source_label = "SteamVR tracker"
 
-    def __init__(self):
+    def __init__(self, calibration=DEFAULT_CALIBRATION, probe_element: str = "phased"):
         self.vr_system = None
         self.device_index = None
         self.device_serial = None
+        self.calibration = calibration
+        self.probe_element = probe_element
 
     def connect(self) -> None:
         import openvr
@@ -71,12 +75,15 @@ class TrackerPoseFetcher(LivePoseFetcher):
             return None
 
         m = pose.mDeviceToAbsoluteTracking  # 3x4
-        return np.array([
+        tracker_pose = np.array([
             [m[0][0], m[0][1], m[0][2], m[0][3]],
             [m[1][0], m[1][1], m[1][2], m[1][3]],
             [m[2][0], m[2][1], m[2][2], m[2][3]],
             [0.0,     0.0,     0.0,     1.0],
         ])
+        return compute_transducer_from_tracker(
+            tracker_pose, self.calibration, self.probe_element
+        )
 
     def disconnect(self) -> None:
         import openvr

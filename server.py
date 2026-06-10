@@ -27,10 +27,12 @@ ROT_STEP   = math.radians(2)  # 2° per keypress
 
 # (dof 0-2 = x/y/z translation, dof 3-5 = roll/pitch/yaw rotation)
 _KEY_MAP = {
-    '1': (0, +1), '2': (1, +1), '3': (2, +1),
-    '4': (3, +1), '5': (4, +1), '6': (5, +1),
-    'q': (0, -1), 'w': (1, -1), 'e': (2, -1),
-    'r': (3, -1), 't': (4, -1), 'y': (5, -1),
+    'd': (0, +1), 'a': (0, -1),
+    'w': (1, +1), 's': (1, -1),
+    'q': (2, +1), 'e': (2, -1),
+    'u': (3, +1), 'o': (3, -1),
+    'i': (4, +1), 'k': (4, -1),
+    'j': (5, +1), 'l': (5, -1),
 }
 
 GAME_DURATION = 180.0   # 3 minutes
@@ -80,7 +82,8 @@ def _random_target_pose(origin: np.ndarray) -> np.ndarray:
 class FakePoseFetcher(LivePoseFetcher):
     """Keyboard-driven pose: starts offset from TARGET_POSE so the bars are away from matched.
 
-    Keys 1-6 increase x/y/z/roll/pitch/yaw; q/w/e/r/t/y decrease them.
+    WASD/QE move on local X/Y/Z; UO/IK/JL rotate roll/pitch/yaw.
+    The first key in each documented pair is positive and the second is negative.
     Each press nudges by TRANS_STEP (1 cm) or ROT_STEP (2°).
     Rotation is kept valid by composing with an incremental rotation matrix.
     """
@@ -91,7 +94,7 @@ class FakePoseFetcher(LivePoseFetcher):
     def connect(self):
         self._pose = np.eye(4, dtype=float)
         # Start ~20 cm away in position and ~20° off in orientation.
-        # Use all three axes so r/t/y and 4/5/6 all produce visible angular changes.
+        # Use all three axes so every rotation pair produces a visible change.
         self._pose[:3, 3] = TARGET_POSE[:3, 3] + np.array([0.15, 0.10, -0.08])
         R_offset = _rot_x(math.radians(12)) @ _rot_y(math.radians(12)) @ _rot_z(math.radians(12))
         self._pose[:3, :3] = R_offset @ TARGET_POSE[:3, :3]
