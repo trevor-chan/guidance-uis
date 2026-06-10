@@ -111,6 +111,13 @@
       font-size: 0.7rem;
       line-height: 1.5;
     }
+    #source-status {
+      margin-bottom: 4px;
+      color: #facc15;
+      font-size: 0.72rem;
+      font-weight: bold;
+      letter-spacing: 0.06em;
+    }
     .controls {
       display: grid;
       grid-template-columns: 1fr auto;
@@ -123,6 +130,12 @@
       gap: 7px 18px;
       color: var(--dim);
       font-size: 0.72rem;
+    }
+    .tracker-help {
+      display: none;
+      color: var(--dim);
+      font-size: 0.75rem;
+      line-height: 1.5;
     }
     kbd {
       display: inline-block;
@@ -198,6 +211,7 @@
             <span class="legend-ghost">GHOST TARGET</span>
             <span class="legend-axes">X RED / Y GREEN / Z BLUE</span>
           </div>
+          <div id="source-status">waiting for pose source...</div>
           <div id="model-status">loading transducer.obj...</div>
           <div id="pose-readout">50 x 50 x 50 cm workspace</div>
         </div>
@@ -212,6 +226,9 @@
         <span><kbd>4</kbd>/<kbd>R</kbd> Roll +/-</span>
         <span><kbd>5</kbd>/<kbd>T</kbd> Pitch +/-</span>
         <span><kbd>6</kbd>/<kbd>Y</kbd> Yaw +/-</span>
+      </div>
+      <div class="tracker-help" id="tracker-help">
+        Move the physical SteamVR tracker. Its live pose is rendered at the incoming tracking rate.
       </div>
       <div class="buttons">
         <button id="calibrate">Calibrate</button>
@@ -236,10 +253,13 @@
     const sceneHost = document.getElementById("scene");
     const modelStatus = document.getElementById("model-status");
     const poseReadout = document.getElementById("pose-readout");
+    const sourceStatus = document.getElementById("source-status");
     const connection = document.getElementById("connection");
     const competitionState = document.getElementById("competition-state");
     const timeValue = document.getElementById("time-value");
     const scoreValue = document.getElementById("score-value");
+    const keyGrid = document.querySelector(".key-grid");
+    const trackerHelp = document.getElementById("tracker-help");
 
     const scene = new THREE.Scene();
     scene.background = new THREE.Color(0x151515);
@@ -430,6 +450,14 @@
           return;
         }
 
+        const isTracker = data.source_mode === "tracker";
+        sourceStatus.textContent = isTracker
+          ? `LIVE TRACKER | ${data.source_label} | ${data.stream_rate} Hz`
+          : `FAKE KEYBOARD | ${data.stream_rate} Hz`;
+        sourceStatus.className = data.tracker_visible ? "ok" : "error";
+        keyGrid.style.display = isTracker ? "none" : "grid";
+        trackerHelp.style.display = isTracker ? "block" : "none";
+
         setRelativePose(liveGroup, data.live_pose, data.reference_pose);
         liveGroup.visible = Boolean(data.live_pose && liveGroup.children.length);
 
@@ -440,8 +468,8 @@
           ghostGroup.visible = false;
         }
 
-        poseReadout.textContent = data.linear === null
-          ? "tracker not visible"
+        poseReadout.textContent = !data.tracker_visible
+          ? "tracker not visible - restore SteamVR tracking before calibrating"
           : `position error ${(data.linear * 100).toFixed(1)} cm | angle error ${data.angular.toFixed(1)} deg`;
 
         scoreValue.textContent = data.comp_hits ?? 0;

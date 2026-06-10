@@ -20,7 +20,7 @@ from pose_math import angular_distance
 HOST = "localhost"
 PORT = 8765
 HTTP_PORT = 8000
-STEP_INTERVAL = 1 / 30
+DEFAULT_RATE = 60.0
 
 TRANS_STEP = 0.01             # 1 cm per keypress
 ROT_STEP   = math.radians(2)  # 2° per keypress
@@ -72,7 +72,7 @@ def _random_target_pose(origin: np.ndarray) -> np.ndarray:
     world_pos = origin[:3, 3] + origin[:3, :3] @ local_pos
     target = np.eye(4, dtype=float)
     angle = random.uniform(-math.radians(30), math.radians(30))
-    target[:3, :3] = random.choice(_ROT_FNS)(angle) @ origin[:3, :3]
+    target[:3, :3] = origin[:3, :3] @ random.choice(_ROT_FNS)(angle)
     target[:3, 3]  = world_pos
     return target
 
@@ -84,6 +84,9 @@ class FakePoseFetcher(LivePoseFetcher):
     Each press nudges by TRANS_STEP (1 cm) or ROT_STEP (2°).
     Rotation is kept valid by composing with an incremental rotation matrix.
     """
+
+    source_mode = "fake"
+    source_label = "Fake keyboard controls"
 
     def connect(self):
         self._pose = np.eye(4, dtype=float)
@@ -113,7 +116,7 @@ class FakePoseFetcher(LivePoseFetcher):
         pass
 
 
-async def handler(websocket, fetcher_cls):
+async def handler(websocket, fetcher_cls, step_interval, stream_rate):
     fetcher = fetcher_cls()
     try:
         fetcher.connect()
@@ -167,8 +170,12 @@ async def handler(websocket, fetcher_cls):
         trial.start()
 
     async def send_loop():
+        nonlocal scene_origin
+
         while True:
             state = trial.step()
+            if scene_origin is None and state["live_pose"] is not None:
+                scene_origin = np.array(state["live_pose"], dtype=float)
 
             # Competition overlay
             tr = None
@@ -220,9 +227,13 @@ async def handler(websocket, fetcher_cls):
                 reference_pose.tolist() if reference_pose is not None else None
             )
             state["cube_size"]           = CUBE_SIZE
+            state["source_mode"]         = fetcher.source_mode
+            state["source_label"]        = fetcher.source_label
+            state["stream_rate"]         = stream_rate
+            state["tracker_visible"]     = state["live_pose"] is not None
 
             await websocket.send(json.dumps(state))
-            await asyncio.sleep(STEP_INTERVAL)
+            await asyncio.sleep(step_interval)
 
     async def recv_loop():
         async for raw in websocket:
@@ -257,9 +268,11 @@ async def handler(websocket, fetcher_cls):
         print("Client disconnected.")
 
 
-async def main(fetcher_cls):
+async def main(fetcher_cls, stream_rate):
+    step_interval = 1 / stream_rate
+
     async def _handler(websocket):
-        await handler(websocket, fetcher_cls)
+        await handler(websocket, fetcher_cls, step_interval, stream_rate)
 
     root = Path(__file__).resolve().parent
     request_handler = partial(SimpleHTTPRequestHandler, directory=str(root))
@@ -269,7 +282,10 @@ async def main(fetcher_cls):
 
     try:
         async with websockets.serve(_handler, HOST, PORT):
-            print(f"WebSocket: ws://{HOST}:{PORT}  [{fetcher_cls.__name__}]")
+            print(
+                f"WebSocket: ws://{HOST}:{PORT}  "
+                f"[{fetcher_cls.__name__}, {stream_rate:g} Hz]"
+            )
             print(f"1D UI:     http://{HOST}:{HTTP_PORT}/index.html")
             print(f"3D UI:     http://{HOST}:{HTTP_PORT}/index-3d.html")
             await asyncio.Future()
@@ -282,7 +298,11 @@ if __name__ == "__main__":
     p = argparse.ArgumentParser()
     p.add_argument("--fake", action="store_true",
                    help="Use FakePoseFetcher instead of TrackerPoseFetcher (no SteamVR needed)")
+    p.add_argument("--rate", type=float, default=DEFAULT_RATE,
+                   help=f"Pose stream rate in Hz (default: {DEFAULT_RATE:g})")
     args = p.parse_args()
+    if args.rate <= 0:
+        p.error("--rate must be greater than zero")
 
     fetcher_cls = FakePoseFetcher if args.fake else TrackerPoseFetcher
-    asyncio.run(main(fetcher_cls))
+    asyncio.run(main(fetcher_cls, args.rate))

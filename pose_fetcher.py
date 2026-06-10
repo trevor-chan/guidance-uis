@@ -11,6 +11,9 @@ import numpy as np
 class LivePoseFetcher(ABC):
     """Interface for anything that supplies live poses on demand."""
 
+    source_mode = "unknown"
+    source_label = "Unknown pose source"
+
     @abstractmethod
     def connect(self) -> None:
         """Set up the pose source. Call once before get_pose()."""
@@ -30,9 +33,13 @@ class LivePoseFetcher(ABC):
 class TrackerPoseFetcher(LivePoseFetcher):
     """Real fetcher: wraps the OpenVR/SteamVR tracker. Runs on the lab rig."""
 
+    source_mode = "tracker"
+    source_label = "SteamVR tracker"
+
     def __init__(self):
         self.vr_system = None
         self.device_index = None
+        self.device_serial = None
 
     def connect(self) -> None:
         import openvr
@@ -41,6 +48,14 @@ class TrackerPoseFetcher(LivePoseFetcher):
         for i in range(openvr.k_unMaxTrackedDeviceCount):
             if self.vr_system.getTrackedDeviceClass(i) == openvr.TrackedDeviceClass_GenericTracker:
                 self.device_index = i
+                try:
+                    self.device_serial = self.vr_system.getStringTrackedDeviceProperty(
+                        i, openvr.Prop_SerialNumber_String
+                    )
+                except Exception:
+                    self.device_serial = None
+                if self.device_serial:
+                    self.source_label = f"SteamVR tracker {self.device_serial}"
                 return
 
         openvr.shutdown()
