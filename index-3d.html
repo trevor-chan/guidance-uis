@@ -177,6 +177,24 @@
       .buttons { flex-wrap: wrap; }
       #scene { min-height: 420px; }
     }
+    #hold-bar-outer {
+      position: absolute;
+      right: 0;
+      top: 0;
+      bottom: 0;
+      width: 10px;
+      background: #1a1a1a;
+      pointer-events: none;
+      z-index: 2;
+    }
+    #hold-bar-fill {
+      position: absolute;
+      bottom: 0;
+      left: 0;
+      width: 100%;
+      height: 0%;
+      background: var(--success);
+    }
   </style>
   <script type="importmap">
     {
@@ -216,6 +234,7 @@
           <div id="model-status">loading transducer.obj...</div>
           <div id="pose-readout">50 x 50 x 50 cm workspace</div>
         </div>
+        <div id="hold-bar-outer"><div id="hold-bar-fill"></div></div>
       </div>
     </section>
 
@@ -235,6 +254,7 @@
         <button id="calibrate">Calibrate</button>
         <button id="new-target">New Target</button>
         <button id="reset">Reset</button>
+        <button id="sway-toggle">Sway: On</button>
       </div>
     </section>
 
@@ -264,6 +284,8 @@
     const scoreValue = document.getElementById("score-value");
     const keyGrid = document.querySelector(".key-grid");
     const trackerHelp = document.getElementById("tracker-help");
+    const holdBarFill = document.getElementById("hold-bar-fill");
+    const swayBtn = document.getElementById("sway-toggle");
 
     const scene = new THREE.Scene();
     scene.background = new THREE.Color(0x151515);
@@ -529,6 +551,7 @@
           : `position error ${(data.linear * 100).toFixed(1)} cm | angle error ${data.angular.toFixed(1)} deg`;
 
         scoreValue.textContent = data.comp_hits ?? 0;
+        holdBarFill.style.height = `${((data.hold_progress ?? 0) * 100).toFixed(1)}%`;
         if (data.comp_game_over) {
           timeValue.textContent = "0:00";
           competitionState.textContent = "GAME OVER";
@@ -566,6 +589,10 @@
     document.getElementById("calibrate").addEventListener("click", () => send({ cmd: "calibrate" }));
     document.getElementById("new-target").addEventListener("click", () => send({ cmd: "new_target" }));
     document.getElementById("reset").addEventListener("click", () => send({ cmd: "reset" }));
+    swayBtn.addEventListener("click", () => {
+      swayEnabled = !swayEnabled;
+      swayBtn.textContent = swayEnabled ? "Sway: On" : "Sway: Off";
+    });
 
     function resize() {
       const width = sceneHost.clientWidth;
@@ -576,6 +603,9 @@
     }
 
     const _dropPos = new THREE.Vector3();
+    const _swayOffset = new THREE.Vector3();
+    const _swayY = new THREE.Vector3(0, 1, 0);
+    const _swayBase = camera.position.clone(); // OrbitControls-clean position, sway-free
 
     function updateDropLine(line, group) {
       if (!group.visible) { line.visible = false; return; }
@@ -588,9 +618,40 @@
       line.visible = true;
     }
 
+    let swayEnabled = true;
+    let swayBlend = 1.0;
+    // ±0.5 deg azimuth, 5 s period — barely-perceptible breathing motion
+    const SWAY_H_AMP = 0.5 * (Math.PI / 180);
+    const SWAY_PERIOD = 5.0;
+    let isUserInteracting = false;
+    controls.addEventListener("start", () => { isUserInteracting = true; });
+    controls.addEventListener("end",   () => { isUserInteracting = false; });
+
     function animate() {
       requestAnimationFrame(animate);
+
+      // Restore the sway-free position before controls.update() so that
+      // OrbitControls' damping loop (which reads camera.position → spherical
+      // each frame) never sees the swayed offset.  Without this, the sway
+      // angle accumulates into OrbitControls' internal state and grows without
+      // bound, causing the large swing and the turnaround ghost artifact.
+      camera.position.copy(_swayBase);
       controls.update();
+      _swayBase.copy(camera.position); // capture clean post-update position
+
+      const targetBlend = (swayEnabled && !isUserInteracting) ? 1.0 : 0.0;
+      swayBlend += (targetBlend - swayBlend) * 0.06;
+      if (swayBlend > 0.001) {
+        const t = performance.now() / 1000;
+        // Absolute azimuth offset — computed fresh from _swayBase every frame,
+        // no incremental accumulation, no cross-product near singularity.
+        const azOff = SWAY_H_AMP * Math.sin(2 * Math.PI * t / SWAY_PERIOD) * swayBlend;
+        _swayOffset.subVectors(_swayBase, controls.target);
+        _swayOffset.applyAxisAngle(_swayY, azOff);
+        camera.position.copy(controls.target).add(_swayOffset);
+        camera.lookAt(controls.target);
+      }
+
       updateDropLine(liveDropLine, liveGroup);
       updateDropLine(ghostDropLine, ghostGroup);
       renderer.render(scene, camera);
