@@ -344,7 +344,15 @@
     const displayFrame = new THREE.Group();
     displayFrame.rotation.x = DISPLAY_FRAME_X_ROTATION;
     displayFrame.rotation.z = DISPLAY_FRAME_Z_ROTATION;
-    scene.add(displayFrame);
+    // txWorldGroup wraps all "world" objects (displayFrame, ground, grid).
+    // In transducer frame its matrix is set to probe_pose⁻¹ each frame so
+    // the entire world shifts around a probe that is pinned to scene origin.
+    const txWorldGroup = new THREE.Group();
+    txWorldGroup.matrixAutoUpdate = false;
+    scene.add(txWorldGroup);
+    txWorldGroup.add(displayFrame);
+    displayFrame.updateMatrix();
+    const DISPLAY_FRAME_MATRIX = displayFrame.matrix.clone();
 
     const cubeGeometry = new THREE.BoxGeometry(0.5, 0.5, 0.5);
     const cubeEdges = new THREE.LineSegments(
@@ -361,12 +369,12 @@
     groundPlane.rotation.x = -Math.PI / 2;
     groundPlane.position.y = -0.25;
     groundPlane.receiveShadow = true;
-    scene.add(groundPlane);
+    txWorldGroup.add(groundPlane);
 
     // Grid sits 1 mm above the shadow-receiving plane so they don't z-fight.
     const grid = new THREE.GridHelper(1.2, 24, 0x475569, 0x273244);
     grid.position.y = -0.249;
-    scene.add(grid);
+    txWorldGroup.add(grid);
 
     const liveGroup = new THREE.Group();
     const ghostGroup = new THREE.Group();
@@ -374,7 +382,8 @@
     ghostGroup.matrixAutoUpdate = false;
     liveGroup.visible = false;
     ghostGroup.visible = false;
-    displayFrame.add(liveGroup, ghostGroup);
+    scene.add(liveGroup);         // live probe in scene space; matrix bakes display rotation
+    displayFrame.add(ghostGroup); // ghost in displayFrame (inside txWorldGroup)
 
     function createPoseAxes(opacity) {
       const axes = new THREE.Group();
@@ -598,6 +607,24 @@
           return;
         }
 
+        // ── Reference frame: read once (static for session) ─────────────────
+        if (data.reference_frame && data.reference_frame !== referenceFrame) {
+          referenceFrame = data.reference_frame;
+          frameNeedsInit = true;
+        }
+
+        // Detect calibration / reset transitions for locked frames.
+        const justCalibrated = !!data.comp_calibrated && !prevCalibrated;
+        const justReset      = !data.comp_calibrated  &&  prevCalibrated;
+        prevCalibrated = !!data.comp_calibrated;
+        if (justCalibrated && (referenceFrame === 'user' || referenceFrame === 'patient')) {
+          initLockedFrame();
+          frameNeedsInit = false;
+        }
+        if (justReset) {
+          frameNeedsInit = true; // re-lock next calibration
+        }
+
         const isTracker = data.source_mode === "tracker";
         sourceStatus.textContent = isTracker
           ? `LIVE TRACKER | ${data.source_label} | ${data.stream_rate} Hz`
@@ -606,8 +633,21 @@
         keyGrid.style.display = isTracker ? "none" : "grid";
         trackerHelp.style.display = isTracker ? "block" : "none";
 
-        setRelativePose(liveGroup, data.live_pose, data.reference_pose);
-        liveGroup.visible = Boolean(data.live_pose && liveGroup.children.length);
+        {
+          // liveGroup is a direct scene child so its matrix must bake the
+          // display rotation that was formerly provided by the displayFrame parent.
+          const livePose = matrixFromRows(data.live_pose);
+          const refPose  = matrixFromRows(data.reference_pose);
+          if (livePose && refPose) {
+            _liveRelMatrix.copy(refPose).invert().multiply(livePose);
+            liveGroup.matrix.copy(DISPLAY_FRAME_MATRIX).multiply(_liveRelMatrix);
+            _lastLiveMatrix.copy(liveGroup.matrix);
+            liveGroup.matrixWorldNeedsUpdate = true;
+            liveGroup.visible = Boolean(liveGroup.children.length);
+          } else {
+            liveGroup.visible = false;
+          }
+        }
 
         if (data.comp_calibrated && data.target_pose) {
           setRelativePose(ghostGroup, data.target_pose, data.reference_pose);
@@ -750,6 +790,9 @@
     }
 
     const _dropPos = new THREE.Vector3();
+    const _groundWorldPos = new THREE.Vector3();
+    const _liveRelMatrix  = new THREE.Matrix4();   // raw live pose relative to reference (calibrated space)
+    const _lastLiveMatrix = new THREE.Matrix4();   // last valid liveGroup matrix; never reset between frames
     const _swayOffset = new THREE.Vector3();
     const _swayY = new THREE.Vector3(0, 1, 0);
     const _swayBase = camera.position.clone(); // OrbitControls-clean position, sway-free
@@ -765,9 +808,11 @@
       if (!zalignEnabled || !group.visible) { line.visible = false; return; }
       group.updateWorldMatrix(true, false);
       _dropPos.setFromMatrixPosition(group.matrixWorld);
+      groundPlane.updateWorldMatrix(true, false);
+      groundPlane.getWorldPosition(_groundWorldPos);
       const pos = line.geometry.attributes.position.array;
       pos[0] = _dropPos.x; pos[1] = _dropPos.y; pos[2] = _dropPos.z;
-      pos[3] = _dropPos.x; pos[4] = -0.25;      pos[5] = _dropPos.z;
+      pos[3] = _dropPos.x; pos[4] = _groundWorldPos.y; pos[5] = _dropPos.z;
       line.geometry.attributes.position.needsUpdate = true;
       line.visible = true;
     }
@@ -842,7 +887,9 @@
       if (!dispEnabled || !liveGroup.visible || !ghostGroup.visible) return;
 
       // q_err = q_live⁻¹ ⊗ q_ghost  →  relative rotation in live body frame.
-      _qLive.setFromRotationMatrix(liveGroup.matrix);
+      // Use _liveRelMatrix (calibrated-space relative pose) so this is correct
+      // even in transducer frame where liveGroup.matrix is pinned to identity.
+      _qLive.setFromRotationMatrix(_liveRelMatrix);
       _qGhost.setFromRotationMatrix(ghostGroup.matrix);
       _qErr.copy(_qLive).conjugate().multiply(_qGhost);
 
@@ -866,6 +913,34 @@
     let dispEnabled = true;
     let isPerspective = true;
     let swayBlend = 1.0;
+
+    // ── Reference-frame camera modes ─────────────────────────────────────────
+    // null = no frame mode (existing default orbit); set from data.reference_frame.
+    // transducer: camera rides probe each frame (controls.target tracks probe).
+    // user / patient: camera locked at calibration pose world position.
+    let referenceFrame = null;
+    let frameNeedsInit = true;   // cleared after first camera placement
+    let prevCalibrated = false;  // edge-detect comp_calibrated transitions
+
+    // Scratch vectors reused every frame to avoid GC pressure.
+    const _probePos = new THREE.Vector3();
+    const _probeFwd = new THREE.Vector3();
+    const _probeUp3 = new THREE.Vector3();
+
+    // Lock camera to displayFrame origin (calibration pose world position),
+    // looking along displayFrame col-0 (calibrated +X → world (0,0,−1)).
+    function initLockedFrame() {
+      displayFrame.updateWorldMatrix(true, false);
+      const m = displayFrame.matrixWorld;
+      _probeFwd.setFromMatrixColumn(m, 0).normalize(); // calibrated +X in world
+      // calibPos = displayFrame world position = (0,0,0) (no translational component)
+      const calibPos = new THREE.Vector3().setFromMatrixPosition(m);
+      const lookTarget = calibPos.clone().addScaledVector(_probeFwd, 0.5);
+      activeCamera.position.copy(calibPos);
+      controls.target.copy(lookTarget);
+      _swayBase.copy(calibPos);
+      controls.update();
+    }
     // ±0.5 deg azimuth, 5 s period — barely-perceptible breathing motion
     const SWAY_H_AMP = 0.5 * (Math.PI / 180);
     const SWAY_PERIOD = 5.0;
@@ -876,26 +951,67 @@
     function animate() {
       requestAnimationFrame(animate);
 
-      // Restore the sway-free position before controls.update() so that
-      // OrbitControls' damping loop (which reads camera.position → spherical
-      // each frame) never sees the swayed offset.  Without this, the sway
-      // angle accumulates into OrbitControls' internal state and grows without
-      // bound, causing the large swing and the turnaround ghost artifact.
-      activeCamera.position.copy(_swayBase);
-      controls.update();
-      _swayBase.copy(activeCamera.position); // capture clean post-update position
+      // ── Transducer frame: probe fixed, world moves ────────────────────────
+      // Camera is set once and never touched again. The live probe is pinned
+      // at scene origin (liveGroup.matrix = identity). txWorldGroup receives
+      // probe_pose⁻¹ so the entire world — ghost, cubes, ground, grid — shifts
+      // each frame to preserve relative probe↔world alignment while the probe
+      // stays visually locked. Sway and OrbitControls are disabled.
+      if (referenceFrame === 'transducer') {
+        controls.enabled = false;
+        if (frameNeedsInit) {
+          // Over-the-shoulder view from behind/above the probe.
+          // position=(-0.25, 0, 0.10): 0.25 m behind (-X) and 0.10 m above (+Z).
+          // lookAt=(0,0,0): probe at origin. up=(0,0,1): probe's TOP axis, so
+          // the transducer face (+X) points away, top faces up, no roll.
+          activeCamera.position.set(-0.25, 0, 0.10);
+          activeCamera.up.set(0, 0, 1);
+          activeCamera.lookAt(0, 0, 0);
+          const otherCam = isPerspective ? orthoCamera : camera;
+          otherCam.position.set(-0.25, 0, 0.10);
+          otherCam.up.set(0, 0, 1);
+          otherCam.lookAt(0, 0, 0);
+          _swayBase.set(-0.25, 0, 0.10);
+          controls.target.set(0, 0, 0);
+          frameNeedsInit = false;
+        }
+        if (liveGroup.visible) {
+          // Use _lastLiveMatrix (set by message handler, never reset) so that
+          // frames without a fresh message still invert the correct live pose.
+          // Reading liveGroup.matrix here would give identity after the reset
+          // below, causing txWorldGroup to snap to identity on every second
+          // frame and producing flicker + a phantom at the wrong position.
+          txWorldGroup.matrix.copy(_lastLiveMatrix).invert();
+          txWorldGroup.matrixWorldNeedsUpdate = true;
+          liveGroup.matrix.identity();
+          liveGroup.matrixWorldNeedsUpdate = true;
+        }
+      } else {
+        controls.enabled = true;
+        txWorldGroup.matrix.identity();
+        txWorldGroup.matrixWorldNeedsUpdate = true;
 
-      const targetBlend = (swayEnabled && !isUserInteracting) ? 1.0 : 0.0;
-      swayBlend += (targetBlend - swayBlend) * 0.06;
-      if (swayBlend > 0.001) {
-        const t = performance.now() / 1000;
-        // Absolute azimuth offset — computed fresh from _swayBase every frame,
-        // no incremental accumulation, no cross-product near singularity.
-        const azOff = SWAY_H_AMP * Math.sin(2 * Math.PI * t / SWAY_PERIOD) * swayBlend;
-        _swayOffset.subVectors(_swayBase, controls.target);
-        _swayOffset.applyAxisAngle(_swayY, azOff);
-        activeCamera.position.copy(controls.target).add(_swayOffset);
-        activeCamera.lookAt(controls.target);
+        // Restore the sway-free position before controls.update() so that
+        // OrbitControls' damping loop (which reads camera.position → spherical
+        // each frame) never sees the swayed offset.  Without this, the sway
+        // angle accumulates into OrbitControls' internal state and grows without
+        // bound, causing the large swing and the turnaround ghost artifact.
+        activeCamera.position.copy(_swayBase);
+        controls.update();
+        _swayBase.copy(activeCamera.position); // capture clean post-update position
+
+        const targetBlend = (swayEnabled && !isUserInteracting) ? 1.0 : 0.0;
+        swayBlend += (targetBlend - swayBlend) * 0.06;
+        if (swayBlend > 0.001) {
+          const t = performance.now() / 1000;
+          // Absolute azimuth offset — computed fresh from _swayBase every frame,
+          // no incremental accumulation, no cross-product near singularity.
+          const azOff = SWAY_H_AMP * Math.sin(2 * Math.PI * t / SWAY_PERIOD) * swayBlend;
+          _swayOffset.subVectors(_swayBase, controls.target);
+          _swayOffset.applyAxisAngle(_swayY, azOff);
+          activeCamera.position.copy(controls.target).add(_swayOffset);
+          activeCamera.lookAt(controls.target);
+        }
       }
 
       updateDropLine(liveDropLine, liveGroup);
