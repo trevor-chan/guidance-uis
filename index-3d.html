@@ -262,6 +262,7 @@
         <button id="shadow-toggle">Shadow: <span class="ind on">ON</span></button>
         <button id="mesh-toggle">Mesh: <span class="ind on">ON</span></button>
         <button id="axes-toggle">Basis vectors: <span class="ind on">ON</span></button>
+        <button id="disp-toggle">Displacement vectors: <span class="ind on">ON</span></button>
         <button id="proj-toggle">PERSP</button>
       </div>
     </section>
@@ -425,6 +426,50 @@
     const ghostAxes = createPoseAxes(0.65);
     liveGroup.add(liveAxes);
     ghostGroup.add(ghostAxes);
+
+    // Displacement-vector arcs — orange arcs on the live model visualising
+    // the per-axis rotational error (roll/pitch/yaw) relative to the ghost.
+    const ARC_RADIUS = 0.14;  // matches basis-vector arrow length
+    const ARC_SEGS   = 48;
+    const ARC_MAT    = new THREE.LineBasicMaterial({
+      color: 0xff8c00, transparent: true, opacity: 0.9, depthTest: false
+    });
+
+    function createArc() {
+      const geo = new THREE.BufferGeometry();
+      geo.setAttribute('position',
+        new THREE.BufferAttribute(new Float32Array((ARC_SEGS + 1) * 3), 3));
+      const line = new THREE.Line(geo, ARC_MAT);
+      line.renderOrder = 10;
+      return line;
+    }
+
+    // roll  = error about live X-axis; arc starts at Z-basis tip (0,0,1)
+    // pitch = error about live Y-axis; arc starts at X-basis tip (1,0,0)
+    // yaw   = error about live Z-axis; arc starts at X-basis tip (1,0,0)
+    const rollArc  = createArc();
+    const pitchArc = createArc();
+    const yawArc   = createArc();
+    liveGroup.add(rollArc, pitchArc, yawArc);
+
+    // Arrowheads for displacement arcs — 3-D cones, same style as basis-vector heads.
+    const ARROW_HEAD_LENGTH = 0.025;
+    const ARROW_HEAD_RADIUS = 0.006;
+    const ARC_ARROW_MAT = new THREE.MeshBasicMaterial({
+      color: 0xff8c00, transparent: true, opacity: 0.9, depthTest: false
+    });
+    function createArcArrow() {
+      const cone = new THREE.Mesh(
+        new THREE.ConeGeometry(ARROW_HEAD_RADIUS, ARROW_HEAD_LENGTH, 8),
+        ARC_ARROW_MAT
+      );
+      cone.renderOrder = 10;
+      return cone;
+    }
+    const rollArrow  = createArcArrow();
+    const pitchArrow = createArcArrow();
+    const yawArrow   = createArcArrow();
+    liveGroup.add(rollArrow, pitchArrow, yawArrow);
 
     function createDropLine(color) {
       const geo = new THREE.BufferGeometry();
@@ -661,6 +706,18 @@
       ghostAxes.visible = axesEnabled;
     });
 
+    const dispBtn = document.getElementById('disp-toggle');
+    const dispInd = dispBtn.querySelector('.ind');
+    dispBtn.addEventListener('click', () => {
+      dispEnabled = !dispEnabled;
+      dispInd.textContent = dispEnabled ? 'ON' : 'OFF';
+      dispInd.className = 'ind ' + (dispEnabled ? 'on' : 'off');
+      if (!dispEnabled) {
+        rollArc.visible = pitchArc.visible = yawArc.visible = false;
+        rollArrow.visible = pitchArrow.visible = yawArrow.visible = false;
+      }
+    });
+
     const projBtn = document.getElementById('proj-toggle');
     projBtn.addEventListener('click', () => {
       isPerspective = !isPerspective;
@@ -696,6 +753,13 @@
     const _swayOffset = new THREE.Vector3();
     const _swayY = new THREE.Vector3(0, 1, 0);
     const _swayBase = camera.position.clone(); // OrbitControls-clean position, sway-free
+    const _qLive  = new THREE.Quaternion();
+    const _qGhost = new THREE.Quaternion();
+    const _qErr   = new THREE.Quaternion();
+    const _euler  = new THREE.Euler();
+    const _arcUp  = new THREE.Vector3(0, 1, 0); // cone natural axis
+    const _arcDir = new THREE.Vector3();         // scratch for arrowhead orientation
+    const MIN_ARC_RAD = 0.5 * Math.PI / 180; // hide arcs below 0.5 deg
 
     function updateDropLine(line, group) {
       if (!zalignEnabled || !group.visible) { line.visible = false; return; }
@@ -708,11 +772,98 @@
       line.visible = true;
     }
 
+    // Writes ARC_SEGS+1 points into arc.geometry sweeping `angle` radians around
+    // the named body axis starting at the specified unit start direction.
+    // Roll:  axis=X, start=(0,0,1)  → point = r·(0, −sinT, cosT)
+    // Pitch: axis=Y, start=(1,0,0)  → point = r·(cosT, 0, −sinT)
+    // Yaw:   axis=Z, start=(1,0,0)  → point = r·(cosT, sinT, 0)
+    function updateArcGeometry(arc, angle, axis) {
+      if (Math.abs(angle) < MIN_ARC_RAD) { arc.visible = false; return; }
+      const verts = arc.geometry.attributes.position.array;
+      const r = ARC_RADIUS;
+      for (let i = 0; i <= ARC_SEGS; i++) {
+        const t = (angle / ARC_SEGS) * i;
+        let px, py, pz;
+        if (axis === 0) {         // roll: rotate (0,0,1) around X
+          px = 0;
+          py = -Math.sin(t);
+          pz =  Math.cos(t);
+        } else if (axis === 1) {  // pitch: rotate (1,0,0) around Y
+          px =  Math.cos(t);
+          py = 0;
+          pz = -Math.sin(t);
+        } else {                  // yaw: rotate (1,0,0) around Z
+          px = Math.cos(t);
+          py = Math.sin(t);
+          pz = 0;
+        }
+        verts[i * 3]     = r * px;
+        verts[i * 3 + 1] = r * py;
+        verts[i * 3 + 2] = r * pz;
+      }
+      arc.geometry.attributes.position.needsUpdate = true;
+      arc.visible = true;
+    }
+
+    // Place a cone arrowhead at the swept end of an arc, pointing in the direction
+    // that reduces the error (toward t=0).  The reduce-error tangent is
+    // −sign(angle) × d/dt of the arc parametrization evaluated at t=angle.
+    function updateArcArrow(cone, angle, axis) {
+      if (Math.abs(angle) < MIN_ARC_RAD) { cone.visible = false; return; }
+      const r = ARC_RADIUS;
+      const s = Math.sign(angle);
+      const a = angle;
+      let px, py, pz, dx, dy, dz;
+      if (axis === 0) {        // roll:  p=(0,−sin,cos),  tangent=(0,−cos,−sin)
+        px = 0;             py = -r * Math.sin(a); pz =  r * Math.cos(a);
+        dx = 0;             dy =  s * Math.cos(a); dz =  s * Math.sin(a);
+      } else if (axis === 1) { // pitch: p=(cos,0,−sin),  tangent=(−sin,0,−cos)
+        px = r * Math.cos(a); py = 0;              pz = -r * Math.sin(a);
+        dx = s * Math.sin(a); dy = 0;              dz =  s * Math.cos(a);
+      } else {                 // yaw:   p=(cos,sin,0),   tangent=(−sin,cos,0)
+        px = r * Math.cos(a); py = r * Math.sin(a); pz = 0;
+        dx = s * Math.sin(a); dy = -s * Math.cos(a); dz = 0;
+      }
+      _arcDir.set(-dx, -dy, -dz).normalize();
+      // Center cone so its tip lands exactly on the arc end point.
+      cone.position.set(
+        px - _arcDir.x * (ARROW_HEAD_LENGTH / 2),
+        py - _arcDir.y * (ARROW_HEAD_LENGTH / 2),
+        pz - _arcDir.z * (ARROW_HEAD_LENGTH / 2)
+      );
+      cone.quaternion.setFromUnitVectors(_arcUp, _arcDir);
+      cone.visible = true;
+    }
+
+    function updateDisplacementVectors() {
+      // Hide all arcs and arrowheads immediately; re-enable below if conditions are met.
+      rollArc.visible = pitchArc.visible = yawArc.visible = false;
+      rollArrow.visible = pitchArrow.visible = yawArrow.visible = false;
+      if (!dispEnabled || !liveGroup.visible || !ghostGroup.visible) return;
+
+      // q_err = q_live⁻¹ ⊗ q_ghost  →  relative rotation in live body frame.
+      _qLive.setFromRotationMatrix(liveGroup.matrix);
+      _qGhost.setFromRotationMatrix(ghostGroup.matrix);
+      _qErr.copy(_qLive).conjugate().multiply(_qGhost);
+
+      // Intrinsic XYZ decomposition: R = Rz(e.z)·Ry(e.y)·Rx(e.x)
+      // → euler.x=roll (about live X), euler.y=pitch (about live Y), euler.z=yaw (about live Z)
+      _euler.setFromQuaternion(_qErr, 'XYZ');
+
+      updateArcGeometry(rollArc,  _euler.x, 0);
+      updateArcGeometry(pitchArc, _euler.y, 1);
+      updateArcGeometry(yawArc,   _euler.z, 2);
+      updateArcArrow(rollArrow,  _euler.x, 0);
+      updateArcArrow(pitchArrow, _euler.y, 1);
+      updateArcArrow(yawArrow,   _euler.z, 2);
+    }
+
     let swayEnabled = false;
     let zalignEnabled = true;
     let shadowEnabled = true;
     let meshEnabled = true;
     let axesEnabled = true;
+    let dispEnabled = true;
     let isPerspective = true;
     let swayBlend = 1.0;
     // ±0.5 deg azimuth, 5 s period — barely-perceptible breathing motion
@@ -749,6 +900,7 @@
 
       updateDropLine(liveDropLine, liveGroup);
       updateDropLine(ghostDropLine, ghostGroup);
+      updateDisplacementVectors();
       renderer.render(scene, activeCamera);
     }
 
