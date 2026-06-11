@@ -275,6 +275,8 @@
     const renderer = new THREE.WebGLRenderer({ antialias: true });
     renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
     renderer.outputColorSpace = THREE.SRGBColorSpace;
+    renderer.shadowMap.enabled = true;
+    renderer.shadowMap.type = THREE.PCFSoftShadowMap;
     sceneHost.prepend(renderer.domElement);
 
     const controls = new OrbitControls(camera, renderer.domElement);
@@ -282,9 +284,18 @@
     controls.target.set(0, 0, 0);
     controls.update();
 
-    scene.add(new THREE.HemisphereLight(0xffffff, 0x202028, 2.2));
+    scene.add(new THREE.HemisphereLight(0xffffff, 0x202028, 1.4));
     const keyLight = new THREE.DirectionalLight(0xffffff, 2.5);
     keyLight.position.set(0.5, 0.8, 0.6);
+    keyLight.castShadow = true;
+    keyLight.shadow.mapSize.width = 1024;
+    keyLight.shadow.mapSize.height = 1024;
+    keyLight.shadow.camera.near = 0.1;
+    keyLight.shadow.camera.far = 3;
+    keyLight.shadow.camera.left = -0.9;
+    keyLight.shadow.camera.right = 0.9;
+    keyLight.shadow.camera.top = 0.9;
+    keyLight.shadow.camera.bottom = -0.9;
     scene.add(keyLight);
 
     // Convert the calibrated frame to the visualizer frame. This is display-only:
@@ -304,8 +315,17 @@
 
     // GridHelper is an XZ plane in Three.js. After the display-frame rotation,
     // it represents calibrated local X/Y at the cube's local Z = -25 cm face.
-    const grid = new THREE.GridHelper(0.5, 10, 0x475569, 0x273244);
-    grid.position.y = -0.25;
+    const groundGeo = new THREE.PlaneGeometry(1.2, 1.2);
+    const groundMat = new THREE.MeshStandardMaterial({ color: 0x1a2535, roughness: 1, metalness: 0 });
+    const groundPlane = new THREE.Mesh(groundGeo, groundMat);
+    groundPlane.rotation.x = -Math.PI / 2;
+    groundPlane.position.y = -0.25;
+    groundPlane.receiveShadow = true;
+    scene.add(groundPlane);
+
+    // Grid sits 1 mm above the shadow-receiving plane so they don't z-fight.
+    const grid = new THREE.GridHelper(1.2, 24, 0x475569, 0x273244);
+    grid.position.y = -0.249;
     scene.add(grid);
 
     const liveGroup = new THREE.Group();
@@ -365,13 +385,29 @@
     liveGroup.add(createPoseAxes(1.0));
     ghostGroup.add(createPoseAxes(0.65));
 
+    function createDropLine(color) {
+      const geo = new THREE.BufferGeometry();
+      geo.setAttribute('position', new THREE.BufferAttribute(new Float32Array(6), 3));
+      return new THREE.Line(geo, new THREE.LineBasicMaterial({
+        color,
+        transparent: true,
+        opacity: 0.45,
+        depthTest: true
+      }));
+    }
+    const liveDropLine = createDropLine(0xffffff);
+    const ghostDropLine = createDropLine(0x7dd3fc);
+    liveDropLine.visible = false;
+    ghostDropLine.visible = false;
+    scene.add(liveDropLine, ghostDropLine);
+
     function centeredModel(object, material) {
       const bounds = new THREE.Box3().setFromObject(object);
       const center = bounds.getCenter(new THREE.Vector3());
       object.traverse(child => {
         if (child.isMesh) {
           child.material = material;
-          child.castShadow = false;
+          child.castShadow = true;
           child.receiveShadow = false;
         }
       });
@@ -539,9 +575,24 @@
       camera.updateProjectionMatrix();
     }
 
+    const _dropPos = new THREE.Vector3();
+
+    function updateDropLine(line, group) {
+      if (!group.visible) { line.visible = false; return; }
+      group.updateWorldMatrix(true, false);
+      _dropPos.setFromMatrixPosition(group.matrixWorld);
+      const pos = line.geometry.attributes.position.array;
+      pos[0] = _dropPos.x; pos[1] = _dropPos.y; pos[2] = _dropPos.z;
+      pos[3] = _dropPos.x; pos[4] = -0.25;      pos[5] = _dropPos.z;
+      line.geometry.attributes.position.needsUpdate = true;
+      line.visible = true;
+    }
+
     function animate() {
       requestAnimationFrame(animate);
       controls.update();
+      updateDropLine(liveDropLine, liveGroup);
+      updateDropLine(ghostDropLine, ghostGroup);
       renderer.render(scene, camera);
     }
 
