@@ -149,7 +149,10 @@
       color: var(--text);
       text-align: center;
     }
-    .buttons { display: flex; gap: 8px; }
+    .buttons { display: flex; gap: 8px; flex-wrap: wrap; }
+    .ind { font-weight: bold; }
+    .ind.on  { color: #4ade80; }
+    .ind.off { color: #f87171; }
     button {
       padding: 9px 14px;
       border: 1px solid #444;
@@ -254,7 +257,12 @@
         <button id="calibrate">Calibrate</button>
         <button id="new-target">New Target</button>
         <button id="reset">Reset</button>
-        <button id="sway-toggle">Sway: On</button>
+        <button id="zaline-toggle">Z-align: <span class="ind on">ON</span></button>
+        <button id="sway-toggle">Sway: <span class="ind off">OFF</span></button>
+        <button id="shadow-toggle">Shadow: <span class="ind on">ON</span></button>
+        <button id="mesh-toggle">Mesh: <span class="ind on">ON</span></button>
+        <button id="axes-toggle">Basis vectors: <span class="ind on">ON</span></button>
+        <button id="proj-toggle">PERSP</button>
       </div>
     </section>
 
@@ -305,6 +313,15 @@
     controls.enableDamping = true;
     controls.target.set(0, 0, 0);
     controls.update();
+
+    const ORTHO_H = 0.42;
+    const orthoCamera = new THREE.OrthographicCamera(
+      -ORTHO_H, ORTHO_H, ORTHO_H, -ORTHO_H, 0.01, 10
+    );
+    orthoCamera.position.copy(camera.position);
+    orthoCamera.up.copy(camera.up);
+    orthoCamera.lookAt(controls.target);
+    let activeCamera = camera;
 
     scene.add(new THREE.HemisphereLight(0xffffff, 0x202028, 1.4));
     const keyLight = new THREE.DirectionalLight(0xffffff, 2.5);
@@ -404,8 +421,10 @@
       return axes;
     }
 
-    liveGroup.add(createPoseAxes(1.0));
-    ghostGroup.add(createPoseAxes(0.65));
+    const liveAxes = createPoseAxes(1.0);
+    const ghostAxes = createPoseAxes(0.65);
+    liveGroup.add(liveAxes);
+    ghostGroup.add(ghostAxes);
 
     function createDropLine(color) {
       const geo = new THREE.BufferGeometry();
@@ -444,6 +463,8 @@
       return visualAlignment;
     }
 
+    let liveMeshWrapper = null, ghostMeshWrapper = null;
+
     new OBJLoader().load(
       MODEL_URL,
       object => {
@@ -462,8 +483,12 @@
           side: THREE.DoubleSide
         });
 
-        liveGroup.add(centeredModel(object, liveMaterial));
-        ghostGroup.add(centeredModel(ghostObject, ghostMaterial));
+        liveMeshWrapper = centeredModel(object, liveMaterial);
+        ghostMeshWrapper = centeredModel(ghostObject, ghostMaterial);
+        liveMeshWrapper.visible = meshEnabled;
+        ghostMeshWrapper.visible = meshEnabled;
+        liveGroup.add(liveMeshWrapper);
+        ghostGroup.add(ghostMeshWrapper);
         liveGroup.visible = true;
         modelStatus.textContent = "transducer.obj loaded";
       },
@@ -589,17 +614,82 @@
     document.getElementById("calibrate").addEventListener("click", () => send({ cmd: "calibrate" }));
     document.getElementById("new-target").addEventListener("click", () => send({ cmd: "new_target" }));
     document.getElementById("reset").addEventListener("click", () => send({ cmd: "reset" }));
+
+    const swayInd = swayBtn.querySelector('.ind');
     swayBtn.addEventListener("click", () => {
       swayEnabled = !swayEnabled;
-      swayBtn.textContent = swayEnabled ? "Sway: On" : "Sway: Off";
+      swayInd.textContent = swayEnabled ? 'ON' : 'OFF';
+      swayInd.className = 'ind ' + (swayEnabled ? 'on' : 'off');
+    });
+
+    const zalineBtn = document.getElementById('zaline-toggle');
+    const zalineInd = zalineBtn.querySelector('.ind');
+    zalineBtn.addEventListener('click', () => {
+      zalignEnabled = !zalignEnabled;
+      zalineInd.textContent = zalignEnabled ? 'ON' : 'OFF';
+      zalineInd.className = 'ind ' + (zalignEnabled ? 'on' : 'off');
+      if (!zalignEnabled) { liveDropLine.visible = false; ghostDropLine.visible = false; }
+    });
+
+    const shadowBtn = document.getElementById('shadow-toggle');
+    const shadowInd = shadowBtn.querySelector('.ind');
+    shadowBtn.addEventListener('click', () => {
+      shadowEnabled = !shadowEnabled;
+      shadowInd.textContent = shadowEnabled ? 'ON' : 'OFF';
+      shadowInd.className = 'ind ' + (shadowEnabled ? 'on' : 'off');
+      keyLight.castShadow = shadowEnabled;
+      if (shadowEnabled) renderer.shadowMap.needsUpdate = true;
+    });
+
+    const meshBtn = document.getElementById('mesh-toggle');
+    const meshInd = meshBtn.querySelector('.ind');
+    meshBtn.addEventListener('click', () => {
+      meshEnabled = !meshEnabled;
+      meshInd.textContent = meshEnabled ? 'ON' : 'OFF';
+      meshInd.className = 'ind ' + (meshEnabled ? 'on' : 'off');
+      if (liveMeshWrapper) liveMeshWrapper.visible = meshEnabled;
+      if (ghostMeshWrapper) ghostMeshWrapper.visible = meshEnabled;
+    });
+
+    const axesBtn = document.getElementById('axes-toggle');
+    const axesInd = axesBtn.querySelector('.ind');
+    axesBtn.addEventListener('click', () => {
+      axesEnabled = !axesEnabled;
+      axesInd.textContent = axesEnabled ? 'ON' : 'OFF';
+      axesInd.className = 'ind ' + (axesEnabled ? 'on' : 'off');
+      liveAxes.visible = axesEnabled;
+      ghostAxes.visible = axesEnabled;
+    });
+
+    const projBtn = document.getElementById('proj-toggle');
+    projBtn.addEventListener('click', () => {
+      isPerspective = !isPerspective;
+      projBtn.textContent = isPerspective ? 'PERSP' : 'ORTHO';
+      if (isPerspective) {
+        camera.position.copy(orthoCamera.position);
+        camera.quaternion.copy(orthoCamera.quaternion);
+      } else {
+        orthoCamera.position.copy(camera.position);
+        orthoCamera.quaternion.copy(camera.quaternion);
+      }
+      activeCamera = isPerspective ? camera : orthoCamera;
+      _swayBase.copy(activeCamera.position);
+      controls.object = activeCamera;
+      controls.update();
     });
 
     function resize() {
       const width = sceneHost.clientWidth;
       const height = sceneHost.clientHeight;
       renderer.setSize(width, height, false);
-      camera.aspect = width / height;
+      const aspect = width / height;
+      camera.aspect = aspect;
       camera.updateProjectionMatrix();
+      orthoCamera.left   = -ORTHO_H * aspect;
+      orthoCamera.right  =  ORTHO_H * aspect;
+      orthoCamera.top    =  ORTHO_H;
+      orthoCamera.bottom = -ORTHO_H;
+      orthoCamera.updateProjectionMatrix();
     }
 
     const _dropPos = new THREE.Vector3();
@@ -608,7 +698,7 @@
     const _swayBase = camera.position.clone(); // OrbitControls-clean position, sway-free
 
     function updateDropLine(line, group) {
-      if (!group.visible) { line.visible = false; return; }
+      if (!zalignEnabled || !group.visible) { line.visible = false; return; }
       group.updateWorldMatrix(true, false);
       _dropPos.setFromMatrixPosition(group.matrixWorld);
       const pos = line.geometry.attributes.position.array;
@@ -618,7 +708,12 @@
       line.visible = true;
     }
 
-    let swayEnabled = true;
+    let swayEnabled = false;
+    let zalignEnabled = true;
+    let shadowEnabled = true;
+    let meshEnabled = true;
+    let axesEnabled = true;
+    let isPerspective = true;
     let swayBlend = 1.0;
     // ±0.5 deg azimuth, 5 s period — barely-perceptible breathing motion
     const SWAY_H_AMP = 0.5 * (Math.PI / 180);
@@ -635,9 +730,9 @@
       // each frame) never sees the swayed offset.  Without this, the sway
       // angle accumulates into OrbitControls' internal state and grows without
       // bound, causing the large swing and the turnaround ghost artifact.
-      camera.position.copy(_swayBase);
+      activeCamera.position.copy(_swayBase);
       controls.update();
-      _swayBase.copy(camera.position); // capture clean post-update position
+      _swayBase.copy(activeCamera.position); // capture clean post-update position
 
       const targetBlend = (swayEnabled && !isUserInteracting) ? 1.0 : 0.0;
       swayBlend += (targetBlend - swayBlend) * 0.06;
@@ -648,13 +743,13 @@
         const azOff = SWAY_H_AMP * Math.sin(2 * Math.PI * t / SWAY_PERIOD) * swayBlend;
         _swayOffset.subVectors(_swayBase, controls.target);
         _swayOffset.applyAxisAngle(_swayY, azOff);
-        camera.position.copy(controls.target).add(_swayOffset);
-        camera.lookAt(controls.target);
+        activeCamera.position.copy(controls.target).add(_swayOffset);
+        activeCamera.lookAt(controls.target);
       }
 
       updateDropLine(liveDropLine, liveGroup);
       updateDropLine(ghostDropLine, ghostGroup);
-      renderer.render(scene, camera);
+      renderer.render(scene, activeCamera);
     }
 
     window.addEventListener("resize", resize);
