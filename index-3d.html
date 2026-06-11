@@ -255,6 +255,7 @@
       </div>
       <div class="buttons">
         <button id="calibrate">Calibrate</button>
+        <button id="set-viewpoint" style="display:none">Set Viewpoint</button>
         <button id="new-target">New Target</button>
         <button id="reset">Reset</button>
         <button id="zaline-toggle">Z-align: <span class="ind on">ON</span></button>
@@ -611,6 +612,8 @@
         if (data.reference_frame && data.reference_frame !== referenceFrame) {
           referenceFrame = data.reference_frame;
           frameNeedsInit = true;
+          document.getElementById("set-viewpoint").style.display =
+            (referenceFrame === 'user' || referenceFrame === 'patient') ? '' : 'none';
         }
 
         // Detect calibration / reset transitions for locked frames.
@@ -618,11 +621,28 @@
         const justReset      = !data.comp_calibrated  &&  prevCalibrated;
         prevCalibrated = !!data.comp_calibrated;
         if (justCalibrated && (referenceFrame === 'user' || referenceFrame === 'patient')) {
-          initLockedFrame();
+          if (rawViewpointRows) {
+            // Re-apply viewpoint against the new calibration origin.
+            applyLockedViewpoint(data.reference_pose);
+          } else {
+            initLockedFrame();
+          }
           frameNeedsInit = false;
         }
         if (justReset) {
           frameNeedsInit = true; // re-lock next calibration
+        }
+
+        // Detect viewpoint_pose changes: null→set, re-set, or set→null (on reset).
+        const curViewpointJson = data.viewpoint_pose ? JSON.stringify(data.viewpoint_pose) : null;
+        if (curViewpointJson !== prevViewpointPoseJson) {
+          prevViewpointPoseJson = curViewpointJson;
+          if (data.viewpoint_pose && (referenceFrame === 'user' || referenceFrame === 'patient')) {
+            rawViewpointRows = data.viewpoint_pose;
+            applyLockedViewpoint(data.reference_pose);
+          } else if (!data.viewpoint_pose) {
+            rawViewpointRows = null;
+          }
         }
 
         const isTracker = data.source_mode === "tracker";
@@ -697,6 +717,9 @@
     });
 
     document.getElementById("calibrate").addEventListener("click", () => send({ cmd: "calibrate" }));
+    document.getElementById("set-viewpoint").addEventListener("click", () => {
+      if (referenceFrame === 'user' || referenceFrame === 'patient') send({ cmd: "set_viewpoint" });
+    });
     document.getElementById("new-target").addEventListener("click", () => send({ cmd: "new_target" }));
     document.getElementById("reset").addEventListener("click", () => send({ cmd: "reset" }));
 
@@ -921,6 +944,8 @@
     let referenceFrame = null;
     let frameNeedsInit = true;   // cleared after first camera placement
     let prevCalibrated = false;  // edge-detect comp_calibrated transitions
+    let rawViewpointRows = null;      // rows of last captured viewpoint_pose (null until set_viewpoint)
+    let prevViewpointPoseJson = null; // JSON string for change detection
 
     // Scratch vectors reused every frame to avoid GC pressure.
     const _probePos = new THREE.Vector3();
@@ -941,6 +966,26 @@
       _swayBase.copy(calibPos);
       controls.update();
     }
+    // Lock the camera to a captured probe pose in display space.
+    // displayMat = DISPLAY_FRAME_MATRIX × (refPose⁻¹ × viewpointPose).
+    // Camera sits at that position, looking along col-0 (probe forward).
+    function applyLockedViewpoint(refRows) {
+      if (!rawViewpointRows) return;
+      const viewpointMat = matrixFromRows(rawViewpointRows);
+      const refMat = matrixFromRows(refRows);
+      if (!viewpointMat || !refMat) return;
+      const displayMat = DISPLAY_FRAME_MATRIX.clone()
+        .multiply(refMat.clone().invert().multiply(viewpointMat));
+      const camPos = new THREE.Vector3().setFromMatrixPosition(displayMat);
+      const fwdDir = new THREE.Vector3().setFromMatrixColumn(displayMat, 0).normalize();
+      const lookTarget = camPos.clone().addScaledVector(fwdDir, 0.5);
+      activeCamera.position.copy(camPos);
+      activeCamera.up.set(0, 1, 0);
+      controls.target.copy(lookTarget);
+      _swayBase.copy(camPos);
+      controls.update();
+    }
+
     // ±0.5 deg azimuth, 5 s period — barely-perceptible breathing motion
     const SWAY_H_AMP = 0.5 * (Math.PI / 180);
     const SWAY_PERIOD = 5.0;

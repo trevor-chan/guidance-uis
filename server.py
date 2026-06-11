@@ -84,20 +84,21 @@ class FakePoseFetcher(LivePoseFetcher):
 
 # ── Competition mode ───────────────────────────────────────────────────────────
 
-async def _competition_handler(websocket, fetcher, modality="1d"):
+async def _competition_handler(websocket, fetcher, modality="1d", frame="transducer"):
     trial = Trial(fetcher, linear_tol=LINEAR_TOL)
     trial.start()
     print(f"Client connected ({type(fetcher).__name__}) — competition/{modality} mode.")
 
     # Competition state — all mutable via commands received in recv_loop
     comp = {
-        "calibrated": False,
-        "active":     False,
-        "game_over":  False,
-        "origin":     None,   # 4x4 ndarray: calibration pose
-        "hit_count":  0,
-        "hold_start": None,   # time.monotonic() when current continuous match began
-        "start_time": None,   # time.monotonic() at calibration
+        "calibrated":    False,
+        "active":        False,
+        "game_over":     False,
+        "origin":        None,   # 4x4 ndarray: calibration pose
+        "viewpoint_pose": None,  # 4x4 ndarray: locked camera pose (user/patient only)
+        "hit_count":     0,
+        "hold_start":    None,   # time.monotonic() when current continuous match began
+        "start_time":    None,   # time.monotonic() at calibration
     }
 
     def _calibrate(live_pose: np.ndarray) -> None:
@@ -118,14 +119,15 @@ async def _competition_handler(websocket, fetcher, modality="1d"):
             trial.start()
 
     def _reset() -> None:
-        comp["calibrated"] = False
-        comp["active"]     = False
-        comp["game_over"]  = False
-        comp["origin"]     = None
-        comp["hit_count"]  = 0
-        comp["hold_start"] = None
-        comp["start_time"] = None
-        trial.target_pose  = TARGET_POSE
+        comp["calibrated"]    = False
+        comp["active"]        = False
+        comp["game_over"]     = False
+        comp["origin"]        = None
+        comp["viewpoint_pose"] = None
+        comp["hit_count"]     = 0
+        comp["hold_start"]    = None
+        comp["start_time"]    = None
+        trial.target_pose     = TARGET_POSE
         trial.start()
 
     # For 3D: track the first valid pose as pre-calibration scene reference.
@@ -201,6 +203,11 @@ async def _competition_handler(websocket, fetcher, modality="1d"):
                 state["stream_rate"]         = round(1 / STEP_INTERVAL)
                 state["tracker_visible"]     = state["linear"] is not None
                 state["cube_size"]           = CUBE_SIZE
+                state["reference_frame"]     = frame
+                state["viewpoint_pose"]      = (
+                    comp["viewpoint_pose"].tolist()
+                    if comp["viewpoint_pose"] is not None else None
+                )
 
             await websocket.send(json.dumps(state))
             await asyncio.sleep(STEP_INTERVAL)
@@ -219,6 +226,12 @@ async def _competition_handler(websocket, fetcher, modality="1d"):
                     live_pose = fetcher.get_pose()
                     if live_pose is not None:
                         _calibrate(live_pose)
+                    else:
+                        await websocket.send(json.dumps({"error": "tracker_not_visible"}))
+                elif cmd == "set_viewpoint":
+                    live_pose = fetcher.get_pose()
+                    if live_pose is not None:
+                        comp["viewpoint_pose"] = live_pose.copy()
                     else:
                         await websocket.send(json.dumps({"error": "tracker_not_visible"}))
                 elif cmd == "new_target":
@@ -361,7 +374,7 @@ async def _study_handler(websocket, fetcher, runner):
 
 # ── Transport layer ────────────────────────────────────────────────────────────
 
-async def handler(websocket, fetcher_cls, mode, modality):
+async def handler(websocket, fetcher_cls, mode, modality, frame="transducer"):
     if mode == "study" and modality == "3d":
         print("Rejected connection: --study --modality 3d is not yet implemented.")
         await websocket.close(1011, "--study --modality 3d is not yet implemented")
@@ -377,7 +390,7 @@ async def handler(websocket, fetcher_cls, mode, modality):
             await websocket.close(1011, "tracker unavailable")
             return
         try:
-            await _competition_handler(websocket, fetcher, modality)
+            await _competition_handler(websocket, fetcher, modality, frame)
         finally:
             fetcher.disconnect()
             print("Client disconnected.")
@@ -397,9 +410,9 @@ async def handler(websocket, fetcher_cls, mode, modality):
             print("Client disconnected.")
 
 
-async def main(fetcher_cls, mode, modality):
+async def main(fetcher_cls, mode, modality, frame="transducer"):
     async def _handler(websocket):
-        await handler(websocket, fetcher_cls, mode, modality)
+        await handler(websocket, fetcher_cls, mode, modality, frame)
 
     root = Path(__file__).resolve().parent
     request_handler = partial(SimpleHTTPRequestHandler, directory=str(root))
@@ -430,6 +443,9 @@ if __name__ == "__main__":
                    help="Rendering modality: 1d (bar-graph, default) or 3d (Three.js)")
     p.add_argument("--fake", action="store_true",
                    help="Use FakePoseFetcher instead of TrackerPoseFetcher (no SteamVR needed)")
+    p.add_argument("--frame", choices=["user", "patient", "transducer"], default="transducer",
+                   help="3D camera reference frame (competition --modality 3d only): "
+                        "transducer=camera rides probe, user/patient=locked at calib pose")
     args = p.parse_args()
 
     mode        = "study" if args.study else "competition"
@@ -439,4 +455,4 @@ if __name__ == "__main__":
     if mode == "study" and modality == "3d":
         p.error("--study --modality 3d is not yet implemented")
 
-    asyncio.run(main(fetcher_cls, mode, modality))
+    asyncio.run(main(fetcher_cls, mode, modality, args.frame))
