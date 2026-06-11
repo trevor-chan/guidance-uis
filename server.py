@@ -199,7 +199,7 @@ async def _competition_handler(websocket, fetcher, modality="1d"):
                 state["source_mode"]         = fetcher.source_mode
                 state["source_label"]        = fetcher.source_label
                 state["stream_rate"]         = round(1 / STEP_INTERVAL)
-                state["tracker_visible"]     = live_pose_arr is not None
+                state["tracker_visible"]     = state["linear"] is not None
                 state["cube_size"]           = CUBE_SIZE
 
             await websocket.send(json.dumps(state))
