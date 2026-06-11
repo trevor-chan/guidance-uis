@@ -221,12 +221,12 @@
 
     <section class="card controls">
       <div class="key-grid">
-        <span><kbd>D</kbd>/<kbd>A</kbd> X +/-</span>
-        <span><kbd>W</kbd>/<kbd>S</kbd> Y +/-</span>
-        <span><kbd>Q</kbd>/<kbd>E</kbd> Z +/-</span>
-        <span><kbd>U</kbd>/<kbd>O</kbd> Roll +/-</span>
-        <span><kbd>I</kbd>/<kbd>K</kbd> Pitch +/-</span>
-        <span><kbd>J</kbd>/<kbd>L</kbd> Yaw +/-</span>
+        <span><kbd>1</kbd>/<kbd>Q</kbd> X +/-</span>
+        <span><kbd>2</kbd>/<kbd>W</kbd> Y +/-</span>
+        <span><kbd>3</kbd>/<kbd>E</kbd> Z +/-</span>
+        <span><kbd>4</kbd>/<kbd>R</kbd> Roll +/-</span>
+        <span><kbd>5</kbd>/<kbd>T</kbd> Pitch +/-</span>
+        <span><kbd>6</kbd>/<kbd>Y</kbd> Yaw +/-</span>
       </div>
       <div class="tracker-help" id="tracker-help">
         Move the physical SteamVR tracker. Its live pose is rendered at the incoming tracking rate.
@@ -252,7 +252,7 @@
     const MODEL_Z_ROTATION = -Math.PI / 2; // Visual alignment only.
     const DISPLAY_FRAME_X_ROTATION = -Math.PI / 2; // Local Z is visually vertical.
     const DISPLAY_FRAME_Z_ROTATION = Math.PI / 2; // Local X forward, local Y left.
-    const TRIGGER_KEYS = new Set("adwsqeuokijl".split(""));
+    const TRIGGER_KEYS = new Set("123456qwerty".split(""));
 
     const sceneHost = document.getElementById("scene");
     const modelStatus = document.getElementById("model-status");

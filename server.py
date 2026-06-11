@@ -184,9 +184,13 @@ async def _competition_handler(websocket, fetcher, modality="1d"):
             state["mode"]                = "competition"
 
             if modality == "3d":
-                # Update scene_origin from first valid live pose (pre-calibration ref).
-                if scene_origin is None and state.get("live_pose") is not None:
-                    scene_origin = np.array(state["live_pose"], dtype=float)
+                # trial.step() does not include live_pose; fetch it directly so
+                # the 3D renderer has the matrix and tracker_visible is correct.
+                live_pose_arr = fetcher.get_pose()
+                if live_pose_arr is not None:
+                    state["live_pose"] = live_pose_arr.tolist()
+                if scene_origin is None and live_pose_arr is not None:
+                    scene_origin = live_pose_arr
                 reference_pose = comp["origin"] if comp["origin"] is not None else scene_origin
                 state["target_pose"]         = trial.target_pose.tolist()
                 state["reference_pose"]      = (
@@ -195,7 +199,7 @@ async def _competition_handler(websocket, fetcher, modality="1d"):
                 state["source_mode"]         = fetcher.source_mode
                 state["source_label"]        = fetcher.source_label
                 state["stream_rate"]         = round(1 / STEP_INTERVAL)
-                state["tracker_visible"]     = state.get("live_pose") is not None
+                state["tracker_visible"]     = live_pose_arr is not None
                 state["cube_size"]           = CUBE_SIZE
 
             await websocket.send(json.dumps(state))
