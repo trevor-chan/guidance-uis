@@ -31,8 +31,9 @@ def _random_target_pose(origin: np.ndarray) -> np.ndarray:
     """Random target within a 0.5 m cube centred on the calibration origin.
 
     Each axis offset is ±0.25 m (local X/Y/Z), so the calibration pose is the
-    centroid and targets spread in all directions equally.  Orientation is
-    randomised up to 30° off the calibration orientation on a randomly chosen axis.
+    centroid and targets spread in all directions equally.  Orientation is a
+    uniform random rotation from SO(3) (Haar measure via QR decomposition)
+    composed with the calibration orientation.
     """
     half = CUBE_SIZE / 2
     local_pos = np.array([
@@ -41,8 +42,11 @@ def _random_target_pose(origin: np.ndarray) -> np.ndarray:
         random.uniform(-half, half),   # fore / aft    (local Z)
     ])
     world_pos = origin[:3, 3] + origin[:3, :3] @ local_pos
+    q, r = np.linalg.qr(np.random.randn(3, 3))
+    q *= np.sign(np.diag(r))
+    if np.linalg.det(q) < 0:
+        q[:, 0] *= -1
     target = np.eye(4, dtype=float)
-    angle = random.uniform(-math.radians(30), math.radians(30))
-    target[:3, :3] = random.choice(_ROT_FNS)(angle) @ origin[:3, :3]
+    target[:3, :3] = q @ origin[:3, :3]
     target[:3, 3]  = world_pos
     return target
