@@ -1,0 +1,500 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>2D Pose Guidance</title>
+  <style>
+    :root {
+      --bg: #111;
+      --surface: #1e1e1e;
+      --text: #ddd;
+      --dim: #777;
+      --current: #dc2626;
+      --target: #111;
+      --success: #4ade80;
+    }
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      min-height: 100vh;
+      padding: 24px;
+      background: var(--bg);
+      color: var(--text);
+      font-family: "Courier New", monospace;
+    }
+    main {
+      width: min(1050px, 100%);
+      margin: 0 auto;
+      display: grid;
+      gap: 16px;
+    }
+    h1 {
+      color: var(--dim);
+      font-size: 1rem;
+      letter-spacing: 0.15em;
+      text-align: center;
+    }
+    .card {
+      padding: 18px 22px;
+      background: var(--surface);
+      border-radius: 8px;
+    }
+    .scoreboard {
+      display: grid;
+      grid-template-columns: repeat(4, 1fr);
+      align-items: center;
+      gap: 18px;
+    }
+    .stat { text-align: center; }
+    .label {
+      color: var(--dim);
+      font-size: 0.72rem;
+      letter-spacing: 0.1em;
+      text-transform: uppercase;
+    }
+    .big {
+      margin-top: 4px;
+      font-size: 1.8rem;
+      font-weight: bold;
+    }
+    #time-value { color: #facc15; }
+    #score-value, #aligned-value { color: var(--success); }
+    .badge {
+      display: inline-block;
+      padding: 5px 12px;
+      border-radius: 4px;
+      background: #2a2a2a;
+      color: var(--dim);
+      font-size: 0.78rem;
+      font-weight: bold;
+      letter-spacing: 0.08em;
+    }
+    .badge-active { background: #14532d; color: var(--success); }
+    .badge-over { background: #450a0a; color: #f87171; }
+    .reticle-card { padding: 16px; }
+    .reticle-header {
+      display: flex;
+      justify-content: space-between;
+      gap: 16px;
+      margin-bottom: 12px;
+      color: var(--dim);
+      font-size: 0.72rem;
+      letter-spacing: 0.06em;
+    }
+    .legend { display: flex; gap: 16px; flex-wrap: wrap; }
+    .legend span::before {
+      display: inline-block;
+      width: 10px;
+      height: 10px;
+      margin-right: 6px;
+      border-radius: 50%;
+      content: "";
+    }
+    .legend-current::before { background: var(--current); }
+    .legend-target::before { background: #111; border: 1px solid #888; }
+    #source-status.ok { color: var(--success); }
+    #source-status.error { color: #f87171; }
+    .reticle-shell {
+      position: relative;
+      overflow: hidden;
+      border-radius: 6px;
+      background: #f8fafc;
+    }
+    #hold-progress {
+      position: absolute;
+      top: 0;
+      left: 0;
+      z-index: 2;
+      width: 0;
+      height: 6px;
+      background: var(--success);
+      transition: width 40ms linear;
+    }
+    #reticle {
+      display: block;
+      width: 100%;
+      height: auto;
+      aspect-ratio: 760 / 520;
+    }
+    .target-line {
+      fill: none;
+      stroke: var(--target);
+      stroke-linecap: round;
+      stroke-width: 4;
+    }
+    .current-line {
+      fill: none;
+      stroke: var(--current);
+      stroke-linecap: round;
+      stroke-width: 4;
+    }
+    .depth-axis {
+      stroke: #2563a6;
+      stroke-width: 5;
+      stroke-linecap: round;
+    }
+    .axis-label {
+      fill: #475569;
+      font: bold 16px "Courier New", monospace;
+    }
+    .axis-stats {
+      display: grid;
+      grid-template-columns: repeat(6, 1fr);
+      gap: 8px;
+      margin-top: 12px;
+    }
+    .axis-stat {
+      padding: 8px 6px;
+      border: 1px solid #333;
+      border-radius: 5px;
+      color: #f87171;
+      font-size: 0.7rem;
+      line-height: 1.5;
+      text-align: center;
+    }
+    .axis-stat.aligned {
+      border-color: #166534;
+      color: var(--success);
+    }
+    .controls {
+      display: grid;
+      grid-template-columns: 1fr auto;
+      align-items: center;
+      gap: 20px;
+    }
+    .key-grid {
+      display: grid;
+      grid-template-columns: repeat(3, max-content);
+      gap: 7px 18px;
+      color: var(--dim);
+      font-size: 0.72rem;
+    }
+    .tracker-help {
+      display: none;
+      color: var(--dim);
+      font-size: 0.75rem;
+    }
+    kbd {
+      display: inline-block;
+      min-width: 20px;
+      margin-right: 3px;
+      padding: 2px 5px;
+      border: 1px solid #555;
+      border-radius: 3px;
+      background: #292929;
+      color: var(--text);
+      text-align: center;
+    }
+    .buttons { display: flex; gap: 8px; }
+    button {
+      padding: 9px 14px;
+      border: 1px solid #444;
+      border-radius: 5px;
+      background: #2a2a2a;
+      color: var(--text);
+      font: 0.75rem "Courier New", monospace;
+      letter-spacing: 0.06em;
+      text-transform: uppercase;
+      cursor: pointer;
+    }
+    button:hover { background: #383838; }
+    #connection {
+      color: var(--dim);
+      font-size: 0.7rem;
+      text-align: center;
+    }
+    #connection.ok { color: var(--success); }
+    #connection.error { color: #f87171; }
+    @media (max-width: 760px) {
+      body { padding: 12px; }
+      .scoreboard { grid-template-columns: repeat(2, 1fr); }
+      .axis-stats { grid-template-columns: repeat(3, 1fr); }
+      .controls { grid-template-columns: 1fr; }
+      .buttons { flex-wrap: wrap; }
+    }
+  </style>
+</head>
+<body>
+  <main>
+    <h1>2D POSE GUIDANCE</h1>
+
+    <section class="card scoreboard">
+      <div class="stat">
+        <div class="label">Time</div>
+        <div class="big" id="time-value">3:00</div>
+      </div>
+      <div class="stat">
+        <div class="label">Score</div>
+        <div class="big" id="score-value">0</div>
+      </div>
+      <div class="stat">
+        <div class="label">Aligned</div>
+        <div class="big" id="aligned-value">0/6</div>
+      </div>
+      <div class="stat">
+        <span class="badge" id="competition-state">UNCALIBRATED</span>
+      </div>
+    </section>
+
+    <section class="card reticle-card">
+      <div class="reticle-header">
+        <div class="legend">
+          <span class="legend-current">CURRENT</span>
+          <span class="legend-target">TARGET</span>
+        </div>
+        <div id="source-status">waiting for pose source...</div>
+      </div>
+
+      <div class="reticle-shell">
+        <div id="hold-progress"></div>
+        <svg id="reticle" viewBox="0 0 760 520" role="img"
+             aria-label="Six degree of freedom pose alignment reticle">
+          <rect x="4" y="4" width="752" height="512" rx="4"
+                fill="#f8fafc" stroke="#111" stroke-width="8"/>
+
+          <!-- Black target pose -->
+          <g id="target-cross">
+            <line class="target-line" x1="-150" y1="0" x2="150" y2="0"/>
+            <line class="target-line" id="target-cross-tick" x1="0" y1="0" x2="0" y2="40"/>
+          </g>
+          <g id="target-orientation">
+            <circle class="target-line" id="target-orientation-circle"
+                    cx="355" cy="260" r="25"/>
+          </g>
+
+          <!-- Red current translation and roll -->
+          <g id="current-cross">
+            <line class="current-line" x1="-150" y1="0" x2="150" y2="0"/>
+            <line class="current-line" id="current-cross-tick" x1="0" y1="0" x2="0" y2="40"/>
+          </g>
+
+          <!-- Red pitch/yaw orientation marker -->
+          <g id="current-orientation">
+            <circle class="current-line" id="orientation-circle"
+                    cx="355" cy="260" r="25"/>
+          </g>
+
+          <!-- Z translation depth ruler -->
+          <line class="depth-axis" x1="685" y1="65" x2="685" y2="455"/>
+          <line class="target-line" id="target-depth"
+                x1="671" y1="260" x2="699" y2="260"/>
+          <line class="current-line" id="current-depth"
+                x1="671" y1="260" x2="699" y2="260"/>
+          <text class="axis-label" x="704" y="266">X</text>
+          <text class="axis-label" x="342" y="500">Y / Z RETICLE</text>
+        </svg>
+      </div>
+
+      <div class="axis-stats">
+        <div class="axis-stat" id="axis-x"><strong>X</strong><br><span>--</span></div>
+        <div class="axis-stat" id="axis-y"><strong>Y</strong><br><span>--</span></div>
+        <div class="axis-stat" id="axis-z"><strong>Z</strong><br><span>--</span></div>
+        <div class="axis-stat" id="axis-roll"><strong>ROLL</strong><br><span>--</span></div>
+        <div class="axis-stat" id="axis-pitch"><strong>PITCH</strong><br><span>--</span></div>
+        <div class="axis-stat" id="axis-yaw"><strong>YAW</strong><br><span>--</span></div>
+      </div>
+    </section>
+
+    <section class="card controls">
+      <div class="key-grid">
+        <span><kbd>1</kbd>/<kbd>Q</kbd> X +/-</span>
+        <span><kbd>2</kbd>/<kbd>W</kbd> Y +/-</span>
+        <span><kbd>3</kbd>/<kbd>E</kbd> Z +/-</span>
+        <span><kbd>4</kbd>/<kbd>R</kbd> Roll +/-</span>
+        <span><kbd>5</kbd>/<kbd>T</kbd> Pitch +/-</span>
+        <span><kbd>6</kbd>/<kbd>Y</kbd> Yaw +/-</span>
+      </div>
+      <div class="tracker-help" id="tracker-help">
+        Move the physical tracker to align the red current reticle with black.
+      </div>
+      <div class="buttons">
+        <button id="calibrate">Calibrate</button>
+        <button id="new-target">New Target</button>
+        <button id="reset">Reset</button>
+      </div>
+    </section>
+
+    <div id="connection">connecting...</div>
+  </main>
+
+  <script>
+    const WS_URL = "ws://localhost:8765";
+    const TRIGGER_KEYS = new Set("123456qwerty".split(""));
+    const AXES = ["x", "y", "z", "roll", "pitch", "yaw"];
+    const CENTER_X = 355;
+    const CENTER_Y = 260;
+    const TRANSLATION_RANGE_M = 0.25;
+
+    const currentCross = document.getElementById("current-cross");
+    const targetCross = document.getElementById("target-cross");
+    const currentDepth = document.getElementById("current-depth");
+    const targetDepth = document.getElementById("target-depth");
+    const currentCrossTick = document.getElementById("current-cross-tick");
+    const orientationCircle = document.getElementById("orientation-circle");
+    const targetCrossTick = document.getElementById("target-cross-tick");
+    const targetOrientationCircle = document.getElementById("target-orientation-circle");
+    const alignedValue = document.getElementById("aligned-value");
+    const sourceStatus = document.getElementById("source-status");
+    const connection = document.getElementById("connection");
+    const competitionState = document.getElementById("competition-state");
+    const timeValue = document.getElementById("time-value");
+    const scoreValue = document.getElementById("score-value");
+    const holdProgress = document.getElementById("hold-progress");
+    const keyGrid = document.querySelector(".key-grid");
+    const trackerHelp = document.getElementById("tracker-help");
+
+    function clamp(value, min, max) {
+      return Math.min(max, Math.max(min, value));
+    }
+
+    function scaled(value, range, pixels) {
+      return clamp(value / range, -1, 1) * pixels;
+    }
+
+    function fmtTime(seconds) {
+      const safe = Math.max(0, seconds ?? 180);
+      const minutes = Math.floor(safe / 60);
+      const secs = Math.floor(safe % 60);
+      return `${minutes}:${String(secs).padStart(2, "0")}`;
+    }
+
+    function setPoseVisual(elements, pose) {
+      const screenX = scaled(pose.y, TRANSLATION_RANGE_M, 145);
+      const screenY = -scaled(pose.z, TRANSLATION_RANGE_M, 145);
+      const centerX = CENTER_X + screenX;
+      const centerY = CENTER_Y + screenY;
+
+      elements.cross.setAttribute(
+        "transform",
+        `translate(${centerX} ${centerY}) rotate(${pose.roll + 180})`
+      );
+
+      const depthY = CENTER_Y - scaled(pose.x, TRANSLATION_RANGE_M, 185);
+      elements.depth.setAttribute("y1", depthY);
+      elements.depth.setAttribute("y2", depthY);
+
+      const yawX = scaled(pose.yaw, 180, 85);
+      const pitchY = -scaled(pose.pitch, 180, 85);
+      const markerX = centerX + yawX;
+      const markerY = centerY + pitchY;
+      elements.circle.setAttribute("cx", markerX);
+      elements.circle.setAttribute("cy", markerY);
+    }
+
+    function updateReticle(components, aligned, livePose, targetPose) {
+      if (!components || !livePose || !targetPose) {
+        alignedValue.textContent = "0/6";
+        return;
+      }
+
+      setPoseVisual({
+        cross: targetCross,
+        depth: targetDepth,
+        tick: targetCrossTick,
+        circle: targetOrientationCircle,
+      }, targetPose);
+      setPoseVisual({
+        cross: currentCross,
+        depth: currentDepth,
+        tick: currentCrossTick,
+        circle: orientationCircle,
+      }, livePose);
+
+      let alignedCount = 0;
+      for (const name of AXES) {
+        const isAligned = Boolean(aligned?.[name]);
+        alignedCount += isAligned ? 1 : 0;
+        const element = document.getElementById(`axis-${name}`);
+        element.className = `axis-stat${isAligned ? " aligned" : ""}`;
+        const units = ["x", "y", "z"].includes(name) ? "cm" : "deg";
+        const value = ["x", "y", "z"].includes(name)
+          ? components[name] * 100
+          : components[name];
+        element.querySelector("span").textContent = `${value.toFixed(1)} ${units}`;
+      }
+      alignedValue.textContent = `${alignedCount}/6`;
+    }
+
+    let socket;
+
+    function send(message) {
+      if (socket?.readyState === WebSocket.OPEN) {
+        socket.send(JSON.stringify(message));
+      }
+    }
+
+    function connect() {
+      socket = new WebSocket(WS_URL);
+
+      socket.onopen = () => {
+        connection.textContent = "connected";
+        connection.className = "ok";
+      };
+
+      socket.onmessage = event => {
+        const data = JSON.parse(event.data);
+        if (data.error) {
+          connection.textContent = data.error.replaceAll("_", " ");
+          connection.className = "error";
+          return;
+        }
+
+        const isTracker = data.source_mode === "tracker";
+        sourceStatus.textContent = isTracker
+          ? `LIVE TRACKER | ${data.source_label} | ${data.stream_rate} Hz`
+          : `FAKE KEYBOARD | ${data.stream_rate} Hz`;
+        sourceStatus.className = data.tracker_visible ? "ok" : "error";
+        keyGrid.style.display = isTracker ? "none" : "grid";
+        trackerHelp.style.display = isTracker ? "block" : "none";
+
+        updateReticle(
+          data.workspace_component_errors,
+          data.workspace_component_aligned,
+          data.live_workspace_components,
+          data.target_workspace_components
+        );
+        holdProgress.style.width = `${(data.hold_progress ?? 0) * 100}%`;
+        scoreValue.textContent = data.comp_hits ?? 0;
+
+        if (data.comp_game_over) {
+          timeValue.textContent = "0:00";
+          competitionState.textContent = "GAME OVER";
+          competitionState.className = "badge badge-over";
+        } else if (data.comp_active) {
+          timeValue.textContent = fmtTime(data.comp_time_remaining);
+          competitionState.textContent = data.matched ? "MATCHED" : "ACTIVE";
+          competitionState.className = "badge badge-active";
+        } else {
+          timeValue.textContent = "3:00";
+          competitionState.textContent = "UNCALIBRATED";
+          competitionState.className = "badge";
+        }
+      };
+
+      socket.onclose = () => {
+        connection.textContent = "disconnected";
+        connection.className = "error";
+      };
+
+      socket.onerror = () => {
+        connection.textContent = "connection error";
+        connection.className = "error";
+      };
+    }
+
+    document.addEventListener("keydown", event => {
+      const key = event.key.toLowerCase();
+      if (TRIGGER_KEYS.has(key)) {
+        event.preventDefault();
+        send({ key });
+      }
+    });
+
+    document.getElementById("calibrate").addEventListener("click", () => send({ cmd: "calibrate" }));
+    document.getElementById("new-target").addEventListener("click", () => send({ cmd: "new_target" }));
+    document.getElementById("reset").addEventListener("click", () => send({ cmd: "reset" }));
+
+    connect();
+  </script>
+</body>
+</html>
