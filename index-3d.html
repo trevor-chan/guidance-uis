@@ -149,7 +149,10 @@
       color: var(--text);
       text-align: center;
     }
-    .buttons { display: flex; gap: 8px; }
+    .buttons { display: flex; gap: 8px; flex-wrap: wrap; }
+    .ind { font-weight: bold; }
+    .ind.on  { color: #4ade80; }
+    .ind.off { color: #f87171; }
     button {
       padding: 9px 14px;
       border: 1px solid #444;
@@ -176,6 +179,24 @@
       .controls { grid-template-columns: 1fr; }
       .buttons { flex-wrap: wrap; }
       #scene { min-height: 420px; }
+    }
+    #hold-bar-outer {
+      position: absolute;
+      right: 0;
+      top: 0;
+      bottom: 0;
+      width: 10px;
+      background: #1a1a1a;
+      pointer-events: none;
+      z-index: 2;
+    }
+    #hold-bar-fill {
+      position: absolute;
+      bottom: 0;
+      left: 0;
+      width: 100%;
+      height: 0%;
+      background: var(--success);
     }
   </style>
   <script type="importmap">
@@ -216,25 +237,34 @@
           <div id="model-status">loading transducer.obj...</div>
           <div id="pose-readout">50 x 50 x 50 cm workspace</div>
         </div>
+        <div id="hold-bar-outer"><div id="hold-bar-fill"></div></div>
       </div>
     </section>
 
     <section class="card controls">
       <div class="key-grid">
-        <span><kbd>D</kbd>/<kbd>A</kbd> X +/-</span>
-        <span><kbd>W</kbd>/<kbd>S</kbd> Y +/-</span>
-        <span><kbd>Q</kbd>/<kbd>E</kbd> Z +/-</span>
-        <span><kbd>U</kbd>/<kbd>O</kbd> Roll +/-</span>
-        <span><kbd>I</kbd>/<kbd>K</kbd> Pitch +/-</span>
-        <span><kbd>J</kbd>/<kbd>L</kbd> Yaw +/-</span>
+        <span><kbd>1</kbd>/<kbd>Q</kbd> X +/-</span>
+        <span><kbd>2</kbd>/<kbd>W</kbd> Y +/-</span>
+        <span><kbd>3</kbd>/<kbd>E</kbd> Z +/-</span>
+        <span><kbd>4</kbd>/<kbd>R</kbd> Roll +/-</span>
+        <span><kbd>5</kbd>/<kbd>T</kbd> Pitch +/-</span>
+        <span><kbd>6</kbd>/<kbd>Y</kbd> Yaw +/-</span>
       </div>
       <div class="tracker-help" id="tracker-help">
         Move the physical SteamVR tracker. Its live pose is rendered at the incoming tracking rate.
       </div>
       <div class="buttons">
         <button id="calibrate">Calibrate</button>
+        <button id="set-viewpoint" style="display:none">Set Viewpoint</button>
         <button id="new-target">New Target</button>
         <button id="reset">Reset</button>
+        <button id="zaline-toggle">Z-align: <span class="ind on">ON</span></button>
+        <button id="sway-toggle">Sway: <span class="ind off">OFF</span></button>
+        <button id="shadow-toggle">Shadow: <span class="ind on">ON</span></button>
+        <button id="mesh-toggle">Mesh: <span class="ind on">ON</span></button>
+        <button id="axes-toggle">Basis vectors: <span class="ind on">ON</span></button>
+        <button id="disp-toggle">Displacement vectors: <span class="ind on">ON</span></button>
+        <button id="proj-toggle">PERSP</button>
       </div>
     </section>
 
@@ -252,7 +282,7 @@
     const MODEL_Z_ROTATION = -Math.PI / 2; // Visual alignment only.
     const DISPLAY_FRAME_X_ROTATION = -Math.PI / 2; // Local Z is visually vertical.
     const DISPLAY_FRAME_Z_ROTATION = Math.PI / 2; // Local X forward, local Y left.
-    const TRIGGER_KEYS = new Set("adwsqeuokijl".split(""));
+    const TRIGGER_KEYS = new Set("123456qwerty".split(""));
 
     const sceneHost = document.getElementById("scene");
     const modelStatus = document.getElementById("model-status");
@@ -264,6 +294,8 @@
     const scoreValue = document.getElementById("score-value");
     const keyGrid = document.querySelector(".key-grid");
     const trackerHelp = document.getElementById("tracker-help");
+    const holdBarFill = document.getElementById("hold-bar-fill");
+    const swayBtn = document.getElementById("sway-toggle");
 
     const scene = new THREE.Scene();
     scene.background = new THREE.Color(0x151515);
@@ -275,6 +307,8 @@
     const renderer = new THREE.WebGLRenderer({ antialias: true });
     renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
     renderer.outputColorSpace = THREE.SRGBColorSpace;
+    renderer.shadowMap.enabled = true;
+    renderer.shadowMap.type = THREE.PCFSoftShadowMap;
     sceneHost.prepend(renderer.domElement);
 
     const controls = new OrbitControls(camera, renderer.domElement);
@@ -282,9 +316,27 @@
     controls.target.set(0, 0, 0);
     controls.update();
 
-    scene.add(new THREE.HemisphereLight(0xffffff, 0x202028, 2.2));
+    const ORTHO_H = 0.42;
+    const orthoCamera = new THREE.OrthographicCamera(
+      -ORTHO_H, ORTHO_H, ORTHO_H, -ORTHO_H, 0.01, 10
+    );
+    orthoCamera.position.copy(camera.position);
+    orthoCamera.up.copy(camera.up);
+    orthoCamera.lookAt(controls.target);
+    let activeCamera = camera;
+
+    scene.add(new THREE.HemisphereLight(0xffffff, 0x202028, 1.4));
     const keyLight = new THREE.DirectionalLight(0xffffff, 2.5);
     keyLight.position.set(0.5, 0.8, 0.6);
+    keyLight.castShadow = true;
+    keyLight.shadow.mapSize.width = 1024;
+    keyLight.shadow.mapSize.height = 1024;
+    keyLight.shadow.camera.near = 0.1;
+    keyLight.shadow.camera.far = 3;
+    keyLight.shadow.camera.left = -0.9;
+    keyLight.shadow.camera.right = 0.9;
+    keyLight.shadow.camera.top = 0.9;
+    keyLight.shadow.camera.bottom = -0.9;
     scene.add(keyLight);
 
     // Convert the calibrated frame to the visualizer frame. This is display-only:
@@ -293,7 +345,15 @@
     const displayFrame = new THREE.Group();
     displayFrame.rotation.x = DISPLAY_FRAME_X_ROTATION;
     displayFrame.rotation.z = DISPLAY_FRAME_Z_ROTATION;
-    scene.add(displayFrame);
+    // txWorldGroup wraps all "world" objects (displayFrame, ground, grid).
+    // In transducer frame its matrix is set to probe_pose⁻¹ each frame so
+    // the entire world shifts around a probe that is pinned to scene origin.
+    const txWorldGroup = new THREE.Group();
+    txWorldGroup.matrixAutoUpdate = false;
+    scene.add(txWorldGroup);
+    txWorldGroup.add(displayFrame);
+    displayFrame.updateMatrix();
+    const DISPLAY_FRAME_MATRIX = displayFrame.matrix.clone();
 
     const cubeGeometry = new THREE.BoxGeometry(0.5, 0.5, 0.5);
     const cubeEdges = new THREE.LineSegments(
@@ -304,9 +364,18 @@
 
     // GridHelper is an XZ plane in Three.js. After the display-frame rotation,
     // it represents calibrated local X/Y at the cube's local Z = -25 cm face.
-    const grid = new THREE.GridHelper(0.5, 10, 0x475569, 0x273244);
-    grid.position.y = -0.25;
-    scene.add(grid);
+    const groundGeo = new THREE.PlaneGeometry(1.2, 1.2);
+    const groundMat = new THREE.MeshStandardMaterial({ color: 0x1a2535, roughness: 1, metalness: 0 });
+    const groundPlane = new THREE.Mesh(groundGeo, groundMat);
+    groundPlane.rotation.x = -Math.PI / 2;
+    groundPlane.position.y = -0.25;
+    groundPlane.receiveShadow = true;
+    txWorldGroup.add(groundPlane);
+
+    // Grid sits 1 mm above the shadow-receiving plane so they don't z-fight.
+    const grid = new THREE.GridHelper(1.2, 24, 0x475569, 0x273244);
+    grid.position.y = -0.249;
+    txWorldGroup.add(grid);
 
     const liveGroup = new THREE.Group();
     const ghostGroup = new THREE.Group();
@@ -314,7 +383,8 @@
     ghostGroup.matrixAutoUpdate = false;
     liveGroup.visible = false;
     ghostGroup.visible = false;
-    displayFrame.add(liveGroup, ghostGroup);
+    scene.add(liveGroup);         // live probe in scene space; matrix bakes display rotation
+    displayFrame.add(ghostGroup); // ghost in displayFrame (inside txWorldGroup)
 
     function createPoseAxes(opacity) {
       const axes = new THREE.Group();
@@ -362,8 +432,70 @@
       return axes;
     }
 
-    liveGroup.add(createPoseAxes(1.0));
-    ghostGroup.add(createPoseAxes(0.65));
+    const liveAxes = createPoseAxes(1.0);
+    const ghostAxes = createPoseAxes(0.65);
+    liveGroup.add(liveAxes);
+    ghostGroup.add(ghostAxes);
+
+    // Displacement-vector arcs — orange arcs on the live model visualising
+    // the per-axis rotational error (roll/pitch/yaw) relative to the ghost.
+    const ARC_RADIUS = 0.14;  // matches basis-vector arrow length
+    const ARC_SEGS   = 48;
+    const ARC_MAT    = new THREE.LineBasicMaterial({
+      color: 0xff8c00, transparent: true, opacity: 0.9, depthTest: false
+    });
+
+    function createArc() {
+      const geo = new THREE.BufferGeometry();
+      geo.setAttribute('position',
+        new THREE.BufferAttribute(new Float32Array((ARC_SEGS + 1) * 3), 3));
+      const line = new THREE.Line(geo, ARC_MAT);
+      line.renderOrder = 10;
+      return line;
+    }
+
+    // roll  = error about live X-axis; arc starts at Z-basis tip (0,0,1)
+    // pitch = error about live Y-axis; arc starts at X-basis tip (1,0,0)
+    // yaw   = error about live Z-axis; arc starts at X-basis tip (1,0,0)
+    const rollArc  = createArc();
+    const pitchArc = createArc();
+    const yawArc   = createArc();
+    liveGroup.add(rollArc, pitchArc, yawArc);
+
+    // Arrowheads for displacement arcs — 3-D cones, same style as basis-vector heads.
+    const ARROW_HEAD_LENGTH = 0.025;
+    const ARROW_HEAD_RADIUS = 0.006;
+    const ARC_ARROW_MAT = new THREE.MeshBasicMaterial({
+      color: 0xff8c00, transparent: true, opacity: 0.9, depthTest: false
+    });
+    function createArcArrow() {
+      const cone = new THREE.Mesh(
+        new THREE.ConeGeometry(ARROW_HEAD_RADIUS, ARROW_HEAD_LENGTH, 8),
+        ARC_ARROW_MAT
+      );
+      cone.renderOrder = 10;
+      return cone;
+    }
+    const rollArrow  = createArcArrow();
+    const pitchArrow = createArcArrow();
+    const yawArrow   = createArcArrow();
+    liveGroup.add(rollArrow, pitchArrow, yawArrow);
+
+    function createDropLine(color) {
+      const geo = new THREE.BufferGeometry();
+      geo.setAttribute('position', new THREE.BufferAttribute(new Float32Array(6), 3));
+      return new THREE.Line(geo, new THREE.LineBasicMaterial({
+        color,
+        transparent: true,
+        opacity: 0.45,
+        depthTest: true
+      }));
+    }
+    const liveDropLine = createDropLine(0xffffff);
+    const ghostDropLine = createDropLine(0x7dd3fc);
+    liveDropLine.visible = false;
+    ghostDropLine.visible = false;
+    scene.add(liveDropLine, ghostDropLine);
 
     function centeredModel(object, material) {
       const bounds = new THREE.Box3().setFromObject(object);
@@ -371,7 +503,7 @@
       object.traverse(child => {
         if (child.isMesh) {
           child.material = material;
-          child.castShadow = false;
+          child.castShadow = true;
           child.receiveShadow = false;
         }
       });
@@ -385,6 +517,8 @@
       visualAlignment.add(object);
       return visualAlignment;
     }
+
+    let liveMeshWrapper = null, ghostMeshWrapper = null;
 
     new OBJLoader().load(
       MODEL_URL,
@@ -404,8 +538,12 @@
           side: THREE.DoubleSide
         });
 
-        liveGroup.add(centeredModel(object, liveMaterial));
-        ghostGroup.add(centeredModel(ghostObject, ghostMaterial));
+        liveMeshWrapper = centeredModel(object, liveMaterial);
+        ghostMeshWrapper = centeredModel(ghostObject, ghostMaterial);
+        liveMeshWrapper.visible = meshEnabled;
+        ghostMeshWrapper.visible = meshEnabled;
+        liveGroup.add(liveMeshWrapper);
+        ghostGroup.add(ghostMeshWrapper);
         liveGroup.visible = true;
         modelStatus.textContent = "transducer.obj loaded";
       },
@@ -470,6 +608,43 @@
           return;
         }
 
+        // ── Reference frame: read once (static for session) ─────────────────
+        if (data.reference_frame && data.reference_frame !== referenceFrame) {
+          referenceFrame = data.reference_frame;
+          frameNeedsInit = true;
+          document.getElementById("set-viewpoint").style.display =
+            (referenceFrame === 'user' || referenceFrame === 'patient') ? '' : 'none';
+        }
+
+        // Detect calibration / reset transitions for locked frames.
+        const justCalibrated = !!data.comp_calibrated && !prevCalibrated;
+        const justReset      = !data.comp_calibrated  &&  prevCalibrated;
+        prevCalibrated = !!data.comp_calibrated;
+        if (justCalibrated && (referenceFrame === 'user' || referenceFrame === 'patient')) {
+          if (rawViewpointRows) {
+            // Re-apply viewpoint against the new calibration origin.
+            applyLockedViewpoint(data.reference_pose);
+          } else {
+            initLockedFrame();
+          }
+          frameNeedsInit = false;
+        }
+        if (justReset) {
+          frameNeedsInit = true; // re-lock next calibration
+        }
+
+        // Detect viewpoint_pose changes: null→set, re-set, or set→null (on reset).
+        const curViewpointJson = data.viewpoint_pose ? JSON.stringify(data.viewpoint_pose) : null;
+        if (curViewpointJson !== prevViewpointPoseJson) {
+          prevViewpointPoseJson = curViewpointJson;
+          if (data.viewpoint_pose && (referenceFrame === 'user' || referenceFrame === 'patient')) {
+            rawViewpointRows = data.viewpoint_pose;
+            applyLockedViewpoint(data.reference_pose);
+          } else if (!data.viewpoint_pose) {
+            rawViewpointRows = null;
+          }
+        }
+
         const isTracker = data.source_mode === "tracker";
         sourceStatus.textContent = isTracker
           ? `LIVE TRACKER | ${data.source_label} | ${data.stream_rate} Hz`
@@ -478,8 +653,21 @@
         keyGrid.style.display = isTracker ? "none" : "grid";
         trackerHelp.style.display = isTracker ? "block" : "none";
 
-        setRelativePose(liveGroup, data.live_pose, data.reference_pose);
-        liveGroup.visible = Boolean(data.live_pose && liveGroup.children.length);
+        {
+          // liveGroup is a direct scene child so its matrix must bake the
+          // display rotation that was formerly provided by the displayFrame parent.
+          const livePose = matrixFromRows(data.live_pose);
+          const refPose  = matrixFromRows(data.reference_pose);
+          if (livePose && refPose) {
+            _liveRelMatrix.copy(refPose).invert().multiply(livePose);
+            liveGroup.matrix.copy(DISPLAY_FRAME_MATRIX).multiply(_liveRelMatrix);
+            _lastLiveMatrix.copy(liveGroup.matrix);
+            liveGroup.matrixWorldNeedsUpdate = true;
+            liveGroup.visible = Boolean(liveGroup.children.length);
+          } else {
+            liveGroup.visible = false;
+          }
+        }
 
         if (data.comp_calibrated && data.target_pose) {
           setRelativePose(ghostGroup, data.target_pose, data.reference_pose);
@@ -493,6 +681,7 @@
           : `position error ${(data.linear * 100).toFixed(1)} cm | angle error ${data.angular.toFixed(1)} deg`;
 
         scoreValue.textContent = data.comp_hits ?? 0;
+        holdBarFill.style.height = `${((data.hold_progress ?? 0) * 100).toFixed(1)}%`;
         if (data.comp_game_over) {
           timeValue.textContent = "0:00";
           competitionState.textContent = "GAME OVER";
@@ -528,21 +717,352 @@
     });
 
     document.getElementById("calibrate").addEventListener("click", () => send({ cmd: "calibrate" }));
+    document.getElementById("set-viewpoint").addEventListener("click", () => {
+      if (referenceFrame === 'user' || referenceFrame === 'patient') send({ cmd: "set_viewpoint" });
+    });
     document.getElementById("new-target").addEventListener("click", () => send({ cmd: "new_target" }));
     document.getElementById("reset").addEventListener("click", () => send({ cmd: "reset" }));
+
+    const swayInd = swayBtn.querySelector('.ind');
+    swayBtn.addEventListener("click", () => {
+      swayEnabled = !swayEnabled;
+      swayInd.textContent = swayEnabled ? 'ON' : 'OFF';
+      swayInd.className = 'ind ' + (swayEnabled ? 'on' : 'off');
+    });
+
+    const zalineBtn = document.getElementById('zaline-toggle');
+    const zalineInd = zalineBtn.querySelector('.ind');
+    zalineBtn.addEventListener('click', () => {
+      zalignEnabled = !zalignEnabled;
+      zalineInd.textContent = zalignEnabled ? 'ON' : 'OFF';
+      zalineInd.className = 'ind ' + (zalignEnabled ? 'on' : 'off');
+      if (!zalignEnabled) { liveDropLine.visible = false; ghostDropLine.visible = false; }
+    });
+
+    const shadowBtn = document.getElementById('shadow-toggle');
+    const shadowInd = shadowBtn.querySelector('.ind');
+    shadowBtn.addEventListener('click', () => {
+      shadowEnabled = !shadowEnabled;
+      shadowInd.textContent = shadowEnabled ? 'ON' : 'OFF';
+      shadowInd.className = 'ind ' + (shadowEnabled ? 'on' : 'off');
+      keyLight.castShadow = shadowEnabled;
+      if (shadowEnabled) renderer.shadowMap.needsUpdate = true;
+    });
+
+    const meshBtn = document.getElementById('mesh-toggle');
+    const meshInd = meshBtn.querySelector('.ind');
+    meshBtn.addEventListener('click', () => {
+      meshEnabled = !meshEnabled;
+      meshInd.textContent = meshEnabled ? 'ON' : 'OFF';
+      meshInd.className = 'ind ' + (meshEnabled ? 'on' : 'off');
+      if (liveMeshWrapper) liveMeshWrapper.visible = meshEnabled;
+      if (ghostMeshWrapper) ghostMeshWrapper.visible = meshEnabled;
+    });
+
+    const axesBtn = document.getElementById('axes-toggle');
+    const axesInd = axesBtn.querySelector('.ind');
+    axesBtn.addEventListener('click', () => {
+      axesEnabled = !axesEnabled;
+      axesInd.textContent = axesEnabled ? 'ON' : 'OFF';
+      axesInd.className = 'ind ' + (axesEnabled ? 'on' : 'off');
+      liveAxes.visible = axesEnabled;
+      ghostAxes.visible = axesEnabled;
+    });
+
+    const dispBtn = document.getElementById('disp-toggle');
+    const dispInd = dispBtn.querySelector('.ind');
+    dispBtn.addEventListener('click', () => {
+      dispEnabled = !dispEnabled;
+      dispInd.textContent = dispEnabled ? 'ON' : 'OFF';
+      dispInd.className = 'ind ' + (dispEnabled ? 'on' : 'off');
+      if (!dispEnabled) {
+        rollArc.visible = pitchArc.visible = yawArc.visible = false;
+        rollArrow.visible = pitchArrow.visible = yawArrow.visible = false;
+      }
+    });
+
+    const projBtn = document.getElementById('proj-toggle');
+    projBtn.addEventListener('click', () => {
+      isPerspective = !isPerspective;
+      projBtn.textContent = isPerspective ? 'PERSP' : 'ORTHO';
+      if (isPerspective) {
+        camera.position.copy(orthoCamera.position);
+        camera.quaternion.copy(orthoCamera.quaternion);
+      } else {
+        orthoCamera.position.copy(camera.position);
+        orthoCamera.quaternion.copy(camera.quaternion);
+      }
+      activeCamera = isPerspective ? camera : orthoCamera;
+      _swayBase.copy(activeCamera.position);
+      controls.object = activeCamera;
+      controls.update();
+    });
 
     function resize() {
       const width = sceneHost.clientWidth;
       const height = sceneHost.clientHeight;
       renderer.setSize(width, height, false);
-      camera.aspect = width / height;
+      const aspect = width / height;
+      camera.aspect = aspect;
       camera.updateProjectionMatrix();
+      orthoCamera.left   = -ORTHO_H * aspect;
+      orthoCamera.right  =  ORTHO_H * aspect;
+      orthoCamera.top    =  ORTHO_H;
+      orthoCamera.bottom = -ORTHO_H;
+      orthoCamera.updateProjectionMatrix();
     }
+
+    const _dropPos = new THREE.Vector3();
+    const _groundWorldPos = new THREE.Vector3();
+    const _liveRelMatrix  = new THREE.Matrix4();   // raw live pose relative to reference (calibrated space)
+    const _lastLiveMatrix = new THREE.Matrix4();   // last valid liveGroup matrix; never reset between frames
+    const _swayOffset = new THREE.Vector3();
+    const _swayY = new THREE.Vector3(0, 1, 0);
+    const _swayBase = camera.position.clone(); // OrbitControls-clean position, sway-free
+    const _qLive  = new THREE.Quaternion();
+    const _qGhost = new THREE.Quaternion();
+    const _qErr   = new THREE.Quaternion();
+    const _euler  = new THREE.Euler();
+    const _arcUp  = new THREE.Vector3(0, 1, 0); // cone natural axis
+    const _arcDir = new THREE.Vector3();         // scratch for arrowhead orientation
+    const MIN_ARC_RAD = 0.5 * Math.PI / 180; // hide arcs below 0.5 deg
+
+    function updateDropLine(line, group) {
+      if (!zalignEnabled || !group.visible) { line.visible = false; return; }
+      group.updateWorldMatrix(true, false);
+      _dropPos.setFromMatrixPosition(group.matrixWorld);
+      groundPlane.updateWorldMatrix(true, false);
+      groundPlane.getWorldPosition(_groundWorldPos);
+      const pos = line.geometry.attributes.position.array;
+      pos[0] = _dropPos.x; pos[1] = _dropPos.y; pos[2] = _dropPos.z;
+      pos[3] = _dropPos.x; pos[4] = _groundWorldPos.y; pos[5] = _dropPos.z;
+      line.geometry.attributes.position.needsUpdate = true;
+      line.visible = true;
+    }
+
+    // Writes ARC_SEGS+1 points into arc.geometry sweeping `angle` radians around
+    // the named body axis starting at the specified unit start direction.
+    // Roll:  axis=X, start=(0,0,1)  → point = r·(0, −sinT, cosT)
+    // Pitch: axis=Y, start=(1,0,0)  → point = r·(cosT, 0, −sinT)
+    // Yaw:   axis=Z, start=(1,0,0)  → point = r·(cosT, sinT, 0)
+    function updateArcGeometry(arc, angle, axis) {
+      if (Math.abs(angle) < MIN_ARC_RAD) { arc.visible = false; return; }
+      const verts = arc.geometry.attributes.position.array;
+      const r = ARC_RADIUS;
+      for (let i = 0; i <= ARC_SEGS; i++) {
+        const t = (angle / ARC_SEGS) * i;
+        let px, py, pz;
+        if (axis === 0) {         // roll: rotate (0,0,1) around X
+          px = 0;
+          py = -Math.sin(t);
+          pz =  Math.cos(t);
+        } else if (axis === 1) {  // pitch: rotate (1,0,0) around Y
+          px =  Math.cos(t);
+          py = 0;
+          pz = -Math.sin(t);
+        } else {                  // yaw: rotate (1,0,0) around Z
+          px = Math.cos(t);
+          py = Math.sin(t);
+          pz = 0;
+        }
+        verts[i * 3]     = r * px;
+        verts[i * 3 + 1] = r * py;
+        verts[i * 3 + 2] = r * pz;
+      }
+      arc.geometry.attributes.position.needsUpdate = true;
+      arc.visible = true;
+    }
+
+    // Place a cone arrowhead at the swept end of an arc, pointing in the direction
+    // that reduces the error (toward t=0).  The reduce-error tangent is
+    // −sign(angle) × d/dt of the arc parametrization evaluated at t=angle.
+    function updateArcArrow(cone, angle, axis) {
+      if (Math.abs(angle) < MIN_ARC_RAD) { cone.visible = false; return; }
+      const r = ARC_RADIUS;
+      const s = Math.sign(angle);
+      const a = angle;
+      let px, py, pz, dx, dy, dz;
+      if (axis === 0) {        // roll:  p=(0,−sin,cos),  tangent=(0,−cos,−sin)
+        px = 0;             py = -r * Math.sin(a); pz =  r * Math.cos(a);
+        dx = 0;             dy =  s * Math.cos(a); dz =  s * Math.sin(a);
+      } else if (axis === 1) { // pitch: p=(cos,0,−sin),  tangent=(−sin,0,−cos)
+        px = r * Math.cos(a); py = 0;              pz = -r * Math.sin(a);
+        dx = s * Math.sin(a); dy = 0;              dz =  s * Math.cos(a);
+      } else {                 // yaw:   p=(cos,sin,0),   tangent=(−sin,cos,0)
+        px = r * Math.cos(a); py = r * Math.sin(a); pz = 0;
+        dx = s * Math.sin(a); dy = -s * Math.cos(a); dz = 0;
+      }
+      _arcDir.set(-dx, -dy, -dz).normalize();
+      // Center cone so its tip lands exactly on the arc end point.
+      cone.position.set(
+        px - _arcDir.x * (ARROW_HEAD_LENGTH / 2),
+        py - _arcDir.y * (ARROW_HEAD_LENGTH / 2),
+        pz - _arcDir.z * (ARROW_HEAD_LENGTH / 2)
+      );
+      cone.quaternion.setFromUnitVectors(_arcUp, _arcDir);
+      cone.visible = true;
+    }
+
+    function updateDisplacementVectors() {
+      // Hide all arcs and arrowheads immediately; re-enable below if conditions are met.
+      rollArc.visible = pitchArc.visible = yawArc.visible = false;
+      rollArrow.visible = pitchArrow.visible = yawArrow.visible = false;
+      if (!dispEnabled || !liveGroup.visible || !ghostGroup.visible) return;
+
+      // q_err = q_live⁻¹ ⊗ q_ghost  →  relative rotation in live body frame.
+      // Use _liveRelMatrix (calibrated-space relative pose) so this is correct
+      // even in transducer frame where liveGroup.matrix is pinned to identity.
+      _qLive.setFromRotationMatrix(_liveRelMatrix);
+      _qGhost.setFromRotationMatrix(ghostGroup.matrix);
+      _qErr.copy(_qLive).conjugate().multiply(_qGhost);
+
+      // Intrinsic XYZ decomposition: R = Rz(e.z)·Ry(e.y)·Rx(e.x)
+      // → euler.x=roll (about live X), euler.y=pitch (about live Y), euler.z=yaw (about live Z)
+      _euler.setFromQuaternion(_qErr, 'XYZ');
+
+      updateArcGeometry(rollArc,  _euler.x, 0);
+      updateArcGeometry(pitchArc, _euler.y, 1);
+      updateArcGeometry(yawArc,   _euler.z, 2);
+      updateArcArrow(rollArrow,  _euler.x, 0);
+      updateArcArrow(pitchArrow, _euler.y, 1);
+      updateArcArrow(yawArrow,   _euler.z, 2);
+    }
+
+    let swayEnabled = false;
+    let zalignEnabled = true;
+    let shadowEnabled = true;
+    let meshEnabled = true;
+    let axesEnabled = true;
+    let dispEnabled = true;
+    let isPerspective = true;
+    let swayBlend = 1.0;
+
+    // ── Reference-frame camera modes ─────────────────────────────────────────
+    // null = no frame mode (existing default orbit); set from data.reference_frame.
+    // transducer: camera rides probe each frame (controls.target tracks probe).
+    // user / patient: camera locked at calibration pose world position.
+    let referenceFrame = null;
+    let frameNeedsInit = true;   // cleared after first camera placement
+    let prevCalibrated = false;  // edge-detect comp_calibrated transitions
+    let rawViewpointRows = null;      // rows of last captured viewpoint_pose (null until set_viewpoint)
+    let prevViewpointPoseJson = null; // JSON string for change detection
+
+    // Scratch vectors reused every frame to avoid GC pressure.
+    const _probePos = new THREE.Vector3();
+    const _probeFwd = new THREE.Vector3();
+    const _probeUp3 = new THREE.Vector3();
+
+    // Lock camera to displayFrame origin (calibration pose world position),
+    // looking along displayFrame col-0 (calibrated +X → world (0,0,−1)).
+    function initLockedFrame() {
+      displayFrame.updateWorldMatrix(true, false);
+      const m = displayFrame.matrixWorld;
+      _probeFwd.setFromMatrixColumn(m, 0).normalize(); // calibrated +X in world
+      // calibPos = displayFrame world position = (0,0,0) (no translational component)
+      const calibPos = new THREE.Vector3().setFromMatrixPosition(m);
+      const lookTarget = calibPos.clone().addScaledVector(_probeFwd, 0.5);
+      activeCamera.position.copy(calibPos);
+      controls.target.copy(lookTarget);
+      _swayBase.copy(calibPos);
+      controls.update();
+    }
+    // Lock the camera to a captured probe pose in display space.
+    // displayMat = DISPLAY_FRAME_MATRIX × (refPose⁻¹ × viewpointPose).
+    // Camera sits at that position, looking along col-0 (probe forward).
+    function applyLockedViewpoint(refRows) {
+      if (!rawViewpointRows) return;
+      const viewpointMat = matrixFromRows(rawViewpointRows);
+      const refMat = matrixFromRows(refRows);
+      if (!viewpointMat || !refMat) return;
+      const displayMat = DISPLAY_FRAME_MATRIX.clone()
+        .multiply(refMat.clone().invert().multiply(viewpointMat));
+      const camPos = new THREE.Vector3().setFromMatrixPosition(displayMat);
+      const fwdDir = new THREE.Vector3().setFromMatrixColumn(displayMat, 0).normalize();
+      const lookTarget = camPos.clone().addScaledVector(fwdDir, 0.5);
+      activeCamera.position.copy(camPos);
+      activeCamera.up.set(0, 1, 0);
+      controls.target.copy(lookTarget);
+      _swayBase.copy(camPos);
+      controls.update();
+    }
+
+    // ±0.5 deg azimuth, 5 s period — barely-perceptible breathing motion
+    const SWAY_H_AMP = 0.5 * (Math.PI / 180);
+    const SWAY_PERIOD = 5.0;
+    let isUserInteracting = false;
+    controls.addEventListener("start", () => { isUserInteracting = true; });
+    controls.addEventListener("end",   () => { isUserInteracting = false; });
 
     function animate() {
       requestAnimationFrame(animate);
-      controls.update();
-      renderer.render(scene, camera);
+
+      // ── Transducer frame: probe fixed, world moves ────────────────────────
+      // Camera is set once and never touched again. The live probe is pinned
+      // at scene origin (liveGroup.matrix = identity). txWorldGroup receives
+      // probe_pose⁻¹ so the entire world — ghost, cubes, ground, grid — shifts
+      // each frame to preserve relative probe↔world alignment while the probe
+      // stays visually locked. Sway and OrbitControls are disabled.
+      if (referenceFrame === 'transducer') {
+        controls.enabled = false;
+        if (frameNeedsInit) {
+          // Over-the-shoulder view from behind/above the probe.
+          // position=(-0.25, 0, 0.10): 0.25 m behind (-X) and 0.10 m above (+Z).
+          // lookAt=(0,0,0): probe at origin. up=(0,0,1): probe's TOP axis, so
+          // the transducer face (+X) points away, top faces up, no roll.
+          activeCamera.position.set(-0.25, 0, 0.10);
+          activeCamera.up.set(0, 0, 1);
+          activeCamera.lookAt(0, 0, 0);
+          const otherCam = isPerspective ? orthoCamera : camera;
+          otherCam.position.set(-0.25, 0, 0.10);
+          otherCam.up.set(0, 0, 1);
+          otherCam.lookAt(0, 0, 0);
+          _swayBase.set(-0.25, 0, 0.10);
+          controls.target.set(0, 0, 0);
+          frameNeedsInit = false;
+        }
+        if (liveGroup.visible) {
+          // Use _lastLiveMatrix (set by message handler, never reset) so that
+          // frames without a fresh message still invert the correct live pose.
+          // Reading liveGroup.matrix here would give identity after the reset
+          // below, causing txWorldGroup to snap to identity on every second
+          // frame and producing flicker + a phantom at the wrong position.
+          txWorldGroup.matrix.copy(_lastLiveMatrix).invert();
+          txWorldGroup.matrixWorldNeedsUpdate = true;
+          liveGroup.matrix.identity();
+          liveGroup.matrixWorldNeedsUpdate = true;
+        }
+      } else {
+        controls.enabled = true;
+        txWorldGroup.matrix.identity();
+        txWorldGroup.matrixWorldNeedsUpdate = true;
+
+        // Restore the sway-free position before controls.update() so that
+        // OrbitControls' damping loop (which reads camera.position → spherical
+        // each frame) never sees the swayed offset.  Without this, the sway
+        // angle accumulates into OrbitControls' internal state and grows without
+        // bound, causing the large swing and the turnaround ghost artifact.
+        activeCamera.position.copy(_swayBase);
+        controls.update();
+        _swayBase.copy(activeCamera.position); // capture clean post-update position
+
+        const targetBlend = (swayEnabled && !isUserInteracting) ? 1.0 : 0.0;
+        swayBlend += (targetBlend - swayBlend) * 0.06;
+        if (swayBlend > 0.001) {
+          const t = performance.now() / 1000;
+          // Absolute azimuth offset — computed fresh from _swayBase every frame,
+          // no incremental accumulation, no cross-product near singularity.
+          const azOff = SWAY_H_AMP * Math.sin(2 * Math.PI * t / SWAY_PERIOD) * swayBlend;
+          _swayOffset.subVectors(_swayBase, controls.target);
+          _swayOffset.applyAxisAngle(_swayY, azOff);
+          activeCamera.position.copy(controls.target).add(_swayOffset);
+          activeCamera.lookAt(controls.target);
+        }
+      }
+
+      updateDropLine(liveDropLine, liveGroup);
+      updateDropLine(ghostDropLine, ghostGroup);
+      updateDisplacementVectors();
+      renderer.render(scene, activeCamera);
     }
 
     window.addEventListener("resize", resize);

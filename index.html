@@ -165,6 +165,61 @@
       z-index: -1;
       pointer-events: none;
     }
+
+    /* ── Study card ── */
+    #study-card { display: none; }
+    .study-phase { display: none; }
+
+    .study-heading {
+      font-size: 0.75rem;
+      text-transform: uppercase;
+      letter-spacing: 0.1em;
+      color: var(--dim);
+      text-align: center;
+      margin-bottom: 16px;
+    }
+    .study-prompt {
+      font-size: 0.9rem;
+      text-align: center;
+      color: var(--text);
+      line-height: 1.6;
+      margin-bottom: 20px;
+    }
+    .rating-buttons {
+      display: flex;
+      gap: 8px;
+      justify-content: center;
+    }
+    .rating-btn {
+      padding: 10px 0;
+      min-width: 56px;
+      background: #2a2a2a;
+      color: var(--text);
+      border: 1px solid #444;
+      border-radius: 6px;
+      font-family: 'Courier New', monospace;
+      font-size: 1.1rem;
+      font-weight: bold;
+      cursor: pointer;
+      transition: background 120ms;
+    }
+    .rating-btn:hover    { background: #383838; }
+    .rating-btn:active   { background: #4a4a4a; }
+    .rating-btn:disabled { opacity: 0.35; cursor: default; }
+
+    #trial-progress-label {
+      font-size: 0.85rem;
+      color: var(--dim);
+      text-align: center;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+    }
+    .study-complete-msg {
+      font-size: 1rem;
+      text-align: center;
+      color: #4ade80;
+      letter-spacing: 0.05em;
+    }
   </style>
 </head>
 <body>
@@ -172,7 +227,7 @@
   <h1>TRIAL MONITOR</h1>
 
   <!-- Competition card -->
-  <div class="card">
+  <div class="card" id="comp-card">
     <div class="comp-scoreboard">
       <div class="comp-stat">
         <div class="metric-label">Time</div>
@@ -199,8 +254,47 @@
     </div>
   </div>
 
+  <!-- Study card — shown instead of comp card in study mode -->
+  <div class="card" id="study-card">
+
+    <!-- Waiting for calibrate -->
+    <div class="study-phase" id="study-cal-phase">
+      <div class="study-heading">Study Mode</div>
+      <p class="study-prompt">Press Calibrate to capture the origin and begin the session.</p>
+      <div class="comp-buttons">
+        <button class="comp-btn" id="btn-study-calibrate">Calibrate</button>
+      </div>
+    </div>
+
+    <!-- Trial in progress -->
+    <div class="study-phase" id="study-trial-phase">
+      <div class="study-heading">Study Mode</div>
+      <p id="trial-progress-label">Trial — of 7</p>
+    </div>
+
+    <!-- Preference rating -->
+    <div class="study-phase" id="study-pref-phase">
+      <div class="study-heading">Study Mode</div>
+      <p class="study-prompt">On a scale of 1–5, how would you rate the effectiveness of this visual user interface?</p>
+      <div class="rating-buttons">
+        <button class="rating-btn" data-rating="1">1</button>
+        <button class="rating-btn" data-rating="2">2</button>
+        <button class="rating-btn" data-rating="3">3</button>
+        <button class="rating-btn" data-rating="4">4</button>
+        <button class="rating-btn" data-rating="5">5</button>
+      </div>
+    </div>
+
+    <!-- Complete -->
+    <div class="study-phase" id="study-done-phase">
+      <div class="study-heading">Study Mode</div>
+      <p class="study-complete-msg">Study complete. Thank you.</p>
+    </div>
+
+  </div>
+
   <!-- Distance bars -->
-  <div class="card">
+  <div class="card" id="bars-card">
     <div class="metric">
       <div class="metric-header">
         <span class="metric-label">Linear distance</span>
@@ -225,7 +319,7 @@
   </div>
 
   <!-- Trial status -->
-  <div class="card status-row">
+  <div class="card status-row" id="status-card">
     <span id="elapsed">—</span>
     <span class="badge badge-running" id="trial-state">WAITING</span>
   </div>
@@ -298,46 +392,32 @@
     function connect() {
       const ws = new WebSocket(WS_URL);
 
-      const statusEl        = document.getElementById("ws-status");
-      const elapsedEl       = document.getElementById("elapsed");
-      const stateEl         = document.getElementById("trial-state");
-      const nullNotice      = document.getElementById("null-notice");
-      const compTimeEl      = document.getElementById("comp-time-val");
-      const compHitsEl      = document.getElementById("comp-hits-val");
-      const compBadgeEl     = document.getElementById("comp-badge");
-      const compFinalEl     = document.getElementById("comp-final");
-      const compFinalScore  = document.getElementById("comp-final-score");
+      const statusEl       = document.getElementById("ws-status");
+      const elapsedEl      = document.getElementById("elapsed");
+      const stateEl        = document.getElementById("trial-state");
+      const nullNotice     = document.getElementById("null-notice");
+      const compTimeEl     = document.getElementById("comp-time-val");
+      const compHitsEl     = document.getElementById("comp-hits-val");
+      const compBadgeEl    = document.getElementById("comp-badge");
+      const compFinalEl    = document.getElementById("comp-final");
+      const compFinalScore = document.getElementById("comp-final-score");
 
-      ws.onopen = () => {
-        statusEl.textContent = "connected";
-        statusEl.className   = "ws-ok";
-      };
+      // ── Shared helpers ──────────────────────────────────────────────────────
 
-      ws.onmessage = (evt) => {
-        const d = JSON.parse(evt.data);
-
-        if (d.error === "tracker_not_visible") {
-          statusEl.textContent = "tracker not visible — try again";
-          statusEl.className   = "ws-err";
-          setTimeout(() => {
-            statusEl.textContent = "connected";
-            statusEl.className   = "ws-ok";
-          }, 2000);
-          return;
+      function sendCmd(cmd) {
+        if (ws.readyState === WebSocket.OPEN) {
+          ws.send(JSON.stringify({ cmd }));
         }
+      }
 
-        // Hold indicator
+      function renderBars(d) {
         updateHold(d.hold_progress ?? 0);
-
-        // Distance bars
         nullNotice.style.display = (d.linear === null) ? "block" : "none";
         updateBar("linear-bar",  "linear-value",  d.linear,  MAX_LINEAR,
                   v => `${v.toFixed(4)} m`);
         updateBar("angular-bar", "angular-value", d.angular, MAX_ANGULAR,
                   v => `${v.toFixed(2)}°`);
-
-        // Trial elapsed / match badge
-        elapsedEl.textContent = `${d.elapsed.toFixed(1)} s`;
+        elapsedEl.textContent = `${(d.elapsed ?? 0).toFixed(1)} s`;
         if (d.matched) {
           stateEl.textContent = "MATCHED";
           stateEl.className   = "badge badge-matched";
@@ -348,8 +428,18 @@
           stateEl.textContent = "RUNNING";
           stateEl.className   = "badge badge-running";
         }
+      }
 
-        // Competition panel
+      // ── Competition renderer (unchanged behaviour) ──────────────────────────
+
+      function renderCompetition(d) {
+        document.getElementById("comp-card").style.display   = "";
+        document.getElementById("study-card").style.display  = "none";
+        document.getElementById("bars-card").style.display   = "";
+        document.getElementById("status-card").style.display = "";
+
+        renderBars(d);
+
         compHitsEl.textContent = d.comp_hits ?? 0;
 
         if (d.comp_game_over) {
@@ -369,6 +459,73 @@
           compBadgeEl.className        = "badge badge-comp-idle";
           compFinalEl.style.display    = "none";
         }
+      }
+
+      // ── Study renderer ──────────────────────────────────────────────────────
+
+      const STUDY_PHASES = ["study-cal-phase", "study-trial-phase",
+                            "study-pref-phase", "study-done-phase"];
+
+      function renderStudy(d) {
+        document.getElementById("comp-card").style.display   = "none";
+        document.getElementById("study-card").style.display  = "block";
+
+        const act      = d.activity_type;
+        const showBars = (act === "trial");
+
+        document.getElementById("bars-card").style.display   = showBars ? "block" : "none";
+        document.getElementById("status-card").style.display = showBars ? "block" : "none";
+
+        // Show the correct study sub-phase
+        STUDY_PHASES.forEach(id => document.getElementById(id).style.display = "none");
+        if (act === "calibration") {
+          document.getElementById("study-cal-phase").style.display  = "block";
+        } else if (act === "trial") {
+          document.getElementById("study-trial-phase").style.display = "block";
+          if (d.trial_index !== null && d.trial_index !== undefined) {
+            document.getElementById("trial-progress-label").textContent =
+                `Trial ${d.trial_index + 1} of ${d.trial_count}`;
+          }
+        } else if (act === "preference") {
+          document.getElementById("study-pref-phase").style.display  = "block";
+          // Re-enable buttons (handles reconnect mid-preference)
+          document.querySelectorAll(".rating-btn").forEach(b => b.disabled = false);
+        } else {
+          document.getElementById("study-done-phase").style.display  = "block";
+        }
+
+        if (showBars) {
+          renderBars(d);
+        } else {
+          updateHold(0);
+        }
+      }
+
+      // ── Message dispatch ────────────────────────────────────────────────────
+
+      ws.onopen = () => {
+        statusEl.textContent = "connected";
+        statusEl.className   = "ws-ok";
+      };
+
+      ws.onmessage = (evt) => {
+        const d = JSON.parse(evt.data);
+
+        if (d.error === "tracker_not_visible") {
+          statusEl.textContent = "tracker not visible — try again";
+          statusEl.className   = "ws-err";
+          setTimeout(() => {
+            statusEl.textContent = "connected";
+            statusEl.className   = "ws-ok";
+          }, 2000);
+          return;
+        }
+
+        if (d.mode === "study") {
+          renderStudy(d);
+        } else {
+          renderCompetition(d);
+        }
       };
 
       ws.onclose = () => {
@@ -381,7 +538,7 @@
         statusEl.className   = "ws-err";
       };
 
-      // Fake-mode keyboard nudge controls
+      // ── Keyboard nudge controls (both modes) ────────────────────────────────
       document.addEventListener("keydown", (e) => {
         const key = e.key.toLowerCase();
         if (TRIGGER_KEYS.has(key) && ws.readyState === WebSocket.OPEN) {
@@ -390,16 +547,24 @@
         }
       });
 
-      // Competition buttons
-      function sendCmd(cmd) {
-        if (ws.readyState === WebSocket.OPEN) {
-          ws.send(JSON.stringify({ cmd }));
-        }
-      }
-
+      // ── Competition buttons ─────────────────────────────────────────────────
       document.getElementById("btn-calibrate").addEventListener("click",  () => sendCmd("calibrate"));
       document.getElementById("btn-new-target").addEventListener("click", () => sendCmd("new_target"));
       document.getElementById("btn-reset").addEventListener("click",      () => sendCmd("reset"));
+
+      // ── Study buttons ───────────────────────────────────────────────────────
+      document.getElementById("btn-study-calibrate").addEventListener("click", () => sendCmd("calibrate"));
+
+      document.querySelectorAll(".rating-btn").forEach(btn => {
+        btn.addEventListener("click", () => {
+          const rating = parseInt(btn.dataset.rating, 10);
+          if (ws.readyState === WebSocket.OPEN) {
+            ws.send(JSON.stringify({ cmd: "rate", rating }));
+          }
+          // Disable all rating buttons immediately to prevent double-submit
+          document.querySelectorAll(".rating-btn").forEach(b => b.disabled = true);
+        });
+      });
     }
 
     connect();

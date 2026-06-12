@@ -1,4 +1,4 @@
-"""WebSocket bridge: runs a Trial at ~30 Hz and streams state to the browser."""
+"""WebSocket bridge: runs Trial at ~30 Hz in competition or study mode."""
 
 import argparse
 import asyncio
@@ -7,7 +7,6 @@ from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 import json
 import math
 from pathlib import Path
-import random
 import threading
 import time
 import numpy as np
@@ -16,76 +15,39 @@ import websockets
 from pose_fetcher import LivePoseFetcher, TrackerPoseFetcher
 from trial import Trial, TARGET_POSE
 from pose_math import angular_distance
+from core import (CUBE_SIZE, HOLD_DURATION, LINEAR_TOL,
+                  _rot_x, _rot_y, _rot_z, _ROT_FNS, _random_target_pose)
+from study.sequence import SequenceRunner
+from study.archiver import NoOpArchiver
+from study.activities import PreferenceActivity
 
 HOST = "localhost"
 PORT = 8765
 HTTP_PORT = 8000
-DEFAULT_RATE = 60.0
+STEP_INTERVAL = 1 / 30
 
 TRANS_STEP = 0.01             # 1 cm per keypress
 ROT_STEP   = math.radians(2)  # 2° per keypress
 
 # (dof 0-2 = x/y/z translation, dof 3-5 = roll/pitch/yaw rotation)
 _KEY_MAP = {
-    'd': (0, +1), 'a': (0, -1),
-    'w': (1, +1), 's': (1, -1),
-    'q': (2, +1), 'e': (2, -1),
-    'u': (3, +1), 'o': (3, -1),
-    'i': (4, +1), 'k': (4, -1),
-    'j': (5, +1), 'l': (5, -1),
+    '1': (0, +1), '2': (1, +1), '3': (2, +1),
+    '4': (3, +1), '5': (4, +1), '6': (5, +1),
+    'q': (0, -1), 'w': (1, -1), 'e': (2, -1),
+    'r': (3, -1), 't': (4, -1), 'y': (5, -1),
 }
 
-GAME_DURATION = 180.0   # 3 minutes
-CUBE_SIZE     = 0.5     # metres, side length (cube centred on calibration origin)
-HOLD_DURATION = 1.0     # seconds of continuous match required to register a hit
-
-
-def _rot_x(a):
-    c, s = math.cos(a), math.sin(a)
-    return np.array([[1, 0, 0], [0, c, -s], [0, s, c]], dtype=float)
-
-
-def _rot_y(a):
-    c, s = math.cos(a), math.sin(a)
-    return np.array([[c, 0, s], [0, 1, 0], [-s, 0, c]], dtype=float)
-
-
-def _rot_z(a):
-    c, s = math.cos(a), math.sin(a)
-    return np.array([[c, -s, 0], [s, c, 0], [0, 0, 1]], dtype=float)
-
-
-_ROT_FNS = [_rot_x, _rot_y, _rot_z]
-
-
-def _random_target_pose(origin: np.ndarray) -> np.ndarray:
-    """Random target within a 0.5 m cube centred on the calibration origin.
-
-    Each axis offset is ±0.25 m (local X/Y/Z), so the calibration pose is the
-    centroid and targets spread in all directions equally.  Orientation is
-    randomised up to 30° off the calibration orientation on a randomly chosen axis.
-    """
-    half = CUBE_SIZE / 2
-    local_pos = np.array([
-        random.uniform(-half, half),   # left / right  (local X)
-        random.uniform(-half, half),   # up   / down   (local Y)
-        random.uniform(-half, half),   # fore / aft    (local Z)
-    ])
-    world_pos = origin[:3, 3] + origin[:3, :3] @ local_pos
-    target = np.eye(4, dtype=float)
-    angle = random.uniform(-math.radians(30), math.radians(30))
-    target[:3, :3] = origin[:3, :3] @ random.choice(_ROT_FNS)(angle)
-    target[:3, 3]  = world_pos
-    return target
+GAME_DURATION  = 180.0   # 3 minutes
+N_STUDY_TRIALS = 7
 
 
 class FakePoseFetcher(LivePoseFetcher):
     """Keyboard-driven pose: starts offset from TARGET_POSE so the bars are away from matched.
 
-    WASD/QE move on local X/Y/Z; UO/IK/JL rotate roll/pitch/yaw.
-    The first key in each documented pair is positive and the second is negative.
-    Each press nudges by TRANS_STEP (1 cm) or ROT_STEP (2°).
-    Rotation is kept valid by composing with an incremental rotation matrix.
+    Keys 1/2/3 translate along local X/Y/Z; 4/5/6 rotate roll/pitch/yaw.
+    q/w/e and r/t/y are the negative counterparts respectively.
+    Translation moves along the probe's own axes (local frame) captured at connect().
+    Rotation is post-multiplied (body-frame) so nudge pairs cancel exactly.
     """
 
     source_mode = "fake"
@@ -94,10 +56,12 @@ class FakePoseFetcher(LivePoseFetcher):
     def connect(self):
         self._pose = np.eye(4, dtype=float)
         # Start ~20 cm away in position and ~20° off in orientation.
-        # Use all three axes so every rotation pair produces a visible change.
+        # Use all three axes so r/t/y and 4/5/6 all produce visible angular changes.
         self._pose[:3, 3] = TARGET_POSE[:3, 3] + np.array([0.15, 0.10, -0.08])
         R_offset = _rot_x(math.radians(12)) @ _rot_y(math.radians(12)) @ _rot_z(math.radians(12))
         self._pose[:3, :3] = R_offset @ TARGET_POSE[:3, :3]
+        # Freeze the probe's local frame so translation keys always move along
+        # the same axes regardless of subsequent rotations.
         self._control_frame = self._pose[:3, :3].copy()
 
     def get_pose(self):
@@ -108,7 +72,6 @@ class FakePoseFetcher(LivePoseFetcher):
             return
         dof, sign = _KEY_MAP[key]
         if dof < 3:
-            # Move along the calibrated local axes shown by the 3D workspace.
             self._pose[:3, 3] += self._control_frame[:, dof] * sign * TRANS_STEP
         else:
             R_delta = _ROT_FNS[dof - 3](sign * ROT_STEP)
@@ -119,29 +82,23 @@ class FakePoseFetcher(LivePoseFetcher):
         pass
 
 
-async def handler(websocket, fetcher_cls, step_interval, stream_rate):
-    fetcher = fetcher_cls()
-    try:
-        fetcher.connect()
-    except Exception as exc:
-        print(f"Fetcher connect failed: {exc}")
-        await websocket.close(1011, "tracker unavailable")
-        return
+# ── Competition mode ───────────────────────────────────────────────────────────
 
-    scene_origin = fetcher.get_pose()
-    trial = Trial(fetcher, linear_tol=0.01)
+async def _competition_handler(websocket, fetcher, modality="1d", frame="transducer"):
+    trial = Trial(fetcher, linear_tol=LINEAR_TOL)
     trial.start()
-    print(f"Client connected ({fetcher_cls.__name__}) — trial started.")
+    print(f"Client connected ({type(fetcher).__name__}) — competition/{modality} mode.")
 
     # Competition state — all mutable via commands received in recv_loop
     comp = {
-        "calibrated": False,
-        "active":     False,
-        "game_over":  False,
-        "origin":     None,   # 4x4 ndarray: calibration pose
-        "hit_count":  0,
-        "hold_start": None,   # time.monotonic() when current continuous match began
-        "start_time": None,   # time.monotonic() at calibration
+        "calibrated":    False,
+        "active":        False,
+        "game_over":     False,
+        "origin":        None,   # 4x4 ndarray: calibration pose
+        "viewpoint_pose": None,  # 4x4 ndarray: locked camera pose (user/patient only)
+        "hit_count":     0,
+        "hold_start":    None,   # time.monotonic() when current continuous match began
+        "start_time":    None,   # time.monotonic() at calibration
     }
 
     def _calibrate(live_pose: np.ndarray) -> None:
@@ -162,23 +119,25 @@ async def handler(websocket, fetcher_cls, step_interval, stream_rate):
             trial.start()
 
     def _reset() -> None:
-        comp["calibrated"] = False
-        comp["active"]     = False
-        comp["game_over"]  = False
-        comp["origin"]     = None
-        comp["hit_count"]  = 0
-        comp["hold_start"] = None
-        comp["start_time"] = None
-        trial.target_pose  = TARGET_POSE
+        comp["calibrated"]    = False
+        comp["active"]        = False
+        comp["game_over"]     = False
+        comp["origin"]        = None
+        comp["viewpoint_pose"] = None
+        comp["hit_count"]     = 0
+        comp["hold_start"]    = None
+        comp["start_time"]    = None
+        trial.target_pose     = TARGET_POSE
         trial.start()
+
+    # For 3D: track the first valid pose as pre-calibration scene reference.
+    scene_origin = fetcher.get_pose() if modality == "3d" else None
 
     async def send_loop():
         nonlocal scene_origin
 
         while True:
             state = trial.step()
-            if scene_origin is None and state["live_pose"] is not None:
-                scene_origin = np.array(state["live_pose"], dtype=float)
 
             # Competition overlay
             tr = None
@@ -224,19 +183,34 @@ async def handler(websocket, fetcher_cls, step_interval, stream_rate):
             state["comp_game_over"]      = comp["game_over"]
             state["comp_hits"]           = comp["hit_count"]
             state["comp_time_remaining"] = tr
-            state["target_pose"]         = trial.target_pose.tolist()
-            reference_pose = comp["origin"] if comp["origin"] is not None else scene_origin
-            state["reference_pose"]      = (
-                reference_pose.tolist() if reference_pose is not None else None
-            )
-            state["cube_size"]           = CUBE_SIZE
-            state["source_mode"]         = fetcher.source_mode
-            state["source_label"]        = fetcher.source_label
-            state["stream_rate"]         = stream_rate
-            state["tracker_visible"]     = state["live_pose"] is not None
+            state["mode"]                = "competition"
+
+            if modality == "3d":
+                # trial.step() does not include live_pose; fetch it directly so
+                # the 3D renderer has the matrix and tracker_visible is correct.
+                live_pose_arr = fetcher.get_pose()
+                if live_pose_arr is not None:
+                    state["live_pose"] = live_pose_arr.tolist()
+                if scene_origin is None and live_pose_arr is not None:
+                    scene_origin = live_pose_arr
+                reference_pose = comp["origin"] if comp["origin"] is not None else scene_origin
+                state["target_pose"]         = trial.target_pose.tolist()
+                state["reference_pose"]      = (
+                    reference_pose.tolist() if reference_pose is not None else None
+                )
+                state["source_mode"]         = fetcher.source_mode
+                state["source_label"]        = fetcher.source_label
+                state["stream_rate"]         = round(1 / STEP_INTERVAL)
+                state["tracker_visible"]     = state["linear"] is not None
+                state["cube_size"]           = CUBE_SIZE
+                state["reference_frame"]     = frame
+                state["viewpoint_pose"]      = (
+                    comp["viewpoint_pose"].tolist()
+                    if comp["viewpoint_pose"] is not None else None
+                )
 
             await websocket.send(json.dumps(state))
-            await asyncio.sleep(step_interval)
+            await asyncio.sleep(STEP_INTERVAL)
 
     async def recv_loop():
         async for raw in websocket:
@@ -254,6 +228,12 @@ async def handler(websocket, fetcher_cls, step_interval, stream_rate):
                         _calibrate(live_pose)
                     else:
                         await websocket.send(json.dumps({"error": "tracker_not_visible"}))
+                elif cmd == "set_viewpoint":
+                    live_pose = fetcher.get_pose()
+                    if live_pose is not None:
+                        comp["viewpoint_pose"] = live_pose.copy()
+                    else:
+                        await websocket.send(json.dumps({"error": "tracker_not_visible"}))
                 elif cmd == "new_target":
                     _new_target()
                 elif cmd == "reset":
@@ -266,16 +246,173 @@ async def handler(websocket, fetcher_cls, step_interval, stream_rate):
         await asyncio.gather(send_loop(), recv_loop())
     except websockets.exceptions.ConnectionClosed:
         pass
-    finally:
-        fetcher.disconnect()
-        print("Client disconnected.")
 
 
-async def main(fetcher_cls, stream_rate):
-    step_interval = 1 / stream_rate
+# ── Study mode ─────────────────────────────────────────────────────────────────
 
+async def _study_handler(websocket, fetcher, runner):
+    """Study-mode WebSocket session. Runner is already started (fetcher connected)."""
+    print(f"Client connected ({type(fetcher).__name__}) — study mode.")
+
+    # Phase transitions are owned exclusively by send_loop to avoid races.
+    study = {
+        "phase":             "await_calibrate",
+        "calibrate_pending": False,   # set by recv_loop, cleared by send_loop
+        "pending_rating":    None,    # int set by recv_loop, cleared by send_loop
+        "preference_act":    None,    # PreferenceActivity ref for set_rating()
+        "last_trial_state":  None,    # most recent TrialActivity step dict
+        "trial_index":       None,    # current 0-based trial index
+    }
+
+    def _blank(activity_type):
+        return {
+            "mode":          "study",
+            "activity_type": activity_type,
+            "linear":        None,
+            "angular":       None,
+            "hold_progress": 0.0,
+            "matched":       False,
+            "timed_out":     False,
+            "elapsed":       0.0,
+            "trial_index":   None,
+            "trial_count":   N_STUDY_TRIALS,
+        }
+
+    async def send_loop():
+        while True:
+            phase = study["phase"]
+
+            if phase == "await_calibrate":
+                if study["calibrate_pending"]:
+                    study["calibrate_pending"] = False
+                    runner.step()   # CalibrationActivity captures origin → done in one tick
+                    study["phase"] = "running"
+                    # Edge case: n_trials=0 → preference appears immediately
+                    block = runner._blocks[runner._block_idx]
+                    if isinstance(block.current_activity, PreferenceActivity):
+                        study["phase"]          = "await_preference"
+                        study["preference_act"] = block.current_activity
+                state = _blank("calibration")
+
+            elif phase == "running":
+                runner_data = runner.step()
+                block_data  = runner_data["data"]
+                act_type    = block_data["activity_type"]
+                act_data    = block_data["data"]
+
+                if act_type == "trial":
+                    study["trial_index"]      = block_data["trial_index"]
+                    study["last_trial_state"] = act_data
+
+                # Peek: did Block just advance to PreferenceActivity?
+                block = runner._blocks[runner._block_idx]
+                if isinstance(block.current_activity, PreferenceActivity):
+                    study["phase"]          = "await_preference"
+                    study["preference_act"] = block.current_activity
+                elif runner.done:
+                    study["phase"] = "complete"
+
+                td = study["last_trial_state"] or {}
+                state = {
+                    "mode":          "study",
+                    "activity_type": "trial",
+                    "linear":        td.get("linear"),
+                    "angular":       td.get("angular"),
+                    "hold_progress": td.get("hold_progress", 0.0),
+                    "matched":       td.get("matched", False),
+                    "timed_out":     td.get("timed_out", False),
+                    "elapsed":       td.get("elapsed") or 0.0,
+                    "trial_index":   study["trial_index"],
+                    "trial_count":   N_STUDY_TRIALS,
+                }
+
+            elif phase == "await_preference":
+                if study["pending_rating"] is not None:
+                    rating = study["pending_rating"]
+                    study["pending_rating"] = None
+                    if study["preference_act"]:
+                        study["preference_act"].set_rating(rating)
+                    runner.step()   # PreferenceActivity → done → runner done
+                    study["phase"] = "complete"
+                state = _blank("preference")
+
+            else:  # complete
+                state = _blank("complete")
+
+            await websocket.send(json.dumps(state))
+            await asyncio.sleep(STEP_INTERVAL)
+
+    async def recv_loop():
+        async for raw in websocket:
+            try:
+                data = json.loads(raw)
+                key  = data.get("key")
+                cmd  = data.get("cmd")
+
+                if key and hasattr(fetcher, "nudge"):
+                    fetcher.nudge(key)
+
+                if cmd == "calibrate":
+                    live_pose = fetcher.get_pose()
+                    if live_pose is None:
+                        await websocket.send(json.dumps({"error": "tracker_not_visible"}))
+                    else:
+                        study["calibrate_pending"] = True
+                elif cmd == "rate":
+                    rating = data.get("rating")
+                    if isinstance(rating, int) and 1 <= rating <= 5:
+                        study["pending_rating"] = rating
+
+            except (json.JSONDecodeError, AttributeError):
+                pass
+
+    try:
+        await asyncio.gather(send_loop(), recv_loop())
+    except websockets.exceptions.ConnectionClosed:
+        pass
+
+
+# ── Transport layer ────────────────────────────────────────────────────────────
+
+async def handler(websocket, fetcher_cls, mode, modality, frame="transducer"):
+    if mode == "study" and modality == "3d":
+        print("Rejected connection: --study --modality 3d is not yet implemented.")
+        await websocket.close(1011, "--study --modality 3d is not yet implemented")
+        return
+
+    fetcher = fetcher_cls()
+
+    if mode == "competition":
+        try:
+            fetcher.connect()
+        except Exception as exc:
+            print(f"Fetcher connect failed: {exc}")
+            await websocket.close(1011, "tracker unavailable")
+            return
+        try:
+            await _competition_handler(websocket, fetcher, modality, frame)
+        finally:
+            fetcher.disconnect()
+            print("Client disconnected.")
+
+    else:  # study (1d only at this point)
+        runner = SequenceRunner(fetcher, n_trials=N_STUDY_TRIALS, archiver=NoOpArchiver())
+        try:
+            runner.start()  # connects fetcher + starts first block (CalibrationActivity)
+        except Exception as exc:
+            print(f"Fetcher connect failed: {exc}")
+            await websocket.close(1011, "tracker unavailable")
+            return
+        try:
+            await _study_handler(websocket, fetcher, runner)
+        finally:
+            runner.stop()  # disconnects fetcher
+            print("Client disconnected.")
+
+
+async def main(fetcher_cls, mode, modality, frame="transducer"):
     async def _handler(websocket):
-        await handler(websocket, fetcher_cls, step_interval, stream_rate)
+        await handler(websocket, fetcher_cls, mode, modality, frame)
 
     root = Path(__file__).resolve().parent
     request_handler = partial(SimpleHTTPRequestHandler, directory=str(root))
@@ -287,7 +424,7 @@ async def main(fetcher_cls, stream_rate):
         async with websockets.serve(_handler, HOST, PORT):
             print(
                 f"WebSocket: ws://{HOST}:{PORT}  "
-                f"[{fetcher_cls.__name__}, {stream_rate:g} Hz]"
+                f"[{fetcher_cls.__name__}, {mode}, {modality}]"
             )
             print(f"1D UI:     http://{HOST}:{HTTP_PORT}/index.html")
             print(f"3D UI:     http://{HOST}:{HTTP_PORT}/index-3d.html")
@@ -299,13 +436,23 @@ async def main(fetcher_cls, stream_rate):
 
 if __name__ == "__main__":
     p = argparse.ArgumentParser()
+    g = p.add_mutually_exclusive_group(required=True)
+    g.add_argument("--study",       action="store_true", help="Run in study mode")
+    g.add_argument("--competition", action="store_true", help="Run in competition mode")
+    p.add_argument("--modality", choices=["1d", "3d"], default="1d",
+                   help="Rendering modality: 1d (bar-graph, default) or 3d (Three.js)")
     p.add_argument("--fake", action="store_true",
                    help="Use FakePoseFetcher instead of TrackerPoseFetcher (no SteamVR needed)")
-    p.add_argument("--rate", type=float, default=DEFAULT_RATE,
-                   help=f"Pose stream rate in Hz (default: {DEFAULT_RATE:g})")
+    p.add_argument("--frame", choices=["user", "patient", "transducer"], default="transducer",
+                   help="3D camera reference frame (competition --modality 3d only): "
+                        "transducer=camera rides probe, user/patient=locked at calib pose")
     args = p.parse_args()
-    if args.rate <= 0:
-        p.error("--rate must be greater than zero")
 
+    mode        = "study" if args.study else "competition"
+    modality    = args.modality
     fetcher_cls = FakePoseFetcher if args.fake else TrackerPoseFetcher
-    asyncio.run(main(fetcher_cls, args.rate))
+
+    if mode == "study" and modality == "3d":
+        p.error("--study --modality 3d is not yet implemented")
+
+    asyncio.run(main(fetcher_cls, mode, modality, args.frame))

@@ -65,7 +65,7 @@ class PoseFetcherTests(unittest.TestCase):
     def test_fake_translation_keys_use_requested_local_axes(self):
         fetcher = FakePoseFetcher()
         fetcher.connect()
-        pairs = (("d", "a", 0), ("w", "s", 1), ("q", "e", 2))
+        pairs = (("1", "q", 0), ("2", "w", 1), ("3", "e", 2))
 
         for positive, negative, axis in pairs:
             initial = fetcher.get_pose()
@@ -82,7 +82,7 @@ class PoseFetcherTests(unittest.TestCase):
     def test_fake_rotation_keys_use_requested_local_axes(self):
         fetcher = FakePoseFetcher()
         fetcher.connect()
-        pairs = (("u", "o"), ("i", "k"), ("j", "l"))
+        pairs = (("4", "r"), ("5", "t"), ("6", "y"))
 
         for positive, negative in pairs:
             initial = fetcher.get_pose()
