@@ -14,9 +14,9 @@ import websockets
 
 from pose_fetcher import LivePoseFetcher, TrackerPoseFetcher
 from trial import Trial, TARGET_POSE
-from pose_math import angular_distance
+from pose_math import angular_distance, component_errors, workspace_component_errors
 from core import (CUBE_SIZE, HOLD_DURATION, LINEAR_TOL,
-                  _rot_x, _rot_y, _rot_z, _ROT_FNS, _random_target_pose)
+                  _rot_x, _rot_y, _rot_z, _random_target_pose)
 from study.sequence import SequenceRunner
 from study.archiver import NoOpArchiver
 from study.activities import PreferenceActivity
@@ -31,10 +31,12 @@ ROT_STEP   = math.radians(2)  # 2° per keypress
 
 # (dof 0-2 = x/y/z translation, dof 3-5 = roll/pitch/yaw rotation)
 _KEY_MAP = {
-    '1': (0, +1), '2': (1, +1), '3': (2, +1),
-    '4': (3, +1), '5': (4, +1), '6': (5, +1),
-    'q': (0, -1), 'w': (1, -1), 'e': (2, -1),
-    'r': (3, -1), 't': (4, -1), 'y': (5, -1),
+    'd': (0, +1), 'a': (0, -1),
+    'w': (1, +1), 's': (1, -1),
+    'q': (2, +1), 'e': (2, -1),
+    'u': (3, +1), 'o': (3, -1),
+    'i': (4, +1), 'k': (4, -1),
+    'j': (5, +1), 'l': (5, -1),
 }
 
 GAME_DURATION  = 180.0   # 3 minutes
@@ -44,10 +46,9 @@ N_STUDY_TRIALS = 7
 class FakePoseFetcher(LivePoseFetcher):
     """Keyboard-driven pose: starts offset from TARGET_POSE so the bars are away from matched.
 
-    Keys 1/2/3 translate along local X/Y/Z; 4/5/6 rotate roll/pitch/yaw.
-    q/w/e and r/t/y are the negative counterparts respectively.
-    Translation moves along the probe's own axes (local frame) captured at connect().
-    Rotation is post-multiplied (body-frame) so nudge pairs cancel exactly.
+    D/A, W/S, and Q/E translate along local X/Y/Z.
+    U/O, I/K, and J/L rotate roll/pitch/yaw.
+    Nudges use the active target frame so each key changes one displayed component.
     """
 
     source_mode = "fake"
@@ -56,27 +57,43 @@ class FakePoseFetcher(LivePoseFetcher):
     def connect(self):
         self._pose = np.eye(4, dtype=float)
         # Start ~20 cm away in position and ~20° off in orientation.
-        # Use all three axes so r/t/y and 4/5/6 all produce visible angular changes.
+        # Use all three axes so every rotation control is visibly offset.
         self._pose[:3, 3] = TARGET_POSE[:3, 3] + np.array([0.15, 0.10, -0.08])
         R_offset = _rot_x(math.radians(12)) @ _rot_y(math.radians(12)) @ _rot_z(math.radians(12))
         self._pose[:3, :3] = R_offset @ TARGET_POSE[:3, :3]
-        # Freeze the probe's local frame so translation keys always move along
-        # the same axes regardless of subsequent rotations.
-        self._control_frame = self._pose[:3, :3].copy()
 
     def get_pose(self):
         return self._pose.copy()
 
-    def nudge(self, key: str) -> None:
+    def randomize(self, origin: np.ndarray) -> None:
+        """Place the fake probe at a random pose inside the calibrated cube."""
+        self._pose = _random_target_pose(origin)
+
+    def nudge(self, key: str, reference_pose: np.ndarray | None = None) -> None:
         if key not in _KEY_MAP:
             return
         dof, sign = _KEY_MAP[key]
+        reference = TARGET_POSE if reference_pose is None else reference_pose
+
         if dof < 3:
-            self._pose[:3, 3] += self._control_frame[:, dof] * sign * TRANS_STEP
+            # Move in the fixed calibrated frame so one key changes one screen axis.
+            self._pose[:3, 3] += reference[:3, :3][:, dof] * sign * TRANS_STEP
         else:
-            R_delta = _ROT_FNS[dof - 3](sign * ROT_STEP)
-            self._pose[:3, :3] = self._pose[:3, :3] @ R_delta
-            print(f"[nudge] rot key={key!r}  angular={angular_distance(self._pose, TARGET_POSE):.2f}°")
+            # Update one displayed Euler component, then reconstruct the live
+            # orientation. Post-multiplying a delta at an arbitrary orientation
+            # would make multiple displayed components change at once.
+            errors = component_errors(self._pose, reference)
+            angles = np.radians([
+                errors["roll"], errors["pitch"], errors["yaw"]
+            ])
+            angles[dof - 3] += sign * ROT_STEP
+            self._pose[:3, :3] = reference[:3, :3] @ (
+                _rot_x(angles[0]) @ _rot_y(angles[1]) @ _rot_z(angles[2])
+            )
+            print(
+                f"[nudge] rot key={key!r}  "
+                f"angular={angular_distance(self._pose, reference):.2f}°"
+            )
 
     def disconnect(self):
         pass
@@ -110,12 +127,16 @@ async def _competition_handler(websocket, fetcher, modality="1d", frame="transdu
         comp["hold_start"] = None
         comp["start_time"] = time.monotonic()
         trial.target_pose  = _random_target_pose(comp["origin"])
+        if hasattr(fetcher, "randomize"):
+            fetcher.randomize(comp["origin"])
         trial.start()
 
     def _new_target() -> None:
         if comp["calibrated"] and not comp["game_over"]:
             comp["hold_start"] = None
             trial.target_pose  = _random_target_pose(comp["origin"])
+            if hasattr(fetcher, "randomize"):
+                fetcher.randomize(comp["origin"])
             trial.start()
 
     def _reset() -> None:
@@ -157,6 +178,8 @@ async def _competition_handler(websocket, fetcher, modality="1d", frame="transdu
                     if hold_progress >= 1.0:
                         comp["hit_count"] += 1
                         trial.target_pose  = _random_target_pose(comp["origin"])
+                        if hasattr(fetcher, "randomize"):
+                            fetcher.randomize(comp["origin"])
                         trial.start()
                         comp["hold_start"] = None
                 else:
@@ -208,6 +231,29 @@ async def _competition_handler(websocket, fetcher, modality="1d", frame="transdu
                     comp["viewpoint_pose"].tolist()
                     if comp["viewpoint_pose"] is not None else None
                 )
+                if comp["origin"] is not None and live_pose_arr is not None:
+                    state["live_workspace_components"] = component_errors(
+                        live_pose_arr, comp["origin"]
+                    )
+                    state["target_workspace_components"] = component_errors(
+                        trial.target_pose, comp["origin"]
+                    )
+                    state["workspace_component_errors"] = workspace_component_errors(
+                        live_pose_arr, trial.target_pose, comp["origin"]
+                    )
+                    state["workspace_component_aligned"] = {
+                        name: abs(value) <= (
+                            LINEAR_TOL if name in ("x", "y", "z")
+                            else trial.angular_tol
+                        )
+                        for name, value
+                        in state["workspace_component_errors"].items()
+                    }
+                else:
+                    state["live_workspace_components"] = None
+                    state["target_workspace_components"] = None
+                    state["workspace_component_errors"] = None
+                    state["workspace_component_aligned"] = None
 
             await websocket.send(json.dumps(state))
             await asyncio.sleep(STEP_INTERVAL)
@@ -220,7 +266,11 @@ async def _competition_handler(websocket, fetcher, modality="1d", frame="transdu
                 cmd  = data.get("cmd")
 
                 if key and hasattr(fetcher, "nudge"):
-                    fetcher.nudge(key)
+                    control_reference = (
+                        comp["origin"] if comp["origin"] is not None
+                        else trial.target_pose
+                    )
+                    fetcher.nudge(key, control_reference)
 
                 if cmd == "calibrate":
                     live_pose = fetcher.get_pose()
@@ -427,6 +477,7 @@ async def main(fetcher_cls, mode, modality, frame="transducer"):
                 f"[{fetcher_cls.__name__}, {mode}, {modality}]"
             )
             print(f"1D UI:     http://{HOST}:{HTTP_PORT}/index.html")
+            print(f"2D UI:     http://{HOST}:{HTTP_PORT}/index-2d.html")
             print(f"3D UI:     http://{HOST}:{HTTP_PORT}/index-3d.html")
             await asyncio.Future()
     finally:

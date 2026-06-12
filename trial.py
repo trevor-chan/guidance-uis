@@ -9,7 +9,7 @@ import time
 import numpy as np
 
 from pose_fetcher import LivePoseFetcher
-from pose_math import linear_distance, angular_distance
+from pose_math import angular_distance, component_errors, linear_distance
 
 
 TARGET_POSE = np.array([
@@ -56,11 +56,22 @@ class Trial:
                 "timed_out": elapsed >= TIMEOUT_SECONDS,
                 "elapsed": elapsed,
                 "live_pose": None,
+                "components": None,
+                "component_aligned": {name: False for name in (
+                    "x", "y", "z", "roll", "pitch", "yaw"
+                )},
             }
 
         lin = linear_distance(live_pose, self.target_pose)
         ang = angular_distance(live_pose, self.target_pose)
         matched = lin <= self.linear_tol and ang <= self.angular_tol
+        components = component_errors(live_pose, self.target_pose)
+        component_aligned = {
+            name: abs(value) <= (
+                self.linear_tol if name in ("x", "y", "z") else self.angular_tol
+            )
+            for name, value in components.items()
+        }
 
         return {
             "linear": lin,
@@ -69,4 +80,6 @@ class Trial:
             "timed_out": elapsed >= TIMEOUT_SECONDS,
             "elapsed": elapsed,
             "live_pose": live_pose.tolist(),
+            "components": components,
+            "component_aligned": component_aligned,
         }

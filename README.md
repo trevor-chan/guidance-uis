@@ -31,6 +31,11 @@ captures the current tracker transform and makes it the center and orientation
 of the 50 x 50 x 50 cm workspace. The live transducer then follows the incoming
 SteamVR pose, and targets are generated within +/-25 cm on each calibrated axis.
 
+The 2D reticle interface is available at
+`http://localhost:8000/index-2d.html`. It renders the current pose in red and
+the target in black, with separate visual cues and alignment status for all six
+translation and rotation axes.
+
 The real tracker pose is corrected using `calibration.py`. Its fixed transform
 maps the Vive tracker to the phased-array imaging plane, applies the coordinate
 basis and virtual-source corrections, then shifts another 8 cm along negative
