@@ -151,8 +151,8 @@ async def _competition_handler(websocket, fetcher, modality="1d", frame="transdu
         trial.target_pose     = TARGET_POSE
         trial.start()
 
-    # For 3D: track the first valid pose as pre-calibration scene reference.
-    scene_origin = fetcher.get_pose() if modality == "3d" else None
+    # For 2D/3D: track the first valid pose as pre-calibration scene reference.
+    scene_origin = fetcher.get_pose() if modality in ("2d", "3d") else None
 
     async def send_loop():
         nonlocal scene_origin
@@ -208,7 +208,7 @@ async def _competition_handler(websocket, fetcher, modality="1d", frame="transdu
             state["comp_time_remaining"] = tr
             state["mode"]                = "competition"
 
-            if modality == "3d":
+            if modality in ("2d", "3d"):
                 # trial.step() does not include live_pose; fetch it directly so
                 # the 3D renderer has the matrix and tracker_visible is correct.
                 live_pose_arr = fetcher.get_pose()
@@ -425,9 +425,10 @@ async def _study_handler(websocket, fetcher, runner):
 # ── Transport layer ────────────────────────────────────────────────────────────
 
 async def handler(websocket, fetcher_cls, mode, modality, frame="transducer"):
-    if mode == "study" and modality == "3d":
-        print("Rejected connection: --study --modality 3d is not yet implemented.")
-        await websocket.close(1011, "--study --modality 3d is not yet implemented")
+    if mode == "study" and modality in ("2d", "3d"):
+        msg = f"--study --modality {modality} is not yet implemented"
+        print(f"Rejected connection: {msg}.")
+        await websocket.close(1011, msg)
         return
 
     fetcher = fetcher_cls()
@@ -490,12 +491,12 @@ if __name__ == "__main__":
     g = p.add_mutually_exclusive_group(required=True)
     g.add_argument("--study",       action="store_true", help="Run in study mode")
     g.add_argument("--competition", action="store_true", help="Run in competition mode")
-    p.add_argument("--modality", choices=["1d", "3d"], default="1d",
-                   help="Rendering modality: 1d (bar-graph, default) or 3d (Three.js)")
+    p.add_argument("--modality", choices=["1d", "2d", "3d"], default="1d",
+                   help="Rendering modality: 1d (bar-graph, default), 2d (reticle), or 3d (Three.js)")
     p.add_argument("--fake", action="store_true",
                    help="Use FakePoseFetcher instead of TrackerPoseFetcher (no SteamVR needed)")
     p.add_argument("--frame", choices=["user", "patient", "transducer"], default="transducer",
-                   help="3D camera reference frame (competition --modality 3d only): "
+                   help="3D camera reference frame (competition --modality 3d only; ignored for 2d): "
                         "transducer=camera rides probe, user/patient=locked at calib pose")
     args = p.parse_args()
 
@@ -503,7 +504,7 @@ if __name__ == "__main__":
     modality    = args.modality
     fetcher_cls = FakePoseFetcher if args.fake else TrackerPoseFetcher
 
-    if mode == "study" and modality == "3d":
-        p.error("--study --modality 3d is not yet implemented")
+    if mode == "study" and modality in ("2d", "3d"):
+        p.error(f"--study --modality {modality} is not yet implemented")
 
     asyncio.run(main(fetcher_cls, mode, modality, args.frame))
