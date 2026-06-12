@@ -1031,6 +1031,44 @@
           liveGroup.matrix.identity();
           liveGroup.matrixWorldNeedsUpdate = true;
         }
+      } else if (referenceFrame === 'hybrid') {
+        // Hybrid: translation-only inverse on world; probe renders at origin with live rotation.
+        //
+        // _lastLiveMatrix = DISPLAY_FRAME_MATRIX × (refPose⁻¹ × livePose) = [R | t]
+        // txWorldGroup gets makeTranslation(-tx,-ty,-tz): cancels probe position so it
+        // stays centred, but rotation is NOT inverted — both probe and world share the
+        // same fixed-orientation reference frame and the probe visibly rotates on screen.
+        // liveGroup gets the rotation-only part of _lastLiveMatrix (translation zeroed):
+        // probe sits at scene origin but shows its actual orientation.
+        //
+        // Ghost alignment at true match: T(-t)×DFM×(ref⁻¹×target)=T(-t)×M=[R|0]=liveGroup ✓
+        // Cached-pose pattern mirrors transducer to avoid stale-frame flicker.
+        controls.enabled = false;
+        if (frameNeedsInit) {
+          activeCamera.position.set(-0.25, 0, 0.10);
+          activeCamera.up.set(0, 0, 1);
+          activeCamera.lookAt(0, 0, 0);
+          const otherCam = isPerspective ? orthoCamera : camera;
+          otherCam.position.set(-0.25, 0, 0.10);
+          otherCam.up.set(0, 0, 1);
+          otherCam.lookAt(0, 0, 0);
+          _swayBase.set(-0.25, 0, 0.10);
+          controls.target.set(0, 0, 0);
+          frameNeedsInit = false;
+        }
+        if (liveGroup.visible) {
+          // In Three.js column-major Matrix4, elements[12..14] hold the translation.
+          const tx = _lastLiveMatrix.elements[12];
+          const ty = _lastLiveMatrix.elements[13];
+          const tz = _lastLiveMatrix.elements[14];
+          txWorldGroup.matrix.makeTranslation(-tx, -ty, -tz);
+          txWorldGroup.matrixWorldNeedsUpdate = true;
+          liveGroup.matrix.copy(_lastLiveMatrix);
+          liveGroup.matrix.elements[12] = 0;
+          liveGroup.matrix.elements[13] = 0;
+          liveGroup.matrix.elements[14] = 0;
+          liveGroup.matrixWorldNeedsUpdate = true;
+        }
       } else {
         controls.enabled = true;
         txWorldGroup.matrix.identity();

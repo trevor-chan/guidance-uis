@@ -443,9 +443,10 @@ if __name__ == "__main__":
                    help="Rendering modality: 1d (bar-graph, default) or 3d (Three.js)")
     p.add_argument("--fake", action="store_true",
                    help="Use FakePoseFetcher instead of TrackerPoseFetcher (no SteamVR needed)")
-    p.add_argument("--frame", choices=["user", "patient", "transducer"], default="transducer",
+    p.add_argument("--frame", choices=["user", "patient", "transducer", "hybrid"], default="transducer",
                    help="3D camera reference frame (competition --modality 3d only): "
-                        "transducer=camera rides probe, user/patient=locked at calib pose")
+                        "transducer=camera rides probe (world rotates), hybrid=probe rotates in place, "
+                        "user/patient=locked at calib pose")
     args = p.parse_args()
 
     mode        = "study" if args.study else "competition"
