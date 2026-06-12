@@ -1006,17 +1006,17 @@
         controls.enabled = false;
         if (frameNeedsInit) {
           // Over-the-shoulder view from behind/above the probe.
-          // position=(-0.25, 0, 0.10): 0.25 m behind (-X) and 0.10 m above (+Z).
+          // position=(-0.40, 0, 0.10): 0.40 m behind (-X) and 0.10 m above (+Z).
           // lookAt=(0,0,0): probe at origin. up=(0,0,1): probe's TOP axis, so
           // the transducer face (+X) points away, top faces up, no roll.
-          activeCamera.position.set(-0.25, 0, 0.10);
+          activeCamera.position.set(-0.40, 0, 0.10);
           activeCamera.up.set(0, 0, 1);
           activeCamera.lookAt(0, 0, 0);
           const otherCam = isPerspective ? orthoCamera : camera;
-          otherCam.position.set(-0.25, 0, 0.10);
+          otherCam.position.set(-0.40, 0, 0.10);
           otherCam.up.set(0, 0, 1);
           otherCam.lookAt(0, 0, 0);
-          _swayBase.set(-0.25, 0, 0.10);
+          _swayBase.set(-0.40, 0, 0.10);
           controls.target.set(0, 0, 0);
           frameNeedsInit = false;
         }
@@ -1045,14 +1045,14 @@
         // Cached-pose pattern mirrors transducer to avoid stale-frame flicker.
         controls.enabled = false;
         if (frameNeedsInit) {
-          activeCamera.position.set(-0.25, 0, 0.10);
+          activeCamera.position.set(-0.40, 0, 0.10);
           activeCamera.up.set(0, 0, 1);
           activeCamera.lookAt(0, 0, 0);
           const otherCam = isPerspective ? orthoCamera : camera;
-          otherCam.position.set(-0.25, 0, 0.10);
+          otherCam.position.set(-0.40, 0, 0.10);
           otherCam.up.set(0, 0, 1);
           otherCam.lookAt(0, 0, 0);
-          _swayBase.set(-0.25, 0, 0.10);
+          _swayBase.set(-0.40, 0, 0.10);
           controls.target.set(0, 0, 0);
           frameNeedsInit = false;
         }
