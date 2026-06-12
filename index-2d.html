@@ -255,11 +255,9 @@
           <!-- Black target pose -->
           <g id="target-cross">
             <line class="target-line" x1="-150" y1="0" x2="150" y2="0"/>
-            <line class="target-line" x1="0" y1="-40" x2="0" y2="40"/>
+            <line class="target-line" id="target-cross-tick" x1="0" y1="0" x2="0" y2="40"/>
           </g>
           <g id="target-orientation">
-            <line class="target-line" id="target-orientation-arm"
-                  x1="355" y1="260" x2="355" y2="260"/>
             <circle class="target-line" id="target-orientation-circle"
                     cx="355" cy="260" r="25"/>
           </g>
@@ -267,13 +265,11 @@
           <!-- Red current translation and roll -->
           <g id="current-cross">
             <line class="current-line" x1="-150" y1="0" x2="150" y2="0"/>
-            <line class="current-line" x1="0" y1="-40" x2="0" y2="40"/>
+            <line class="current-line" id="current-cross-tick" x1="0" y1="0" x2="0" y2="40"/>
           </g>
 
           <!-- Red pitch/yaw orientation marker -->
           <g id="current-orientation">
-            <line class="current-line" id="orientation-arm"
-                  x1="355" y1="260" x2="355" y2="260"/>
             <circle class="current-line" id="orientation-circle"
                     cx="355" cy="260" r="25"/>
           </g>
@@ -284,8 +280,8 @@
                 x1="671" y1="260" x2="699" y2="260"/>
           <line class="current-line" id="current-depth"
                 x1="671" y1="260" x2="699" y2="260"/>
-          <text class="axis-label" x="704" y="266">Z</text>
-          <text class="axis-label" x="342" y="500">X / Y RETICLE</text>
+          <text class="axis-label" x="704" y="266">X</text>
+          <text class="axis-label" x="342" y="500">Y / Z RETICLE</text>
         </svg>
       </div>
 
@@ -301,12 +297,12 @@
 
     <section class="card controls">
       <div class="key-grid">
-        <span><kbd>D</kbd>/<kbd>A</kbd> X +/-</span>
-        <span><kbd>W</kbd>/<kbd>S</kbd> Y +/-</span>
-        <span><kbd>Q</kbd>/<kbd>E</kbd> Z +/-</span>
-        <span><kbd>U</kbd>/<kbd>O</kbd> Roll +/-</span>
-        <span><kbd>I</kbd>/<kbd>K</kbd> Pitch +/-</span>
-        <span><kbd>J</kbd>/<kbd>L</kbd> Yaw +/-</span>
+        <span><kbd>1</kbd>/<kbd>Q</kbd> X +/-</span>
+        <span><kbd>2</kbd>/<kbd>W</kbd> Y +/-</span>
+        <span><kbd>3</kbd>/<kbd>E</kbd> Z +/-</span>
+        <span><kbd>4</kbd>/<kbd>R</kbd> Roll +/-</span>
+        <span><kbd>5</kbd>/<kbd>T</kbd> Pitch +/-</span>
+        <span><kbd>6</kbd>/<kbd>Y</kbd> Yaw +/-</span>
       </div>
       <div class="tracker-help" id="tracker-help">
         Move the physical tracker to align the red current reticle with black.
@@ -323,7 +319,15 @@
 
   <script>
     const WS_URL = "ws://localhost:8765";
-    const TRIGGER_KEYS = new Set("adwsqeuokijl".split(""));
+    const TRIGGER_KEYS = new Set("123456qwerty".split(""));
+    const KEY_TRANSLATE = {
+      '1': 'd', 'q': 'a',
+      '2': 'w', 'w': 's',
+      '3': 'q', 'e': 'e',
+      '4': 'u', 'r': 'o',
+      '5': 'i', 't': 'k',
+      '6': 'j', 'y': 'l',
+    };
     const AXES = ["x", "y", "z", "roll", "pitch", "yaw"];
     const CENTER_X = 355;
     const CENTER_Y = 260;
@@ -333,9 +337,9 @@
     const targetCross = document.getElementById("target-cross");
     const currentDepth = document.getElementById("current-depth");
     const targetDepth = document.getElementById("target-depth");
-    const orientationArm = document.getElementById("orientation-arm");
+    const currentCrossTick = document.getElementById("current-cross-tick");
     const orientationCircle = document.getElementById("orientation-circle");
-    const targetOrientationArm = document.getElementById("target-orientation-arm");
+    const targetCrossTick = document.getElementById("target-cross-tick");
     const targetOrientationCircle = document.getElementById("target-orientation-circle");
     const alignedValue = document.getElementById("aligned-value");
     const sourceStatus = document.getElementById("source-status");
@@ -363,28 +367,28 @@
     }
 
     function setPoseVisual(elements, pose) {
-      const screenX = scaled(pose.x, TRANSLATION_RANGE_M, 145);
-      const screenY = -scaled(pose.y, TRANSLATION_RANGE_M, 145);
+      const screenX = scaled(pose.y, TRANSLATION_RANGE_M, 145);
+      const screenY = -scaled(pose.z, TRANSLATION_RANGE_M, 145);
       const centerX = CENTER_X + screenX;
       const centerY = CENTER_Y + screenY;
 
       elements.cross.setAttribute(
         "transform",
-        `translate(${centerX} ${centerY}) rotate(${pose.roll})`
+        `translate(${centerX} ${centerY}) rotate(${pose.roll + 180})`
       );
 
-      const depthY = CENTER_Y - scaled(pose.z, TRANSLATION_RANGE_M, 185);
+      const flipped = Math.cos(pose.roll * Math.PI / 180) > 0;
+      elements.tick.setAttribute("y1", flipped ? -40 : 0);
+      elements.tick.setAttribute("y2", flipped ? 0 : 40);
+
+      const depthY = CENTER_Y - scaled(pose.x, TRANSLATION_RANGE_M, 185);
       elements.depth.setAttribute("y1", depthY);
       elements.depth.setAttribute("y2", depthY);
 
       const yawX = scaled(pose.yaw, 180, 85);
-      const pitchY = -scaled(pose.pitch, 90, 85);
+      const pitchY = -scaled(pose.pitch, 180, 85);
       const markerX = centerX + yawX;
       const markerY = centerY + pitchY;
-      elements.arm.setAttribute("x1", centerX);
-      elements.arm.setAttribute("y1", centerY);
-      elements.arm.setAttribute("x2", markerX);
-      elements.arm.setAttribute("y2", markerY);
       elements.circle.setAttribute("cx", markerX);
       elements.circle.setAttribute("cy", markerY);
     }
@@ -398,13 +402,13 @@
       setPoseVisual({
         cross: targetCross,
         depth: targetDepth,
-        arm: targetOrientationArm,
+        tick: targetCrossTick,
         circle: targetOrientationCircle,
       }, targetPose);
       setPoseVisual({
         cross: currentCross,
         depth: currentDepth,
-        arm: orientationArm,
+        tick: currentCrossTick,
         circle: orientationCircle,
       }, livePose);
 
@@ -494,7 +498,7 @@
       const key = event.key.toLowerCase();
       if (TRIGGER_KEYS.has(key)) {
         event.preventDefault();
-        send({ key });
+        send({ key: KEY_TRANSLATE[key] });
       }
     });
 
