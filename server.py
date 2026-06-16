@@ -318,6 +318,87 @@ async def _competition_handler(websocket, fetcher, modality="1d", frame="transdu
         pass
 
 
+# ── Set-Box calibration test (throwaway — only active under --setbox flag) ─────
+#
+# HEAD_OFFSET_M:    distance (m) from the tracker-origin to the scanning head.
+# HEAD_OFFSET_AXIS: which transducer local column to travel along (0=X red, 1=Y green, 2=Z blue).
+# HEAD_OFFSET_SIGN: +1 or -1; flip if the offset points the wrong way on the rig.
+#
+# Axis mapping from transducer frame to box frame (box sits above bottom-face center):
+#   transducer X (red,   col 0) → box −Z  (box +Z opposes red; volume 0 → +10 cm in box-Z)
+#   transducer Y (green, col 1) → box +X  (lateral,  −12.5 → +12.5 cm)
+#   transducer Z (blue,  col 2) → box −Y  (elevation negated to keep frame right-handed)
+#
+# Basis: bX=+Y_t, bY=−Z_t, bZ=−X_t → det([+Y_t|−Z_t|−X_t])=det([Y_t|Z_t|X_t])=+1 (RH ✓)
+
+HEAD_OFFSET_M    = 0.07   # metres — change this constant to adjust head offset
+HEAD_OFFSET_AXIS = 0      # 0=X(red) toward scanning head; flip sign below if wrong
+HEAD_OFFSET_SIGN = +1     # set to -1 if the offset moves away from the head
+
+BOX_HALF_XY = 0.125   # ±12.5 cm in box X and Y
+BOX_DEPTH_Z = 0.10    # +10 cm in box Z (scanning depth direction)
+
+
+async def _setbox_handler(websocket, fetcher):
+    """Minimal set-box test handler: stream live pose, handle set_box command."""
+    state = {"box_matrix": None}
+
+    async def send_loop():
+        while True:
+            live_pose_arr = fetcher.get_pose()
+            msg = {
+                "mode":         "setbox",
+                "source_label": fetcher.source_label,
+                "live_pose":    live_pose_arr.tolist() if live_pose_arr is not None else None,
+                "box_matrix":   state["box_matrix"],
+            }
+            await websocket.send(json.dumps(msg))
+            await asyncio.sleep(STEP_INTERVAL)
+
+    async def recv_loop():
+        async for raw in websocket:
+            try:
+                data = json.loads(raw)
+                if data.get("key") and hasattr(fetcher, "nudge"):
+                    fetcher.nudge(data["key"])
+                if data.get("cmd") == "set_box":
+                    pose = fetcher.get_pose()
+                    if pose is None:
+                        await websocket.send(json.dumps({"error": "tracker_not_visible"}))
+                        continue
+                    # Step 1: translate origin along local HEAD_OFFSET_AXIS to scanning head.
+                    head_pos = (
+                        pose[:3, 3]
+                        + pose[:3, HEAD_OFFSET_AXIS] * HEAD_OFFSET_SIGN * HEAD_OFFSET_M
+                    )
+                    # Step 2: build box world matrix.
+                    #   box +X ←  transducer Y (col 1, green)    lateral
+                    #   box +Y ← −transducer Z (col 2, blue)     elevation (negated → RH)
+                    #   box +Z ← −transducer X (col 0, red)      opposes red; volume 0→+10 cm
+                    #   origin  = box centroid = head_pos + half depth along box +Z
+                    bX =  pose[:3, 1].copy()
+                    bY = -pose[:3, 2].copy()
+                    bZ = -pose[:3, 0].copy()
+                    centroid = head_pos + (BOX_DEPTH_Z / 2) * bZ
+                    box_mat = np.eye(4)
+                    box_mat[:3, 0] = bX
+                    box_mat[:3, 1] = bY
+                    box_mat[:3, 2] = bZ
+                    box_mat[:3, 3] = centroid
+                    state["box_matrix"] = box_mat.tolist()
+                    print(
+                        f"[SETBOX] head_pos: ({head_pos[0]:+.3f}, {head_pos[1]:+.3f}, {head_pos[2]:+.3f}) m\n"
+                        f"         centroid: ({centroid[0]:+.3f}, {centroid[1]:+.3f}, {centroid[2]:+.3f}) m"
+                    )
+            except (json.JSONDecodeError, AttributeError):
+                pass
+
+    try:
+        await asyncio.gather(send_loop(), recv_loop())
+    except websockets.exceptions.ConnectionClosed:
+        pass
+
+
 # ── Study mode ─────────────────────────────────────────────────────────────────
 
 async def _study_handler(websocket, fetcher, runner):
@@ -466,6 +547,20 @@ async def handler(websocket, fetcher_cls, mode, modality, frame="transducer", di
             fetcher.disconnect()
             print("Client disconnected.")
 
+    elif mode == "setbox":
+        try:
+            fetcher.connect()
+        except Exception as exc:
+            print(f"Fetcher connect failed: {exc}")
+            await websocket.close(1011, "tracker unavailable")
+            return
+        print(f"Client connected ({type(fetcher).__name__}) — setbox mode.")
+        try:
+            await _setbox_handler(websocket, fetcher)
+        finally:
+            fetcher.disconnect()
+            print("Client disconnected.")
+
     else:  # study (1d only at this point)
         runner = SequenceRunner(fetcher, n_trials=N_STUDY_TRIALS, archiver=NoOpArchiver())
         try:
@@ -500,6 +595,8 @@ async def main(fetcher_cls, mode, modality, frame="transducer", diagnostic=False
             print(f"1D UI:     http://{HOST}:{HTTP_PORT}/index.html")
             print(f"2D UI:     http://{HOST}:{HTTP_PORT}/index-2d.html")
             print(f"3D UI:     http://{HOST}:{HTTP_PORT}/index-3d.html")
+            if mode == "setbox":
+                print(f"Setbox UI: http://{HOST}:{HTTP_PORT}/setbox.html")
             await asyncio.Future()
     finally:
         http_server.shutdown()
@@ -511,6 +608,8 @@ if __name__ == "__main__":
     g = p.add_mutually_exclusive_group(required=True)
     g.add_argument("--study",       action="store_true", help="Run in study mode")
     g.add_argument("--competition", action="store_true", help="Run in competition mode")
+    g.add_argument("--setbox",      action="store_true",
+                   help="[THROWAWAY] Box calibration test: capture transducer pose → render 3D bounding box")
     p.add_argument("--modality", choices=["1d", "2d", "3d"], default="1d",
                    help="Rendering modality: 1d (bar-graph, default), 2d (reticle), or 3d (Three.js)")
     p.add_argument("--fake", action="store_true",
@@ -523,7 +622,7 @@ if __name__ == "__main__":
                    help="Print live pose (position + basis axes) to terminal at ~3 Hz for coordinate-system verification")
     args = p.parse_args()
 
-    mode        = "study" if args.study else "competition"
+    mode        = "setbox" if args.setbox else ("study" if args.study else "competition")
     modality    = args.modality
     fetcher_cls = FakePoseFetcher if args.fake else TrackerPoseFetcher
 
