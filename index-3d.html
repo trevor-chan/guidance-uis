@@ -198,6 +198,38 @@
       height: 0%;
       background: var(--success);
     }
+    /* ── Study overlay ── */
+    #study-card-3d { display: none; }
+    .study-phase-3d { display: none; }
+    .study-heading-3d {
+      font-size: 0.72rem; text-transform: uppercase; letter-spacing: 0.1em;
+      color: var(--dim); text-align: center; margin-bottom: 14px;
+    }
+    .study-prompt-3d {
+      font-size: 0.9rem; text-align: center; line-height: 1.6; margin-bottom: 16px;
+    }
+    .study-card-btn-3d {
+      display: block; width: 100%; padding: 10px 0;
+      background: #2a2a2a; color: var(--text);
+      border: 1px solid #444; border-radius: 6px;
+      font: 0.8rem "Courier New", monospace;
+      letter-spacing: 0.08em; text-transform: uppercase; cursor: pointer;
+      transition: background 120ms; margin-top: 4px;
+    }
+    .study-card-btn-3d:hover { background: #383838; }
+    .study-card-btn-3d:disabled { opacity: 0.35; cursor: default; }
+    .rating-row-3d { display: flex; gap: 8px; justify-content: center; }
+    .rating-row-3d button {
+      flex: 1; padding: 10px 0; max-width: 60px;
+      background: #2a2a2a; border: 1px solid #444; border-radius: 6px;
+      color: var(--text); font: bold 1.1rem "Courier New", monospace; cursor: pointer;
+    }
+    .rating-row-3d button:hover { background: #383838; }
+    .rating-row-3d button:disabled { opacity: 0.35; cursor: default; }
+    #study-trial-label-3d { font-size: 0.82rem; color: var(--dim); text-align: center;
+                            letter-spacing: 0.08em; text-transform: uppercase; }
+    #calib-img-3d { max-width: 100%; border-radius: 4px; background: #2a2a2a;
+                    display: block; margin: 0 auto 14px; }
   </style>
   <script type="importmap">
     {
@@ -210,6 +242,40 @@
 <body>
   <main>
     <h1>3D POSE GUIDANCE</h1>
+
+    <!-- Study overlay card (shown in study mode, hidden in competition) -->
+    <section class="card" id="study-card-3d">
+      <div class="study-phase-3d" id="s3-cal">
+        <div class="study-heading-3d">Study Mode — Calibrate</div>
+        <img src="assets/calib_user_reference.png" id="calib-img-3d" alt="Calibration reference">
+        <p class="study-prompt-3d">Orient probe as shown. Press Calibrate when ready.</p>
+        <button class="study-card-btn-3d" id="btn-3d-calibrate">Calibrate</button>
+      </div>
+      <div class="study-phase-3d" id="s3-practice">
+        <div class="study-heading-3d">Study Mode — Practice</div>
+        <p class="study-prompt-3d">Practice phase. Move the probe freely.<br>Press Ready when comfortable.</p>
+        <button class="study-card-btn-3d" id="btn-3d-practice-done">Ready</button>
+      </div>
+      <div class="study-phase-3d" id="s3-trial">
+        <div class="study-heading-3d">Study Mode</div>
+        <p id="study-trial-label-3d">Trial 1 of 3</p>
+      </div>
+      <div class="study-phase-3d" id="s3-pref">
+        <div class="study-heading-3d">Study Mode — Preference</div>
+        <p class="study-prompt-3d">Rate this interface (1–5):</p>
+        <div class="rating-row-3d" id="rating-row-3d">
+          <button data-r="1">1</button>
+          <button data-r="2">2</button>
+          <button data-r="3">3</button>
+          <button data-r="4">4</button>
+          <button data-r="5">5</button>
+        </div>
+      </div>
+      <div class="study-phase-3d" id="s3-done">
+        <div class="study-heading-3d">Study Mode</div>
+        <p class="study-prompt-3d" style="color:#4ade80">Block complete. Returning to launcher…</p>
+      </div>
+    </section>
 
     <section class="card scoreboard">
       <div class="stat">
@@ -278,6 +344,9 @@
 
     const WS_URL = "ws://localhost:8765";
     const MODEL_URL = "./assets/transducer.obj";
+    const _p3 = new URLSearchParams(window.location.search);
+    const _isStudy3    = _p3.get("study") === "1";
+    const _studyFrame3 = _p3.get("frame") || "transducer";
     const MODEL_SCALE = 0.01; // The supplied OBJ is modeled in centimeters.
     const MODEL_Z_ROTATION = -Math.PI / 2; // Visual alignment only.
     const DISPLAY_FRAME_X_ROTATION = -Math.PI / 2; // Local Z is visually vertical.
@@ -592,12 +661,71 @@
       }
     }
 
+    // ── Study renderer (3D) ──────────────────────────────────────────────────
+    const _s3Phases = ["s3-cal", "s3-practice", "s3-trial", "s3-pref", "s3-done"];
+    const _scoreboard3 = document.querySelector(".scoreboard").closest(".card");
+    const _controls3   = document.querySelector(".controls").closest(".card");
+    const _studyCard3  = document.getElementById("study-card-3d");
+
+    function renderStudy3D(d) {
+      const act = d.activity_type;
+      if (act === "idle") return;
+
+      _scoreboard3.style.display = "none";
+      _controls3.style.display   = "none";
+      _studyCard3.style.display  = "";
+
+      _s3Phases.forEach(id => document.getElementById(id).style.display = "none");
+
+      if (act === "calibration") {
+        document.getElementById("s3-cal").style.display = "";
+        document.getElementById("calib-img-3d").style.display =
+          (_studyFrame3 === "user") ? "block" : "none";
+      } else if (act === "practice") {
+        document.getElementById("s3-practice").style.display = "";
+      } else if (act === "trial") {
+        document.getElementById("s3-trial").style.display = "";
+        const total = d.n_trials ?? 3;
+        document.getElementById("study-trial-label-3d").textContent =
+          `Trial ${(d.trial_index ?? 0) + 1} of ${total}`;
+      } else if (act === "preference") {
+        document.getElementById("s3-pref").style.display = "";
+        document.querySelectorAll("#rating-row-3d button").forEach(b => b.disabled = false);
+      } else if (act === "complete") {
+        window.location.href = "launcher.html";
+        return;
+      } else {
+        document.getElementById("s3-done").style.display = "";
+      }
+
+      holdBarFill.style.height = `${((d.hold_progress ?? 0) * 100).toFixed(1)}%`;
+
+      if (d.source_mode) {
+        const isTracker = d.source_mode === "tracker";
+        sourceStatus.textContent = isTracker
+          ? `LIVE TRACKER | ${d.source_label} | ${d.stream_rate} Hz`
+          : `FAKE KEYBOARD | ${d.stream_rate} Hz`;
+        sourceStatus.className = d.tracker_visible ? "ok" : "error";
+      }
+
+      poseReadout.textContent = !d.tracker_visible
+        ? "tracker not visible - restore SteamVR tracking before calibrating"
+        : d.linear != null
+          ? `position error ${(d.linear * 100).toFixed(1)} cm | angle error ${d.angular.toFixed(1)} deg`
+          : "";
+    }
+
     function connect() {
       socket = new WebSocket(WS_URL);
 
       socket.onopen = () => {
         connection.textContent = "connected";
         connection.className = "ok";
+        if (_isStudy3) {
+          socket.send(JSON.stringify({
+            cmd: "start_block", modality: "3d", frame: _studyFrame3,
+          }));
+        }
       };
 
       socket.onmessage = event => {
@@ -609,6 +737,7 @@
         }
 
         // ── Reference frame: read once (static for session) ─────────────────
+        // (runs for both competition and study — study sends reference_frame too)
         if (data.reference_frame && data.reference_frame !== referenceFrame) {
           referenceFrame = data.reference_frame;
           frameNeedsInit = true;
@@ -645,17 +774,18 @@
           }
         }
 
-        const isTracker = data.source_mode === "tracker";
-        sourceStatus.textContent = isTracker
-          ? `LIVE TRACKER | ${data.source_label} | ${data.stream_rate} Hz`
-          : `FAKE KEYBOARD | ${data.stream_rate} Hz`;
-        sourceStatus.className = data.tracker_visible ? "ok" : "error";
-        keyGrid.style.display = isTracker ? "none" : "grid";
-        trackerHelp.style.display = isTracker ? "block" : "none";
+        // ── 3D scene update (shared by competition and study) ────────────────
+        if (data.source_mode) {
+          const isTracker = data.source_mode === "tracker";
+          sourceStatus.textContent = isTracker
+            ? `LIVE TRACKER | ${data.source_label} | ${data.stream_rate} Hz`
+            : `FAKE KEYBOARD | ${data.stream_rate} Hz`;
+          sourceStatus.className = data.tracker_visible ? "ok" : "error";
+          keyGrid.style.display = isTracker ? "none" : "grid";
+          trackerHelp.style.display = isTracker ? "block" : "none";
+        }
 
         {
-          // liveGroup is a direct scene child so its matrix must bake the
-          // display rotation that was formerly provided by the displayFrame parent.
           const livePose = matrixFromRows(data.live_pose);
           const refPose  = matrixFromRows(data.reference_pose);
           if (livePose && refPose) {
@@ -678,8 +808,17 @@
 
         poseReadout.textContent = !data.tracker_visible
           ? "tracker not visible - restore SteamVR tracking before calibrating"
-          : `position error ${(data.linear * 100).toFixed(1)} cm | angle error ${data.angular.toFixed(1)} deg`;
+          : data.linear != null
+            ? `position error ${(data.linear * 100).toFixed(1)} cm | angle error ${data.angular.toFixed(1)} deg`
+            : "";
 
+        // ── Mode-specific UI ─────────────────────────────────────────────────
+        if (data.mode === "study") {
+          renderStudy3D(data);
+          return;
+        }
+
+        // Competition
         scoreValue.textContent = data.comp_hits ?? 0;
         holdBarFill.style.height = `${((data.hold_progress ?? 0) * 100).toFixed(1)}%`;
         if (data.comp_game_over) {
@@ -722,6 +861,18 @@
     });
     document.getElementById("new-target").addEventListener("click", () => send({ cmd: "new_target" }));
     document.getElementById("reset").addEventListener("click", () => send({ cmd: "reset" }));
+
+    // Study buttons
+    document.getElementById("btn-3d-calibrate").addEventListener("click",
+      () => send({ cmd: "calibrate" }));
+    document.getElementById("btn-3d-practice-done").addEventListener("click",
+      () => send({ cmd: "practice_done" }));
+    document.querySelectorAll("#rating-row-3d button").forEach(btn => {
+      btn.addEventListener("click", () => {
+        send({ cmd: "rate", rating: parseInt(btn.dataset.r, 10) });
+        document.querySelectorAll("#rating-row-3d button").forEach(b => b.disabled = true);
+      });
+    });
 
     const swayInd = swayBtn.querySelector('.ind');
     swayBtn.addEventListener("click", () => {

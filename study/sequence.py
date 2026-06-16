@@ -11,7 +11,7 @@ import numpy as np
 from pose_fetcher import LivePoseFetcher
 from core import _random_target_pose, LINEAR_TOL, HOLD_DURATION
 
-from .activities import CalibrationActivity, TrialActivity, PreferenceActivity
+from .activities import CalibrationActivity, TrialActivity, PreferenceActivity, PracticeActivity
 from .block import Block
 from .archiver import DataArchiver
 from .reference_frame import ReferenceFrame
@@ -52,6 +52,41 @@ class SequenceGenerator:
             ]
 
         return Block(calibration, trial_factory, preference)
+
+    def make_block(
+        self,
+        modality: str,
+        frame: str,
+        origin: np.ndarray,
+        n_trials: int = 3,
+    ) -> Block:
+        """Build a single study block seeded with a pre-set box origin.
+
+        Calibration is included only for user/patient frames (where the
+        camera reference pose must be captured from the live tracker).
+        All other modes (1d, transducer) skip calibration and seed trials
+        directly from the supplied origin.
+        """
+        needs_calibration = frame in ("user", "patient")
+        calibration = CalibrationActivity(self._fetcher) if needs_calibration else None
+        practice    = PracticeActivity(self._fetcher, origin)
+        preference  = PreferenceActivity()
+        n       = n_trials
+        fetcher = self._fetcher
+
+        def trial_factory(effective_origin: np.ndarray) -> list[TrialActivity]:
+            return [
+                TrialActivity(fetcher, _random_target_pose(effective_origin))
+                for _ in range(n)
+            ]
+
+        return Block(
+            calibration,
+            trial_factory,
+            preference,
+            practice=practice,
+            fallback_origin=origin,
+        )
 
     def make_blocks(self) -> list[Block]:
         """Block list for the 1D study (single block; extend for multi-condition)."""

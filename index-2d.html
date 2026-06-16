@@ -212,11 +212,82 @@
       .controls { grid-template-columns: 1fr; }
       .buttons { flex-wrap: wrap; }
     }
+    /* ── Study overlay ── */
+    #study-card { display: none; }
+    .study-phase { display: none; }
+    .study-heading {
+      font-size: 0.72rem; text-transform: uppercase; letter-spacing: 0.1em;
+      color: var(--dim); text-align: center; margin-bottom: 14px;
+    }
+    .study-prompt {
+      font-size: 0.9rem; text-align: center; line-height: 1.6; margin-bottom: 16px;
+    }
+    .study-card-btn {
+      display: block; width: 100%; padding: 10px 0;
+      background: #2a2a2a; color: var(--text);
+      border: 1px solid #444; border-radius: 6px;
+      font: 0.8rem "Courier New", monospace;
+      letter-spacing: 0.08em; text-transform: uppercase; cursor: pointer;
+      transition: background 120ms; margin-top: 4px;
+    }
+    .study-card-btn:hover { background: #383838; }
+    .study-card-btn:disabled { opacity: 0.35; cursor: default; }
+    .rating-row { display: flex; gap: 8px; justify-content: center; }
+    .rating-row button {
+      flex: 1; padding: 10px 0; max-width: 60px;
+      background: #2a2a2a; border: 1px solid #444; border-radius: 6px;
+      color: var(--text); font: bold 1.1rem "Courier New", monospace; cursor: pointer;
+    }
+    .rating-row button:hover { background: #383838; }
+    .rating-row button:disabled { opacity: 0.35; cursor: default; }
+    #study-trial-label { font-size: 0.82rem; color: var(--dim); text-align: center;
+                         letter-spacing: 0.08em; text-transform: uppercase; }
+    #calib-img { max-width: 100%; border-radius: 4px; background: #2a2a2a;
+                 display: block; margin: 0 auto 14px; }
   </style>
 </head>
 <body>
   <main>
     <h1>2D POSE GUIDANCE</h1>
+
+    <!-- Study overlay card — shown instead of scoreboard+controls in study mode -->
+    <section class="card" id="study-card">
+      <!-- Calibration phase -->
+      <div class="study-phase" id="s2-cal">
+        <div class="study-heading">Study Mode — Calibrate</div>
+        <img src="assets/calib_user_reference.png" id="calib-img" alt="Calibration reference">
+        <p class="study-prompt">Orient probe as shown. Press Calibrate when ready.</p>
+        <button class="study-card-btn" id="btn-2d-calibrate">Calibrate</button>
+      </div>
+      <!-- Practice phase -->
+      <div class="study-phase" id="s2-practice">
+        <div class="study-heading">Study Mode — Practice</div>
+        <p class="study-prompt">Practice phase. Move the probe freely.<br>Press Ready when comfortable.</p>
+        <button class="study-card-btn" id="btn-2d-practice-done">Ready</button>
+      </div>
+      <!-- Trial phase -->
+      <div class="study-phase" id="s2-trial">
+        <div class="study-heading">Study Mode</div>
+        <p id="study-trial-label">Trial 1 of 3</p>
+      </div>
+      <!-- Preference phase -->
+      <div class="study-phase" id="s2-pref">
+        <div class="study-heading">Study Mode — Preference</div>
+        <p class="study-prompt">Rate this interface (1–5):</p>
+        <div class="rating-row" id="rating-row-2d">
+          <button data-r="1">1</button>
+          <button data-r="2">2</button>
+          <button data-r="3">3</button>
+          <button data-r="4">4</button>
+          <button data-r="5">5</button>
+        </div>
+      </div>
+      <!-- Complete phase -->
+      <div class="study-phase" id="s2-done">
+        <div class="study-heading">Study Mode</div>
+        <p class="study-prompt" style="color:#4ade80">Block complete. Returning to launcher…</p>
+      </div>
+    </section>
 
     <section class="card scoreboard">
       <div class="stat">
@@ -325,6 +396,10 @@
     const CENTER_Y = 260;
     const TRANSLATION_RANGE_M = 0.25;
 
+    const _p2 = new URLSearchParams(window.location.search);
+    const _isStudy2    = _p2.get("study") === "1";
+    const _studyFrame2 = _p2.get("frame") || "transducer";
+
     const currentCross = document.getElementById("current-cross");
     const targetCross = document.getElementById("target-cross");
     const currentDepth = document.getElementById("current-depth");
@@ -423,12 +498,73 @@
       }
     }
 
+    // ── Study renderer ──────────────────────────────────────────────────────────
+    const _s2Phases = ["s2-cal", "s2-practice", "s2-trial", "s2-pref", "s2-done"];
+    const _scoreboard = document.querySelector(".scoreboard").closest(".card");
+    const _controls   = document.querySelector(".controls").closest(".card");
+    const _studyCard  = document.getElementById("study-card");
+
+    function renderStudy2D(d) {
+      const act = d.activity_type;
+      if (act === "idle") return;
+
+      _scoreboard.style.display = "none";
+      _controls.style.display   = "none";
+      _studyCard.style.display  = "";
+
+      _s2Phases.forEach(id => document.getElementById(id).style.display = "none");
+
+      if (act === "calibration") {
+        document.getElementById("s2-cal").style.display = "";
+        // Show calibration image only for user frame
+        document.getElementById("calib-img").style.display =
+          (_studyFrame2 === "user") ? "block" : "none";
+      } else if (act === "practice") {
+        document.getElementById("s2-practice").style.display = "";
+      } else if (act === "trial") {
+        document.getElementById("s2-trial").style.display = "";
+        const total = d.n_trials ?? 3;
+        document.getElementById("study-trial-label").textContent =
+          `Trial ${(d.trial_index ?? 0) + 1} of ${total}`;
+      } else if (act === "preference") {
+        document.getElementById("s2-pref").style.display = "";
+        document.querySelectorAll("#rating-row-2d button").forEach(b => b.disabled = false);
+      } else if (act === "complete") {
+        window.location.href = "launcher.html";
+        return;
+      } else {
+        document.getElementById("s2-done").style.display = "";
+      }
+
+      // Always update reticle + hold bar with available data
+      updateReticle(
+        d.workspace_component_errors,
+        d.workspace_component_aligned,
+        d.live_workspace_components,
+        d.target_workspace_components
+      );
+      holdProgress.style.width = `${(d.hold_progress ?? 0) * 100}%`;
+
+      if (d.source_mode) {
+        const isTracker = d.source_mode === "tracker";
+        sourceStatus.textContent = isTracker
+          ? `LIVE TRACKER | ${d.source_label} | ${d.stream_rate} Hz`
+          : `FAKE KEYBOARD | ${d.stream_rate} Hz`;
+        sourceStatus.className = d.tracker_visible ? "ok" : "error";
+      }
+    }
+
     function connect() {
       socket = new WebSocket(WS_URL);
 
       socket.onopen = () => {
         connection.textContent = "connected";
         connection.className = "ok";
+        if (_isStudy2) {
+          socket.send(JSON.stringify({
+            cmd: "start_block", modality: "2d", frame: _studyFrame2,
+          }));
+        }
       };
 
       socket.onmessage = event => {
@@ -439,6 +575,12 @@
           return;
         }
 
+        if (data.mode === "study") {
+          renderStudy2D(data);
+          return;
+        }
+
+        // ── Competition rendering (unchanged) ─────────────────────────────────
         const isTracker = data.source_mode === "tracker";
         sourceStatus.textContent = isTracker
           ? `LIVE TRACKER | ${data.source_label} | ${data.stream_rate} Hz`
@@ -490,9 +632,22 @@
       }
     });
 
-    document.getElementById("calibrate").addEventListener("click", () => send({ cmd: "calibrate" }));
-    document.getElementById("new-target").addEventListener("click", () => send({ cmd: "new_target" }));
-    document.getElementById("reset").addEventListener("click", () => send({ cmd: "reset" }));
+    // Competition buttons
+    document.getElementById("calibrate").addEventListener("click",    () => send({ cmd: "calibrate" }));
+    document.getElementById("new-target").addEventListener("click",   () => send({ cmd: "new_target" }));
+    document.getElementById("reset").addEventListener("click",        () => send({ cmd: "reset" }));
+
+    // Study buttons
+    document.getElementById("btn-2d-calibrate").addEventListener("click",
+      () => send({ cmd: "calibrate" }));
+    document.getElementById("btn-2d-practice-done").addEventListener("click",
+      () => send({ cmd: "practice_done" }));
+    document.querySelectorAll("#rating-row-2d button").forEach(btn => {
+      btn.addEventListener("click", () => {
+        send({ cmd: "rate", rating: parseInt(btn.dataset.r, 10) });
+        document.querySelectorAll("#rating-row-2d button").forEach(b => b.disabled = true);
+      });
+    });
 
     connect();
   </script>

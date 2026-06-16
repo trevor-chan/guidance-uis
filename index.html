@@ -266,10 +266,19 @@
       </div>
     </div>
 
+    <!-- Practice in progress -->
+    <div class="study-phase" id="study-practice-phase">
+      <div class="study-heading">Study Mode</div>
+      <p class="study-prompt">Practice phase. Move the probe freely.<br>Press Ready when comfortable.</p>
+      <div class="comp-buttons">
+        <button class="comp-btn" id="btn-practice-done">Ready</button>
+      </div>
+    </div>
+
     <!-- Trial in progress -->
     <div class="study-phase" id="study-trial-phase">
       <div class="study-heading">Study Mode</div>
-      <p id="trial-progress-label">Trial — of 7</p>
+      <p id="trial-progress-label">Trial — of 3</p>
     </div>
 
     <!-- Preference rating -->
@@ -389,6 +398,10 @@
       }
     }
 
+    const _params     = new URLSearchParams(window.location.search);
+    const _isStudy    = _params.get("study") === "1";
+    const _studyFrame = _params.get("frame") || "none";
+
     function connect() {
       const ws = new WebSocket(WS_URL);
 
@@ -463,35 +476,44 @@
 
       // ── Study renderer ──────────────────────────────────────────────────────
 
-      const STUDY_PHASES = ["study-cal-phase", "study-trial-phase",
-                            "study-pref-phase", "study-done-phase"];
+      const STUDY_PHASES = [
+        "study-cal-phase", "study-practice-phase",
+        "study-trial-phase", "study-pref-phase", "study-done-phase",
+      ];
 
       function renderStudy(d) {
+        const act = d.activity_type;
+        if (act === "idle") return;  // waiting for start_block ack — no-op
+
         document.getElementById("comp-card").style.display   = "none";
         document.getElementById("study-card").style.display  = "block";
 
-        const act      = d.activity_type;
-        const showBars = (act === "trial");
+        const showBars = (act === "trial" || act === "practice");
 
         document.getElementById("bars-card").style.display   = showBars ? "block" : "none";
         document.getElementById("status-card").style.display = showBars ? "block" : "none";
 
-        // Show the correct study sub-phase
         STUDY_PHASES.forEach(id => document.getElementById(id).style.display = "none");
+
         if (act === "calibration") {
-          document.getElementById("study-cal-phase").style.display  = "block";
+          document.getElementById("study-cal-phase").style.display    = "block";
+        } else if (act === "practice") {
+          document.getElementById("study-practice-phase").style.display = "block";
         } else if (act === "trial") {
-          document.getElementById("study-trial-phase").style.display = "block";
+          document.getElementById("study-trial-phase").style.display  = "block";
           if (d.trial_index !== null && d.trial_index !== undefined) {
+            const total = d.n_trials ?? d.trial_count ?? "?";
             document.getElementById("trial-progress-label").textContent =
-                `Trial ${d.trial_index + 1} of ${d.trial_count}`;
+                `Trial ${d.trial_index + 1} of ${total}`;
           }
         } else if (act === "preference") {
-          document.getElementById("study-pref-phase").style.display  = "block";
-          // Re-enable buttons (handles reconnect mid-preference)
+          document.getElementById("study-pref-phase").style.display   = "block";
           document.querySelectorAll(".rating-btn").forEach(b => b.disabled = false);
+        } else if (act === "complete") {
+          window.location.href = "launcher.html";
+          return;
         } else {
-          document.getElementById("study-done-phase").style.display  = "block";
+          document.getElementById("study-done-phase").style.display   = "block";
         }
 
         if (showBars) {
@@ -506,6 +528,9 @@
       ws.onopen = () => {
         statusEl.textContent = "connected";
         statusEl.className   = "ws-ok";
+        if (_isStudy) {
+          ws.send(JSON.stringify({ cmd: "start_block", modality: "1d", frame: _studyFrame }));
+        }
       };
 
       ws.onmessage = (evt) => {
@@ -551,7 +576,8 @@
       document.getElementById("btn-reset").addEventListener("click",      () => sendCmd("reset"));
 
       // ── Study buttons ───────────────────────────────────────────────────────
-      document.getElementById("btn-study-calibrate").addEventListener("click", () => sendCmd("calibrate"));
+      document.getElementById("btn-study-calibrate").addEventListener("click",  () => sendCmd("calibrate"));
+      document.getElementById("btn-practice-done").addEventListener("click",    () => sendCmd("practice_done"));
 
       document.querySelectorAll(".rating-btn").forEach(btn => {
         btn.addEventListener("click", () => {

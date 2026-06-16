@@ -8,8 +8,8 @@
   After Set Box the camera rides the box: placed at box-frame (0, −1.00, +0.50) m
   transformed to world, up = box +Z axis in world, looking at the box centroid.
   Press "Set Box" (or key B) to capture the current transducer pose.
-  The server applies HEAD_OFFSET_M along local X (red) to find the scanning-head
-  origin, then builds the box frame and streams box_matrix back at 30 Hz.
+  get_pose() already returns tip coordinates; the server uses pose[:3,3]
+  directly as the scanning-head origin and streams box_matrix back at 30 Hz.
 -->
 <html lang="en">
 <head>
@@ -90,10 +90,11 @@
     const WS_URL = "ws://localhost:8765";
 
     // Box dimensions in box-local coordinates (X×Y×Z).
-    // Must match BOX_HALF_XY and BOX_DEPTH_Z in server.py.
-    const BOX_W = 0.25;   // box X extent (transducer Y / green axis)
-    const BOX_H = 0.25;   // box Y extent (transducer Z / blue axis)
-    const BOX_D = 0.10;   // box Z extent (transducer X / red axis, scanning depth)
+    // Must match BOX_HALF_XY, BOX_Z_MIN, BOX_Z_MAX, BOX_DEPTH_Z in server.py.
+    const BOX_W   = 0.25;   // box X extent (transducer Y / green axis)
+    const BOX_H   = 0.25;   // box Y extent (transducer Z / blue axis)
+    const BOX_Z_MIN = 0.02; // near face: 2 cm from tip in box-Z
+    const BOX_D   = 0.10;   // box Z total depth (= BOX_Z_MAX − BOX_Z_MIN)
 
     // Camera is fixed.  Up = world +Z (0,0,1).
     // With the camera at Y=−1 looking toward +Y, world +Y is nearly parallel to
@@ -167,7 +168,8 @@
     // ── Box ───────────────────────────────────────────────────────────────────
     // boxGroup.matrix is the box's world transform (set from server's box_matrix).
     // BoxGeometry is centered; box-local Z runs −BOX_D/2 to +BOX_D/2.
-    // Column 2 of box_matrix = −transducer X (red); local Z=−BOX_D/2 maps to head_pos.
+    // Column 2 of box_matrix = −transducer X (red); scanning depth +2→+12 cm from tip.
+    // head_pos (tip) is at box-local Z = −(BOX_Z_MIN + BOX_D/2), i.e. −0.07.
     const boxGroup = new THREE.Group();
     boxGroup.matrixAutoUpdate = false;
     boxGroup.visible = false;
@@ -188,12 +190,13 @@
       })
     ));
 
-    // White dot at head-origin = bottom-face center = box-local (0, 0, −BOX_D/2).
+    // White dot at scanning-head tip = box-local (0, 0, −(BOX_Z_MIN + BOX_D/2)).
+    // This is 2 cm outside (near-side) the box near face.
     const headDot = new THREE.Mesh(
       new THREE.SphereGeometry(0.009, 12, 8),
       new THREE.MeshBasicMaterial({ color: 0xffffff })
     );
-    headDot.position.set(0, 0, -BOX_D / 2);
+    headDot.position.set(0, 0, -(BOX_Z_MIN + BOX_D / 2));
     boxGroup.add(headDot);
 
     // ── Helpers ───────────────────────────────────────────────────────────────
@@ -260,7 +263,7 @@
             liveGroup.visible = true;
             const p = new THREE.Vector3().setFromMatrixPosition(m);
             posEl.textContent =
-              `probe origin: x=${p.x.toFixed(3)}  y=${p.y.toFixed(3)}  z=${p.z.toFixed(3)} m`;
+              `tip origin: x=${p.x.toFixed(3)}  y=${p.y.toFixed(3)}  z=${p.z.toFixed(3)} m`;
           }
         } else {
           liveGroup.visible = false;

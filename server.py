@@ -12,14 +12,14 @@ import time
 import numpy as np
 import websockets
 
-from pose_fetcher import LivePoseFetcher, TrackerPoseFetcher
+from pose_fetcher import LivePoseFetcher, TrackerPoseFetcher, HEAD_OFFSET_M
 from trial import Trial, TARGET_POSE
 from pose_math import angular_distance, component_errors, workspace_component_errors
 from core import (CUBE_SIZE, HOLD_DURATION, LINEAR_TOL,
                   _rot_x, _rot_y, _rot_z, _random_target_pose)
-from study.sequence import SequenceRunner
+from study.sequence import SequenceRunner, SequenceGenerator
 from study.archiver import NoOpArchiver
-from study.activities import PreferenceActivity
+from study.activities import PreferenceActivity, PracticeActivity
 
 HOST = "localhost"
 PORT = 8765
@@ -37,8 +37,12 @@ _KEY_MAP = {
     'r': (3, -1), 't': (4, -1), 'y': (5, -1),
 }
 
-GAME_DURATION  = 180.0   # 3 minutes
-N_STUDY_TRIALS = 7
+GAME_DURATION      = 180.0   # 3 minutes
+N_STUDY_TRIALS     = 7       # competition / legacy headless runner
+STUDY_BLOCK_TRIALS = 3       # trials per multi-mode study block
+
+# Captured by set_box command from launcher.html; persists across WS connections.
+BOX_ORIGIN: np.ndarray | None = None
 
 
 class FakePoseFetcher(LivePoseFetcher):
@@ -61,12 +65,18 @@ class FakePoseFetcher(LivePoseFetcher):
         R_offset = _rot_x(math.radians(12)) @ _rot_y(math.radians(12)) @ _rot_z(math.radians(12))
         self._pose[:3, :3] = R_offset @ TARGET_POSE[:3, :3]
 
-    def get_pose(self):
+    def _raw_pose(self):
         return self._pose.copy()
 
     def randomize(self, origin: np.ndarray) -> None:
-        """Place the fake probe at a random pose inside the calibrated cube."""
-        self._pose = _random_target_pose(origin)
+        """Place the fake probe at a random pose inside the calibrated cube.
+
+        origin is a tip pose.  Stores the raw (transducer-center) pose so that
+        get_pose() (which adds the head offset) lands within the cube.
+        """
+        tip_target = _random_target_pose(origin)
+        self._pose = tip_target.copy()
+        self._pose[:3, 3] -= tip_target[:3, 0] * HEAD_OFFSET_M
 
     def nudge(self, key: str, reference_pose: np.ndarray | None = None) -> None:
         if key not in _KEY_MAP:
@@ -318,25 +328,269 @@ async def _competition_handler(websocket, fetcher, modality="1d", frame="transdu
         pass
 
 
+# ── Multi-mode study handler ───────────────────────────────────────────────────
+
+def _study_blank(activity_type, frame, modality, n_trials, trial_index=None):
+    """Minimal study message for phases with no live reticle data."""
+    return {
+        "mode":                        "study",
+        "activity_type":               activity_type,
+        "frame":                       frame,
+        "modality":                    modality,
+        "linear":                      None,
+        "angular":                     None,
+        "hold_progress":               0.0,
+        "matched":                     False,
+        "timed_out":                   False,
+        "elapsed":                     0.0,
+        "trial_index":                 trial_index,
+        "n_trials":                    n_trials,
+        "comp_calibrated":             False,
+        "live_pose":                   None,
+        "target_pose":                 None,
+        "reference_pose":              None,
+        "reference_frame":             frame,
+        "workspace_component_errors":  None,
+        "workspace_component_aligned": None,
+        "live_workspace_components":   None,
+        "target_workspace_components": None,
+        "source_mode":                 None,
+        "source_label":                None,
+        "stream_rate":                 round(1 / STEP_INTERVAL),
+        "tracker_visible":             False,
+        "cube_size":                   CUBE_SIZE,
+        "viewpoint_pose":              None,
+    }
+
+
+async def _new_study_handler(websocket, fetcher, n_trials=STUDY_BLOCK_TRIALS):
+    """Multi-mode study handler.
+
+    Lifecycle per page visit:
+      launcher  → sends set_box → server sets BOX_ORIGIN → acks → launcher shows mode picker
+      reticle   → sends start_block (modality, frame) → server builds Block → streams at 30 Hz
+    """
+    global BOX_ORIGIN
+
+    session = {
+        "block":                 None,
+        "modality":              "1d",
+        "frame":                 "none",
+        "n_trials":              n_trials,
+        "phase":                 "idle",       # idle|await_calibrate|running|await_preference|complete
+        "calibrate_pending":     False,
+        "practice_done_pending": False,
+        "pending_rating":        None,
+        "preference_act":        None,
+        "practice_act":          None,
+        "trial_index":           None,
+    }
+
+    async def send_loop():
+        while True:
+            phase    = session["phase"]
+            block    = session["block"]
+            modality = session["modality"]
+            frame    = session["frame"]
+            n        = session["n_trials"]
+
+            if phase == "idle":
+                await asyncio.sleep(STEP_INTERVAL)
+                continue
+
+            if phase == "await_calibrate":
+                if session["calibrate_pending"]:
+                    session["calibrate_pending"] = False
+                    block.step()           # CalibrationActivity: captures pose → done immediately
+                    session["phase"] = "running"
+                state = _study_blank("calibration", frame, modality, n)
+                live_arr = fetcher.get_pose()
+                if live_arr is not None:
+                    state["live_pose"]       = live_arr.tolist()
+                    state["tracker_visible"] = True
+                    state["source_mode"]     = fetcher.source_mode
+                    state["source_label"]    = fetcher.source_label
+                await websocket.send(json.dumps(state))
+                await asyncio.sleep(STEP_INTERVAL)
+                continue
+
+            if phase == "running":
+                if session["practice_done_pending"] and session["practice_act"] is not None:
+                    session["practice_done_pending"] = False
+                    session["practice_act"].request_end()
+
+                block_data = block.step()
+                act_type   = block_data["activity_type"]
+                act_data   = block_data["data"]
+
+                if act_type == "practice" and session["practice_act"] is None:
+                    cur = block.current_activity
+                    if hasattr(cur, "request_end"):
+                        session["practice_act"] = cur
+
+                if act_type == "trial":
+                    session["trial_index"] = block_data["trial_index"]
+
+                if isinstance(block.current_activity, PreferenceActivity):
+                    session["phase"]          = "await_preference"
+                    session["preference_act"] = block.current_activity
+                elif block.done:
+                    session["phase"] = "complete"
+
+                state = _study_blank(act_type, frame, modality, n, session["trial_index"])
+                state["linear"]          = act_data.get("linear")
+                state["angular"]         = act_data.get("angular")
+                state["matched"]         = act_data.get("matched", False)
+                state["elapsed"]         = act_data.get("elapsed") or 0.0
+                state["hold_progress"]   = act_data.get("hold_progress", 0.0)
+                state["timed_out"]       = act_data.get("timed_out", False)
+                state["comp_calibrated"] = act_type in ("practice", "trial")
+
+                if modality in ("2d", "3d"):
+                    live_arr = fetcher.get_pose()
+                    origin   = block.origin
+                    cur_act  = block.current_activity
+                    target_arr = (
+                        cur_act.target_pose
+                        if hasattr(cur_act, "target_pose")
+                        else origin
+                    )
+                    state["source_mode"]    = fetcher.source_mode
+                    state["source_label"]   = fetcher.source_label
+                    state["tracker_visible"] = live_arr is not None
+                    state["reference_frame"] = frame
+                    if live_arr is not None:
+                        state["live_pose"] = live_arr.tolist()
+                    if target_arr is not None:
+                        state["target_pose"] = target_arr.tolist()
+                    if origin is not None:
+                        state["reference_pose"] = origin.tolist()
+                    if live_arr is not None and origin is not None and target_arr is not None:
+                        state["live_workspace_components"]   = component_errors(live_arr, origin)
+                        state["target_workspace_components"] = component_errors(target_arr, origin)
+                        state["workspace_component_errors"]  = workspace_component_errors(
+                            live_arr, target_arr, origin
+                        )
+                        state["workspace_component_aligned"] = {
+                            name: abs(val) <= (LINEAR_TOL if name in ("x", "y", "z") else 5.0)
+                            for name, val in state["workspace_component_errors"].items()
+                        }
+
+                await websocket.send(json.dumps(state))
+                await asyncio.sleep(STEP_INTERVAL)
+                continue
+
+            if phase == "await_preference":
+                if session["pending_rating"] is not None:
+                    rating = session["pending_rating"]
+                    session["pending_rating"] = None
+                    if session["preference_act"]:
+                        session["preference_act"].set_rating(rating)
+                    block.step()              # PreferenceActivity → done → block.done = True
+                    session["phase"] = "complete"
+                state = _study_blank("preference", frame, modality, n, session["trial_index"])
+                await websocket.send(json.dumps(state))
+                await asyncio.sleep(STEP_INTERVAL)
+                continue
+
+            # complete
+            state = _study_blank("complete", frame, modality, n)
+            await websocket.send(json.dumps(state))
+            await asyncio.sleep(STEP_INTERVAL)
+
+    async def recv_loop():
+        async for raw in websocket:
+            try:
+                data = json.loads(raw)
+                key  = data.get("key")
+                cmd  = data.get("cmd")
+
+                if key and hasattr(fetcher, "nudge"):
+                    blk = session.get("block")
+                    if blk and blk.current_activity:
+                        cur = blk.current_activity
+                        ref = (
+                            cur.target_pose if hasattr(cur, "target_pose")
+                            else blk.origin
+                        )
+                    else:
+                        ref = None
+                    fetcher.nudge(key, ref)
+
+                if cmd == "set_box":
+                    pose = fetcher.get_pose()
+                    if pose is None:
+                        await websocket.send(json.dumps({"error": "tracker_not_visible"}))
+                        continue
+                    BOX_ORIGIN = pose.copy()
+                    print(
+                        f"[STUDY] BOX_ORIGIN set: pos=("
+                        f"{pose[0,3]:+.3f}, {pose[1,3]:+.3f}, {pose[2,3]:+.3f}) m"
+                    )
+                    await websocket.send(json.dumps({"cmd_ack": "set_box", "mode": "study"}))
+
+                elif cmd == "start_block":
+                    if BOX_ORIGIN is None:
+                        await websocket.send(json.dumps({"error": "box_not_set"}))
+                        continue
+                    modality_req = data.get("modality", "1d")
+                    frame_req    = data.get("frame", "none")
+                    session["modality"]              = modality_req
+                    session["frame"]                 = frame_req
+                    session["trial_index"]           = None
+                    session["practice_act"]          = None
+                    session["preference_act"]        = None
+                    session["calibrate_pending"]     = False
+                    session["practice_done_pending"] = False
+                    session["pending_rating"]        = None
+
+                    gen   = SequenceGenerator(fetcher)
+                    blk   = gen.make_block(modality_req, frame_req, BOX_ORIGIN, n_trials)
+                    blk.start()
+                    session["block"] = blk
+                    needs_cal = frame_req in ("user", "patient")
+                    session["phase"] = "await_calibrate" if needs_cal else "running"
+                    print(
+                        f"[STUDY] start_block: modality={modality_req} frame={frame_req} "
+                        f"{'(calibration)' if needs_cal else '(no calibration)'}"
+                    )
+
+                elif cmd == "calibrate":
+                    session["calibrate_pending"] = True
+
+                elif cmd == "practice_done":
+                    session["practice_done_pending"] = True
+
+                elif cmd == "rate":
+                    rating = data.get("rating")
+                    if isinstance(rating, int) and 1 <= rating <= 5:
+                        session["pending_rating"] = rating
+
+            except (json.JSONDecodeError, AttributeError):
+                pass
+
+    try:
+        await asyncio.gather(send_loop(), recv_loop())
+    except websockets.exceptions.ConnectionClosed:
+        pass
+
+
 # ── Set-Box calibration test (throwaway — only active under --setbox flag) ─────
 #
-# HEAD_OFFSET_M:    distance (m) from the tracker-origin to the scanning head.
-# HEAD_OFFSET_AXIS: which transducer local column to travel along (0=X red, 1=Y green, 2=Z blue).
-# HEAD_OFFSET_SIGN: +1 or -1; flip if the offset points the wrong way on the rig.
+# HEAD_OFFSET_M is defined in pose_fetcher.py and applied there; get_pose()
+# already returns tip (scanning-head) coordinates.  No local offset needed here.
 #
 # Axis mapping from transducer frame to box frame (box sits above bottom-face center):
-#   transducer X (red,   col 0) → box −Z  (box +Z opposes red; volume 0 → +10 cm in box-Z)
+#   transducer X (red,   col 0) → box −Z  (box +Z opposes red; volume +2 → +12 cm in box-Z)
 #   transducer Y (green, col 1) → box +X  (lateral,  −12.5 → +12.5 cm)
 #   transducer Z (blue,  col 2) → box −Y  (elevation negated to keep frame right-handed)
 #
 # Basis: bX=+Y_t, bY=−Z_t, bZ=−X_t → det([+Y_t|−Z_t|−X_t])=det([Y_t|Z_t|X_t])=+1 (RH ✓)
 
-HEAD_OFFSET_M    = 0.07   # metres — change this constant to adjust head offset
-HEAD_OFFSET_AXIS = 0      # 0=X(red) toward scanning head; flip sign below if wrong
-HEAD_OFFSET_SIGN = +1     # set to -1 if the offset moves away from the head
-
 BOX_HALF_XY = 0.125   # ±12.5 cm in box X and Y
-BOX_DEPTH_Z = 0.10    # +10 cm in box Z (scanning depth direction)
+BOX_Z_MIN   = 0.02    # near face: 2 cm from tip in box-Z
+BOX_Z_MAX   = 0.12    # far face:  12 cm from tip in box-Z
+BOX_DEPTH_Z = BOX_Z_MAX - BOX_Z_MIN   # total depth = 10 cm
 
 
 async def _setbox_handler(websocket, fetcher):
@@ -366,20 +620,17 @@ async def _setbox_handler(websocket, fetcher):
                     if pose is None:
                         await websocket.send(json.dumps({"error": "tracker_not_visible"}))
                         continue
-                    # Step 1: translate origin along local HEAD_OFFSET_AXIS to scanning head.
-                    head_pos = (
-                        pose[:3, 3]
-                        + pose[:3, HEAD_OFFSET_AXIS] * HEAD_OFFSET_SIGN * HEAD_OFFSET_M
-                    )
-                    # Step 2: build box world matrix.
+                    # get_pose() returns tip coords; pose[:3, 3] IS the scanning-head origin.
+                    # Build box world matrix.
                     #   box +X ←  transducer Y (col 1, green)    lateral
                     #   box +Y ← −transducer Z (col 2, blue)     elevation (negated → RH)
-                    #   box +Z ← −transducer X (col 0, red)      opposes red; volume 0→+10 cm
-                    #   origin  = box centroid = head_pos + half depth along box +Z
+                    #   box +Z ← −transducer X (col 0, red)      opposes red; volume +2→+12 cm
+                    #   origin  = box centroid = tip + (BOX_Z_MIN+BOX_Z_MAX)/2 along box +Z
+                    head_pos = pose[:3, 3]
                     bX =  pose[:3, 1].copy()
                     bY = -pose[:3, 2].copy()
                     bZ = -pose[:3, 0].copy()
-                    centroid = head_pos + (BOX_DEPTH_Z / 2) * bZ
+                    centroid = head_pos + (BOX_Z_MIN + BOX_Z_MAX) / 2 * bZ
                     box_mat = np.eye(4)
                     box_mat[:3, 0] = bX
                     box_mat[:3, 1] = bY
@@ -526,12 +777,6 @@ async def _study_handler(websocket, fetcher, runner):
 # ── Transport layer ────────────────────────────────────────────────────────────
 
 async def handler(websocket, fetcher_cls, mode, modality, frame="transducer", diagnostic=False):
-    if mode == "study" and modality in ("2d", "3d"):
-        msg = f"--study --modality {modality} is not yet implemented"
-        print(f"Rejected connection: {msg}.")
-        await websocket.close(1011, msg)
-        return
-
     fetcher = fetcher_cls()
 
     if mode == "competition":
@@ -561,18 +806,18 @@ async def handler(websocket, fetcher_cls, mode, modality, frame="transducer", di
             fetcher.disconnect()
             print("Client disconnected.")
 
-    else:  # study (1d only at this point)
-        runner = SequenceRunner(fetcher, n_trials=N_STUDY_TRIALS, archiver=NoOpArchiver())
+    else:  # study — all modalities
         try:
-            runner.start()  # connects fetcher + starts first block (CalibrationActivity)
+            fetcher.connect()
         except Exception as exc:
             print(f"Fetcher connect failed: {exc}")
             await websocket.close(1011, "tracker unavailable")
             return
+        print(f"Client connected ({type(fetcher).__name__}) — study mode.")
         try:
-            await _study_handler(websocket, fetcher, runner)
+            await _new_study_handler(websocket, fetcher)
         finally:
-            runner.stop()  # disconnects fetcher
+            fetcher.disconnect()
             print("Client disconnected.")
 
 
@@ -597,6 +842,8 @@ async def main(fetcher_cls, mode, modality, frame="transducer", diagnostic=False
             print(f"3D UI:     http://{HOST}:{HTTP_PORT}/index-3d.html")
             if mode == "setbox":
                 print(f"Setbox UI: http://{HOST}:{HTTP_PORT}/setbox.html")
+            if mode == "study":
+                print(f"Launcher:  http://{HOST}:{HTTP_PORT}/launcher.html")
             await asyncio.Future()
     finally:
         http_server.shutdown()
@@ -625,8 +872,5 @@ if __name__ == "__main__":
     mode        = "setbox" if args.setbox else ("study" if args.study else "competition")
     modality    = args.modality
     fetcher_cls = FakePoseFetcher if args.fake else TrackerPoseFetcher
-
-    if mode == "study" and modality in ("2d", "3d"):
-        p.error(f"--study --modality {modality} is not yet implemented")
 
     asyncio.run(main(fetcher_cls, mode, modality, args.frame, args.diagnostic))
