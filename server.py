@@ -100,7 +100,7 @@ class FakePoseFetcher(LivePoseFetcher):
 
 # ── Competition mode ───────────────────────────────────────────────────────────
 
-async def _competition_handler(websocket, fetcher, modality="1d", frame="transducer"):
+async def _competition_handler(websocket, fetcher, modality="1d", frame="transducer", diagnostic=False):
     trial = Trial(fetcher, linear_tol=LINEAR_TOL)
     trial.start()
     print(f"Client connected ({type(fetcher).__name__}) — competition/{modality} mode.")
@@ -155,6 +155,8 @@ async def _competition_handler(websocket, fetcher, modality="1d", frame="transdu
 
     async def send_loop():
         nonlocal scene_origin
+        _diag_frame = 0
+        _DIAG_EVERY = 10  # print ~3 Hz at 30 Hz loop rate
 
         while True:
             state = trial.step()
@@ -253,6 +255,25 @@ async def _competition_handler(websocket, fetcher, modality="1d", frame="transdu
                     state["target_workspace_components"] = None
                     state["workspace_component_errors"] = None
                     state["workspace_component_aligned"] = None
+
+            if diagnostic:
+                _diag_frame += 1
+                if _diag_frame >= _DIAG_EVERY:
+                    _diag_frame = 0
+                    diag_pose = fetcher.get_pose()
+                    if diag_pose is not None:
+                        pos   = diag_pose[:3, 3]
+                        x_ax  = diag_pose[:3, 0]
+                        y_ax  = diag_pose[:3, 1]
+                        z_ax  = diag_pose[:3, 2]
+                        print(
+                            f"[DIAG] pos:    x={pos[0]:+.4f}  y={pos[1]:+.4f}  z={pos[2]:+.4f}  (m)\n"
+                            f"       X-axis: ({x_ax[0]:+.3f}, {x_ax[1]:+.3f}, {x_ax[2]:+.3f})\n"
+                            f"       Y-axis: ({y_ax[0]:+.3f}, {y_ax[1]:+.3f}, {y_ax[2]:+.3f})\n"
+                            f"       Z-axis: ({z_ax[0]:+.3f}, {z_ax[1]:+.3f}, {z_ax[2]:+.3f})"
+                        )
+                    else:
+                        _diag_frame = _DIAG_EVERY - 1  # retry next frame
 
             await websocket.send(json.dumps(state))
             await asyncio.sleep(STEP_INTERVAL)
@@ -423,7 +444,7 @@ async def _study_handler(websocket, fetcher, runner):
 
 # ── Transport layer ────────────────────────────────────────────────────────────
 
-async def handler(websocket, fetcher_cls, mode, modality, frame="transducer"):
+async def handler(websocket, fetcher_cls, mode, modality, frame="transducer", diagnostic=False):
     if mode == "study" and modality in ("2d", "3d"):
         msg = f"--study --modality {modality} is not yet implemented"
         print(f"Rejected connection: {msg}.")
@@ -440,7 +461,7 @@ async def handler(websocket, fetcher_cls, mode, modality, frame="transducer"):
             await websocket.close(1011, "tracker unavailable")
             return
         try:
-            await _competition_handler(websocket, fetcher, modality, frame)
+            await _competition_handler(websocket, fetcher, modality, frame, diagnostic)
         finally:
             fetcher.disconnect()
             print("Client disconnected.")
@@ -460,9 +481,9 @@ async def handler(websocket, fetcher_cls, mode, modality, frame="transducer"):
             print("Client disconnected.")
 
 
-async def main(fetcher_cls, mode, modality, frame="transducer"):
+async def main(fetcher_cls, mode, modality, frame="transducer", diagnostic=False):
     async def _handler(websocket):
-        await handler(websocket, fetcher_cls, mode, modality, frame)
+        await handler(websocket, fetcher_cls, mode, modality, frame, diagnostic)
 
     root = Path(__file__).resolve().parent
     request_handler = partial(SimpleHTTPRequestHandler, directory=str(root))
@@ -498,6 +519,8 @@ if __name__ == "__main__":
                    help="3D camera reference frame (competition --modality 3d only): "
                         "transducer=camera rides probe (world rotates), hybrid=probe rotates in place, "
                         "user/patient=locked at calib pose")
+    p.add_argument("--diagnostic", action="store_true",
+                   help="Print live pose (position + basis axes) to terminal at ~3 Hz for coordinate-system verification")
     args = p.parse_args()
 
     mode        = "study" if args.study else "competition"
@@ -507,4 +530,4 @@ if __name__ == "__main__":
     if mode == "study" and modality in ("2d", "3d"):
         p.error(f"--study --modality {modality} is not yet implemented")
 
-    asyncio.run(main(fetcher_cls, mode, modality, args.frame))
+    asyncio.run(main(fetcher_cls, mode, modality, args.frame, args.diagnostic))
