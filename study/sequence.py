@@ -9,7 +9,7 @@ from typing import Optional
 import numpy as np
 
 from pose_fetcher import LivePoseFetcher
-from core import _random_target_pose, LINEAR_TOL, HOLD_DURATION
+from core import random_study_target, LINEAR_TOL, HOLD_DURATION
 
 from .activities import CalibrationActivity, TrialActivity, PreferenceActivity, PracticeActivity
 from .block import Block
@@ -31,10 +31,12 @@ class SequenceGenerator:
         fetcher: LivePoseFetcher,
         n_trials: int = 7,
         frame: Optional[ReferenceFrame] = None,
+        box_origin: Optional[np.ndarray] = None,
     ) -> None:
         self._fetcher = fetcher
         self._n_trials = n_trials
         self._frame = frame or ReferenceFrame()
+        self._box_origin = box_origin
 
     def make_1d_block(self) -> Block:
         """One block: Calibration → 7 random trials → Preference."""
@@ -42,12 +44,11 @@ class SequenceGenerator:
         preference = PreferenceActivity()
         n = self._n_trials
         fetcher = self._fetcher
+        box_origin = self._box_origin   # always sample from set-box pose, not calibration result
 
-        def trial_factory(origin: np.ndarray) -> list[TrialActivity]:
-            # Targets: random positions ±0.25 m in each axis, full random
-            # orientation — via core._random_target_pose (±30° on a random axis).
+        def trial_factory(_origin: np.ndarray) -> list[TrialActivity]:
             return [
-                TrialActivity(fetcher, _random_target_pose(origin))
+                TrialActivity(fetcher, random_study_target(box_origin))
                 for _ in range(n)
             ]
 
@@ -67,16 +68,17 @@ class SequenceGenerator:
         All other modes (1d, transducer) skip calibration and seed trials
         directly from the supplied origin.
         """
-        needs_calibration = frame in ("user", "patient")
+        needs_calibration = frame == "user"   # patient/transducer/1d: no calibration step
         calibration = CalibrationActivity(self._fetcher) if needs_calibration else None
         practice    = PracticeActivity(self._fetcher, origin)
         preference  = PreferenceActivity()
         n       = n_trials
         fetcher = self._fetcher
 
-        def trial_factory(effective_origin: np.ndarray) -> list[TrialActivity]:
+        def trial_factory(_effective_origin: np.ndarray) -> list[TrialActivity]:
+            # Always sample from the set-box pose; calibration sets camera only.
             return [
-                TrialActivity(fetcher, _random_target_pose(effective_origin))
+                TrialActivity(fetcher, random_study_target(origin))
                 for _ in range(n)
             ]
 
@@ -115,10 +117,11 @@ class SequenceRunner:
         n_trials: int = 7,
         archiver: Optional[DataArchiver] = None,
         frame: Optional[ReferenceFrame] = None,
+        box_origin: Optional[np.ndarray] = None,
     ) -> None:
         self._fetcher = fetcher
         self._archiver = archiver
-        generator = SequenceGenerator(fetcher, n_trials=n_trials, frame=frame)
+        generator = SequenceGenerator(fetcher, n_trials=n_trials, frame=frame, box_origin=box_origin)
         self._blocks = generator.make_blocks()
         self._block_idx = 0
         self._done = False

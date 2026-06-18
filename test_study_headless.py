@@ -82,7 +82,7 @@ def main() -> None:
 
     fetcher = ScriptedFetcher(FAR_POSE)
     archiver = NoOpArchiver()
-    runner = SequenceRunner(fetcher, n_trials=7, archiver=archiver)
+    runner = SequenceRunner(fetcher, n_trials=7, archiver=archiver, box_origin=ORIGIN_POSE)
     runner.start()
 
     # Grab block reference for introspection (current_activity, current_trial_index).

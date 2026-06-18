@@ -16,10 +16,11 @@ from pose_fetcher import LivePoseFetcher, TrackerPoseFetcher, HEAD_OFFSET_M
 from trial import Trial, TARGET_POSE
 from pose_math import angular_distance, component_errors, workspace_component_errors
 from core import (CUBE_SIZE, HOLD_DURATION, LINEAR_TOL,
+                  BOX_HALF_XY, BOX_Z_MIN, BOX_Z_MAX,
                   _rot_x, _rot_y, _rot_z, _random_target_pose)
 from study.sequence import SequenceRunner, SequenceGenerator
 from study.archiver import NoOpArchiver
-from study.activities import PreferenceActivity, PracticeActivity
+from study.activities import CalibrationActivity, PreferenceActivity, PracticeActivity
 
 HOST = "localhost"
 PORT = 8765
@@ -475,6 +476,10 @@ async def _new_study_handler(websocket, fetcher, n_trials=STUDY_BLOCK_TRIALS):
                             name: abs(val) <= (LINEAR_TOL if name in ("x", "y", "z") else 5.0)
                             for name, val in state["workspace_component_errors"].items()
                         }
+                    if BOX_ORIGIN is not None:
+                        state["box_origin"] = BOX_ORIGIN.tolist()
+                    if frame == "user" and block.origin is not None:
+                        state["calibration_origin"] = block.origin.tolist()
 
                 await websocket.send(json.dumps(state))
                 await asyncio.sleep(STEP_INTERVAL)
@@ -499,6 +504,7 @@ async def _new_study_handler(websocket, fetcher, n_trials=STUDY_BLOCK_TRIALS):
             await asyncio.sleep(STEP_INTERVAL)
 
     async def recv_loop():
+        global BOX_ORIGIN
         async for raw in websocket:
             try:
                 data = json.loads(raw)
@@ -531,8 +537,15 @@ async def _new_study_handler(websocket, fetcher, n_trials=STUDY_BLOCK_TRIALS):
 
                 elif cmd == "start_block":
                     if BOX_ORIGIN is None:
-                        await websocket.send(json.dumps({"error": "box_not_set"}))
-                        continue
+                        pose = fetcher.get_pose()
+                        if pose is None:
+                            await websocket.send(json.dumps({"error": "box_not_set"}))
+                            continue
+                        BOX_ORIGIN = pose.copy()
+                        print(
+                            f"[STUDY] BOX_ORIGIN auto-set from fetcher: pos=("
+                            f"{pose[0,3]:+.3f}, {pose[1,3]:+.3f}, {pose[2,3]:+.3f}) m"
+                        )
                     modality_req = data.get("modality", "1d")
                     frame_req    = data.get("frame", "none")
                     session["modality"]              = modality_req
@@ -548,7 +561,7 @@ async def _new_study_handler(websocket, fetcher, n_trials=STUDY_BLOCK_TRIALS):
                     blk   = gen.make_block(modality_req, frame_req, BOX_ORIGIN, n_trials)
                     blk.start()
                     session["block"] = blk
-                    needs_cal = frame_req in ("user", "patient")
+                    needs_cal = isinstance(blk.current_activity, CalibrationActivity)
                     session["phase"] = "await_calibrate" if needs_cal else "running"
                     print(
                         f"[STUDY] start_block: modality={modality_req} frame={frame_req} "
@@ -587,10 +600,7 @@ async def _new_study_handler(websocket, fetcher, n_trials=STUDY_BLOCK_TRIALS):
 #
 # Basis: bX=+Y_t, bY=−Z_t, bZ=−X_t → det([+Y_t|−Z_t|−X_t])=det([Y_t|Z_t|X_t])=+1 (RH ✓)
 
-BOX_HALF_XY = 0.125   # ±12.5 cm in box X and Y
-BOX_Z_MIN   = 0.02    # near face: 2 cm from tip in box-Z
-BOX_Z_MAX   = 0.12    # far face:  12 cm from tip in box-Z
-BOX_DEPTH_Z = BOX_Z_MAX - BOX_Z_MIN   # total depth = 10 cm
+# BOX_HALF_XY, BOX_Z_MIN, BOX_Z_MAX imported from core above.
 
 
 async def _setbox_handler(websocket, fetcher):
