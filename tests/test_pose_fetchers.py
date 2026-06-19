@@ -7,7 +7,7 @@ import numpy as np
 
 from calibration import compute_transducer_from_tracker
 from core import _rot_x, _rot_y, _rot_z
-from pose_fetcher import TrackerPoseFetcher
+from pose_fetcher import TrackerPoseFetcher, HEAD_OFFSET_M
 from pose_math import component_errors
 from server import FakePoseFetcher
 
@@ -52,7 +52,7 @@ def _fake_openvr():
 
 
 class PoseFetcherTests(unittest.TestCase):
-    def test_tracker_fetcher_returns_calibrated_transducer_center(self):
+    def test_tracker_fetcher_returns_tip_pose(self):
         openvr = _fake_openvr()
         with patch.dict(sys.modules, {"openvr": openvr}):
             fetcher = TrackerPoseFetcher()
@@ -61,13 +61,15 @@ class PoseFetcherTests(unittest.TestCase):
 
         raw = np.eye(4)
         raw[:3, :4] = np.asarray(_Pose.mDeviceToAbsoluteTracking)
-        expected = compute_transducer_from_tracker(raw)
+        tc = compute_transducer_from_tracker(raw)
+        expected = tc.copy()
+        expected[:3, 3] += tc[:3, 0] * HEAD_OFFSET_M  # transducer-center → tip
         np.testing.assert_allclose(actual, expected)
 
     def test_fake_translation_keys_use_requested_local_axes(self):
         fetcher = FakePoseFetcher()
         fetcher.connect()
-        pairs = (("d", "a", 0), ("w", "s", 1), ("q", "e", 2))
+        pairs = (("1", "q", 0), ("2", "w", 1), ("3", "e", 2))
         reference = np.eye(4)
         reference[:3, :3] = _rot_z(0.7) @ _rot_y(-0.4)
 
@@ -94,7 +96,7 @@ class PoseFetcherTests(unittest.TestCase):
     def test_fake_rotation_keys_use_requested_local_axes(self):
         fetcher = FakePoseFetcher()
         fetcher.connect()
-        pairs = (("u", "o"), ("i", "k"), ("j", "l"))
+        pairs = (("4", "r"), ("5", "t"), ("6", "y"))
         reference = np.eye(4)
         reference[:3, :3] = _rot_x(-0.3) @ _rot_z(0.5)
 

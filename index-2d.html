@@ -133,10 +133,6 @@
       stroke-width: 5;
       stroke-linecap: round;
     }
-    .axis-label {
-      fill: #475569;
-      font: bold 16px "Courier New", monospace;
-    }
     .axis-stats {
       display: grid;
       grid-template-columns: repeat(6, 1fr);
@@ -212,11 +208,87 @@
       .controls { grid-template-columns: 1fr; }
       .buttons { flex-wrap: wrap; }
     }
+    /* ── Study overlay ── */
+    #study-card { display: none; }
+    .study-phase { display: none; }
+    .study-heading {
+      font-size: 0.72rem; text-transform: uppercase; letter-spacing: 0.1em;
+      color: var(--dim); text-align: center; margin-bottom: 14px;
+    }
+    .study-prompt {
+      font-size: 0.9rem; text-align: center; line-height: 1.6; margin-bottom: 16px;
+    }
+    .study-card-btn {
+      display: block; width: 100%; padding: 10px 0;
+      background: #2a2a2a; color: var(--text);
+      border: 1px solid #444; border-radius: 6px;
+      font: 0.8rem "Courier New", monospace;
+      letter-spacing: 0.08em; text-transform: uppercase; cursor: pointer;
+      transition: background 120ms; margin-top: 4px;
+    }
+    .study-card-btn:hover { background: #383838; }
+    .study-card-btn:disabled { opacity: 0.35; cursor: default; }
+    .rating-row { display: flex; gap: 8px; justify-content: center; }
+    .rating-row button {
+      flex: 1; padding: 8px 4px; max-width: 120px;
+      background: #2a2a2a; border: 1px solid #444; border-radius: 6px;
+      color: var(--text); font: bold 1.1rem "Courier New", monospace; cursor: pointer;
+      line-height: 1.2;
+    }
+    .rating-row button:hover { background: #383838; }
+    .rating-row button:disabled { opacity: 0.35; cursor: default; }
+    .rating-row button small {
+      display: block; font-size: 0.62rem; font-weight: normal;
+      color: #888; margin-top: 3px; line-height: 1.3;
+    }
+    #study-trial-label { font-size: 0.82rem; color: var(--dim); text-align: center;
+                         letter-spacing: 0.08em; text-transform: uppercase; }
+    #calib-img { max-width: 100%; border-radius: 4px; background: #2a2a2a;
+                 display: block; margin: 0 auto 14px; }
   </style>
 </head>
 <body>
   <main>
     <h1>2D POSE GUIDANCE</h1>
+
+    <!-- Study overlay card — shown instead of scoreboard+controls in study mode -->
+    <section class="card" id="study-card">
+      <!-- Calibration phase -->
+      <div class="study-phase" id="s2-cal">
+        <div class="study-heading">Study Mode — Calibrate</div>
+        <img src="assets/calib_user_reference.png" id="calib-img" alt="Calibration reference">
+        <p class="study-prompt">Orient probe as shown. Press Calibrate when ready.</p>
+        <button class="study-card-btn" id="btn-2d-calibrate">Calibrate</button>
+      </div>
+      <!-- Practice phase -->
+      <div class="study-phase" id="s2-practice">
+        <div class="study-heading">Study Mode — Practice</div>
+        <p class="study-prompt">Practice phase. Move the probe freely.<br>Press Ready when comfortable.</p>
+        <button class="study-card-btn" id="btn-2d-practice-done">Ready</button>
+      </div>
+      <!-- Trial phase -->
+      <div class="study-phase" id="s2-trial">
+        <div class="study-heading">Study Mode</div>
+        <p id="study-trial-label">Trial 1 of 3</p>
+      </div>
+      <!-- Preference phase -->
+      <div class="study-phase" id="s2-pref">
+        <div class="study-heading">Study Mode — Preference</div>
+        <p class="study-prompt">This modality was intuitive</p>
+        <div class="rating-row" id="rating-row-2d">
+          <button data-r="1">1<br><small>Strongly<br>disagree</small></button>
+          <button data-r="2">2<br><small>Disagree</small></button>
+          <button data-r="3">3<br><small>Undecided</small></button>
+          <button data-r="4">4<br><small>Agree</small></button>
+          <button data-r="5">5<br><small>Strongly<br>agree</small></button>
+        </div>
+      </div>
+      <!-- Complete phase -->
+      <div class="study-phase" id="s2-done">
+        <div class="study-heading">Study Mode</div>
+        <p class="study-prompt" style="color:#4ade80">Block complete. Returning to launcher…</p>
+      </div>
+    </section>
 
     <section class="card scoreboard">
       <div class="stat">
@@ -274,14 +346,12 @@
                     cx="355" cy="260" r="25"/>
           </g>
 
-          <!-- Z translation depth ruler -->
+          <!-- depth ruler -->
           <line class="depth-axis" x1="685" y1="65" x2="685" y2="455"/>
           <line class="target-line" id="target-depth"
                 x1="671" y1="260" x2="699" y2="260"/>
           <line class="current-line" id="current-depth"
                 x1="671" y1="260" x2="699" y2="260"/>
-          <text class="axis-label" x="704" y="266">X</text>
-          <text class="axis-label" x="342" y="500">Y / Z RETICLE</text>
         </svg>
       </div>
 
@@ -320,18 +390,14 @@
   <script>
     const WS_URL = "ws://localhost:8765";
     const TRIGGER_KEYS = new Set("123456qwerty".split(""));
-    const KEY_TRANSLATE = {
-      '1': 'd', 'q': 'a',
-      '2': 'w', 'w': 's',
-      '3': 'q', 'e': 'e',
-      '4': 'u', 'r': 'o',
-      '5': 'i', 't': 'k',
-      '6': 'j', 'y': 'l',
-    };
     const AXES = ["x", "y", "z", "roll", "pitch", "yaw"];
     const CENTER_X = 355;
     const CENTER_Y = 260;
     const TRANSLATION_RANGE_M = 0.25;
+
+    const _p2 = new URLSearchParams(window.location.search);
+    const _isStudy2    = _p2.get("study") === "1";
+    const _studyFrame2 = _p2.get("frame") || "transducer";
 
     const currentCross = document.getElementById("current-cross");
     const targetCross = document.getElementById("target-cross");
@@ -376,10 +442,6 @@
         "transform",
         `translate(${centerX} ${centerY}) rotate(${pose.roll + 180})`
       );
-
-      const flipped = Math.cos(pose.roll * Math.PI / 180) > 0;
-      elements.tick.setAttribute("y1", flipped ? -40 : 0);
-      elements.tick.setAttribute("y2", flipped ? 0 : 40);
 
       const depthY = CENTER_Y - scaled(pose.x, TRANSLATION_RANGE_M, 185);
       elements.depth.setAttribute("y1", depthY);
@@ -435,12 +497,158 @@
       }
     }
 
+    // ── Study projection helpers (analytic 2D view math, no Three.js) ──────────
+    // Matrices arrive as nested row-major lists from numpy .tolist().
+    function _vcol(m, j) { return [m[0][j], m[1][j], m[2][j]]; }
+    function _vtrans(m)   { return [m[0][3], m[1][3], m[2][3]]; }
+    function _vadd(a, b)  { return [a[0]+b[0], a[1]+b[1], a[2]+b[2]]; }
+    function _vsub(a, b)  { return [a[0]-b[0], a[1]-b[1], a[2]-b[2]]; }
+    function _vscale(a,s) { return [a[0]*s,    a[1]*s,    a[2]*s   ]; }
+    function _dot(a, b)   { return a[0]*b[0] + a[1]*b[1] + a[2]*b[2]; }
+    function _cross(a, b) {
+      return [a[1]*b[2]-a[2]*b[1], a[2]*b[0]-a[0]*b[2], a[0]*b[1]-a[1]*b[0]];
+    }
+    function _vnorm(a) {
+      const len = Math.sqrt(_dot(a, a));
+      return len > 1e-8 ? _vscale(a, 1/len) : [0, 0, 1];
+    }
+
+    // Box basis from box_origin matrix — mirrors core.py convention exactly.
+    // bX=+col1 (lateral), bY=−col2 (elevation/up), bZ=−col0 (depth into patient).
+    function _boxBasis(m) {
+      const bX = _vcol(m, 1);
+      const bY = _vscale(_vcol(m, 2), -1);
+      const bZ = _vscale(_vcol(m, 0), -1);
+      const tip = _vtrans(m);
+      const centroid = _vadd(tip, _vscale(bZ, 0.07)); // box depth center (0.02+0.12)/2
+      return { bX, bY, bZ, centroid };
+    }
+
+    // Compute synthetic pose objects for user/patient frames via orthographic
+    // projection of live_pose and target_pose world positions onto the view plane.
+    // Returns null for transducer (caller falls through to workspace components).
+    function computeStudyProjection(d) {
+      if (_studyFrame2 === "transducer") return null;
+      if (!d.box_origin || !d.live_pose || !d.target_pose) return null;
+      if (!d.live_workspace_components || !d.target_workspace_components) return null;
+
+      const { bX, bY, bZ, centroid } = _boxBasis(d.box_origin);
+
+      let eye;
+      if (_studyFrame2 === "patient") {
+        // Identical to 3D initStudyCamera: 1 m left (−lateral) and 1 m up (+elevation).
+        eye = _vadd(_vadd(centroid, _vscale(bX, -1.0)), _vscale(bY, 1.0));
+      } else {
+        // user: calibrated probe position, 0.5 m back (−depth) and 0.5 m up (+elevation).
+        if (!d.calibration_origin) return null;
+        const cpos = _vtrans(d.calibration_origin);
+        eye = _vadd(_vadd(cpos, _vscale(bZ, -0.5)), _vscale(bY, 0.5));
+      }
+
+      // View basis matching spec: look toward centroid, right/vUp perpendicular.
+      // up_hint = bY (elevation); provisional — may need eyeballing on the rig.
+      const look  = _vnorm(_vsub(centroid, eye));
+      const right = _vnorm(_cross(look, bY)); // TODO(2d-frame): verify handedness on rig
+      const vUp   = _cross(right, look);
+
+      function project(poseM, wc) {
+        const delta = _vsub(_vtrans(poseM), centroid);
+        return {
+          y:     _dot(delta, right), // screen horizontal → setPoseVisual pose.y
+          z:     _dot(delta, vUp),   // screen vertical (+up) → setPoseVisual pose.z
+          x:     _dot(delta, look),  // depth along view → side ruler
+          roll:  wc.roll,            // orientation unchanged from workspace components
+          pitch: wc.pitch,
+          yaw:   wc.yaw,
+        };
+      }
+
+      return {
+        livePose:   project(d.live_pose,   d.live_workspace_components),
+        targetPose: project(d.target_pose, d.target_workspace_components),
+      };
+    }
+
+    // ── Study renderer ──────────────────────────────────────────────────────────
+    const _s2Phases = ["s2-cal", "s2-practice", "s2-trial", "s2-pref", "s2-done"];
+    const _scoreboard = document.querySelector(".scoreboard").closest(".card");
+    const _controls   = document.querySelector(".controls").closest(".card");
+    const _studyCard  = document.getElementById("study-card");
+
+    function renderStudy2D(d) {
+      const act = d.activity_type;
+      if (act === "idle") return;
+
+      _scoreboard.style.display = "none";
+      _controls.style.display   = "none";
+      _studyCard.style.display  = "block";
+
+      _s2Phases.forEach(id => document.getElementById(id).style.display = "none");
+
+      if (act === "calibration") {
+        document.getElementById("s2-cal").style.display = "block";
+        // Show calibration image only for user frame
+        document.getElementById("calib-img").style.display =
+          (_studyFrame2 === "user") ? "block" : "none";
+      } else if (act === "practice") {
+        document.getElementById("s2-practice").style.display = "block";
+      } else if (act === "trial") {
+        document.getElementById("s2-trial").style.display = "block";
+        const total = d.n_trials ?? 3;
+        document.getElementById("study-trial-label").textContent =
+          `Trial ${(d.trial_index ?? 0) + 1} of ${total}`;
+      } else if (act === "preference") {
+        document.getElementById("s2-pref").style.display = "block";
+        document.querySelectorAll("#rating-row-2d button").forEach(b => b.disabled = false);
+      } else if (act === "complete") {
+        window.location.href = "launcher.html";
+        return;
+      } else {
+        document.getElementById("s2-done").style.display = "block";
+      }
+
+      // Always update reticle + hold bar with available data.
+      // For user/patient frames, project world-space poses onto the view; axis
+      // stats still use workspace_component_errors regardless of frame.
+      const _proj = computeStudyProjection(d);
+      updateReticle(
+        d.workspace_component_errors,
+        d.workspace_component_aligned,
+        _proj ? _proj.livePose : {
+          x: 0, y: 0, z: 0,
+          roll: 0, pitch: 0, yaw: 0,
+        },
+        _proj ? _proj.targetPose : {
+          x: d.workspace_component_errors?.x ?? 0,
+          y: d.workspace_component_errors?.y ?? 0,
+          z: d.workspace_component_errors?.z ?? 0,
+          roll:  d.workspace_component_errors?.roll  ?? 0,
+          pitch: d.workspace_component_errors?.pitch ?? 0,
+          yaw:   d.workspace_component_errors?.yaw   ?? 0,
+        }
+      );
+      holdProgress.style.width = `${(d.hold_progress ?? 0) * 100}%`;
+
+      if (d.source_mode) {
+        const isTracker = d.source_mode === "tracker";
+        sourceStatus.textContent = isTracker
+          ? `LIVE TRACKER | ${d.source_label} | ${d.stream_rate} Hz`
+          : `FAKE KEYBOARD | ${d.stream_rate} Hz`;
+        sourceStatus.className = d.tracker_visible ? "ok" : "error";
+      }
+    }
+
     function connect() {
       socket = new WebSocket(WS_URL);
 
       socket.onopen = () => {
         connection.textContent = "connected";
         connection.className = "ok";
+        if (_isStudy2) {
+          socket.send(JSON.stringify({
+            cmd: "start_block", modality: "2d", frame: _studyFrame2,
+          }));
+        }
       };
 
       socket.onmessage = event => {
@@ -451,6 +659,12 @@
           return;
         }
 
+        if (data.mode === "study") {
+          renderStudy2D(data);
+          return;
+        }
+
+        // ── Competition rendering (unchanged) ─────────────────────────────────
         const isTracker = data.source_mode === "tracker";
         sourceStatus.textContent = isTracker
           ? `LIVE TRACKER | ${data.source_label} | ${data.stream_rate} Hz`
@@ -498,13 +712,26 @@
       const key = event.key.toLowerCase();
       if (TRIGGER_KEYS.has(key)) {
         event.preventDefault();
-        send({ key: KEY_TRANSLATE[key] });
+        send({ key });
       }
     });
 
-    document.getElementById("calibrate").addEventListener("click", () => send({ cmd: "calibrate" }));
-    document.getElementById("new-target").addEventListener("click", () => send({ cmd: "new_target" }));
-    document.getElementById("reset").addEventListener("click", () => send({ cmd: "reset" }));
+    // Competition buttons
+    document.getElementById("calibrate").addEventListener("click",    () => send({ cmd: "calibrate" }));
+    document.getElementById("new-target").addEventListener("click",   () => send({ cmd: "new_target" }));
+    document.getElementById("reset").addEventListener("click",        () => send({ cmd: "reset" }));
+
+    // Study buttons
+    document.getElementById("btn-2d-calibrate").addEventListener("click",
+      () => send({ cmd: "calibrate" }));
+    document.getElementById("btn-2d-practice-done").addEventListener("click",
+      () => send({ cmd: "practice_done" }));
+    document.querySelectorAll("#rating-row-2d button").forEach(btn => {
+      btn.addEventListener("click", () => {
+        send({ cmd: "rate", rating: parseInt(btn.dataset.r, 10) });
+        document.querySelectorAll("#rating-row-2d button").forEach(b => b.disabled = true);
+      });
+    });
 
     connect();
   </script>

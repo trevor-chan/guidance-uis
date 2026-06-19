@@ -1,0 +1,318 @@
+<!DOCTYPE html>
+<!--
+  SET BOX TEST MODE  —  throwaway, not wired into study/competition.
+  Launch:  python server.py --setbox [--fake]
+  Then:    http://localhost:8000/setbox.html
+
+  Before Set Box the camera sits at world (0, −1.00, +0.50 m), looking at origin.
+  After Set Box the camera rides the box: placed at box-frame (0, −1.00, +0.50) m
+  transformed to world, up = box +Z axis in world, looking at the box centroid.
+  Press "Set Box" (or key B) to capture the current transducer pose.
+  get_pose() already returns tip coordinates; the server uses pose[:3,3]
+  directly as the scanning-head origin and streams box_matrix back at 30 Hz.
+-->
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>SET BOX TEST MODE</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body { background: #111; color: #ddd; font-family: "Courier New", monospace; overflow: hidden; }
+
+    #scene { width: 100vw; height: 100vh; }
+    #scene canvas { display: block; width: 100%; height: 100%; }
+
+    #overlay {
+      position: fixed; top: 16px; left: 16px;
+      pointer-events: none;
+      font-size: 0.78rem; line-height: 1.9;
+      text-shadow: 0 1px 3px #000;
+    }
+    #title    { color: #facc15; font-weight: bold; letter-spacing: 0.12em; font-size: 0.9rem; }
+    #conn     { }
+    #src      { color: #94a3b8; }
+    #pos      { color: #94a3b8; }
+    #box-stat { color: #4ade80; }
+    #err      { color: #f87171; display: none; }
+
+    #controls {
+      position: fixed; bottom: 20px; left: 50%;
+      transform: translateX(-50%);
+      display: flex; gap: 12px; align-items: center;
+    }
+    button {
+      padding: 10px 22px;
+      border: 1px solid #555; border-radius: 5px;
+      background: #222; color: #ddd;
+      font: 0.82rem "Courier New", monospace;
+      letter-spacing: 0.07em; text-transform: uppercase; cursor: pointer;
+    }
+    button:hover { background: #333; }
+    #set-box-btn {
+      padding: 12px 28px;
+      border-color: #4ade80; background: #14291a;
+      color: #4ade80; font-size: 0.95rem; font-weight: bold;
+    }
+    #set-box-btn:hover { background: #1c3a22; }
+    kbd {
+      display: inline-block; padding: 2px 6px;
+      border: 1px solid #555; border-radius: 3px;
+      background: #292929; font-size: 0.78rem;
+    }
+    #key-hint { color: #555; font-size: 0.75rem; }
+    .ok    { color: #4ade80 !important; }
+    .error { color: #f87171 !important; }
+  </style>
+  <script type="importmap">
+    { "imports": { "three": "./vendor/three.module.js" } }
+  </script>
+</head>
+<body>
+  <div id="scene"></div>
+
+  <div id="overlay">
+    <div id="title">SET BOX TEST MODE</div>
+    <div id="conn">connecting…</div>
+    <div id="src"></div>
+    <div id="pos"></div>
+    <div id="box-stat">No box set — press Set Box or <kbd>B</kbd></div>
+    <div id="err"></div>
+  </div>
+
+  <div id="controls">
+    <button id="set-box-btn">Set Box</button>
+    <span id="key-hint">or <kbd>B</kbd></span>
+  </div>
+
+  <script type="module">
+    import * as THREE from "three";
+
+    const WS_URL = "ws://localhost:8765";
+
+    // Box dimensions in box-local coordinates (X×Y×Z).
+    // Must match BOX_HALF_XY, BOX_Z_MIN, BOX_Z_MAX, BOX_DEPTH_Z in server.py.
+    const BOX_W   = 0.25;   // box X extent (transducer Y / green axis)
+    const BOX_H   = 0.25;   // box Y extent (transducer Z / blue axis)
+    const BOX_Z_MIN = 0.02; // near face: 2 cm from tip in box-Z
+    const BOX_D   = 0.10;   // box Z total depth (= BOX_Z_MAX − BOX_Z_MIN)
+
+    // Camera is fixed.  Up = world +Z (0,0,1).
+    // With the camera at Y=−1 looking toward +Y, world +Y is nearly parallel to
+    // the look direction — using +Z as up avoids that gimbal singularity.
+    const CAM_POS = new THREE.Vector3(0, -1.00, 0.50);
+    const CAM_UP  = new THREE.Vector3(0, 0, 1);
+
+    // ── DOM refs ──────────────────────────────────────────────────────────────
+    const sceneEl   = document.getElementById("scene");
+    const connEl    = document.getElementById("conn");
+    const srcEl     = document.getElementById("src");
+    const posEl     = document.getElementById("pos");
+    const boxStatEl = document.getElementById("box-stat");
+    const errEl     = document.getElementById("err");
+
+    // ── Three.js setup ────────────────────────────────────────────────────────
+    const scene = new THREE.Scene();
+    scene.background = new THREE.Color(0x111111);
+
+    const camera = new THREE.PerspectiveCamera(50, 1, 0.01, 20);
+    camera.position.copy(CAM_POS);
+    camera.up.copy(CAM_UP);
+    camera.lookAt(0, 0, 0);
+
+    const renderer = new THREE.WebGLRenderer({ antialias: true });
+    renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+    sceneEl.appendChild(renderer.domElement);
+
+    scene.add(new THREE.HemisphereLight(0xffffff, 0x222233, 1.3));
+    const sun = new THREE.DirectionalLight(0xffffff, 2.0);
+    sun.position.set(0.4, -0.8, 1.2);
+    scene.add(sun);
+
+    // Floor grid — XZ plane, Y=0, matches OpenVR standing-universe floor.
+    const grid = new THREE.GridHelper(3, 30, 0x2d3f55, 0x1e2d40);
+    scene.add(grid);
+
+    // World-origin axes (small, for orientation reference).
+    const originAxes = new THREE.AxesHelper(0.10);
+    scene.add(originAxes);
+
+    // ── Live transducer axes ──────────────────────────────────────────────────
+    const liveGroup = new THREE.Group();
+    liveGroup.matrixAutoUpdate = false;
+    liveGroup.visible = false;
+    scene.add(liveGroup);
+
+    {
+      const len = 0.12, hLen = 0.022, hRad = 0.009;
+      for (const [dir, color] of [
+        [new THREE.Vector3(1, 0, 0), 0xef4444],
+        [new THREE.Vector3(0, 1, 0), 0x22c55e],
+        [new THREE.Vector3(0, 0, 1), 0x3b82f6],
+      ]) {
+        const arrow = new THREE.ArrowHelper(dir, new THREE.Vector3(), len, color, hLen, hRad);
+        // Render on top so axes are visible through geometry.
+        arrow.line.material.depthTest = false;
+        arrow.cone.material.depthTest = false;
+        arrow.line.renderOrder = 10;
+        arrow.cone.renderOrder = 10;
+        liveGroup.add(arrow);
+      }
+      const dot = new THREE.Mesh(
+        new THREE.SphereGeometry(0.007, 12, 8),
+        new THREE.MeshBasicMaterial({ color: 0xffffff, depthTest: false })
+      );
+      dot.renderOrder = 11;
+      liveGroup.add(dot);
+    }
+
+    // ── Box ───────────────────────────────────────────────────────────────────
+    // boxGroup.matrix is the box's world transform (set from server's box_matrix).
+    // BoxGeometry is centered; box-local Z runs −BOX_D/2 to +BOX_D/2.
+    // Column 2 of box_matrix = −transducer X (red); scanning depth +2→+12 cm from tip.
+    // head_pos (tip) is at box-local Z = −(BOX_Z_MIN + BOX_D/2), i.e. −0.07.
+    const boxGroup = new THREE.Group();
+    boxGroup.matrixAutoUpdate = false;
+    boxGroup.visible = false;
+    scene.add(boxGroup);
+
+    // Wireframe edges (yellow).
+    boxGroup.add(new THREE.LineSegments(
+      new THREE.EdgesGeometry(new THREE.BoxGeometry(BOX_W, BOX_H, BOX_D)),
+      new THREE.LineBasicMaterial({ color: 0xfacc15 })
+    ));
+
+    // Translucent fill.
+    boxGroup.add(new THREE.Mesh(
+      new THREE.BoxGeometry(BOX_W, BOX_H, BOX_D),
+      new THREE.MeshStandardMaterial({
+        color: 0xfacc15, transparent: true, opacity: 0.10,
+        side: THREE.DoubleSide, depthWrite: false,
+      })
+    ));
+
+    // White dot at scanning-head tip = box-local (0, 0, −(BOX_Z_MIN + BOX_D/2)).
+    // This is 2 cm outside (near-side) the box near face.
+    const headDot = new THREE.Mesh(
+      new THREE.SphereGeometry(0.009, 12, 8),
+      new THREE.MeshBasicMaterial({ color: 0xffffff })
+    );
+    headDot.position.set(0, 0, -(BOX_Z_MIN + BOX_D / 2));
+    boxGroup.add(headDot);
+
+    // ── Helpers ───────────────────────────────────────────────────────────────
+    function matFromRows(rows) {
+      if (!rows) return null;
+      // rows is [[r0c0,r0c1,r0c2,r0c3], [r1c0,...], ...]
+      return new THREE.Matrix4().set(...rows.flat());
+    }
+
+    const _centroid = new THREE.Vector3();
+
+    function applyBoxMatrix(mat4) {
+      boxGroup.matrix.copy(mat4);
+      boxGroup.matrixWorldNeedsUpdate = true;
+      boxGroup.visible = true;
+
+      _centroid.setFromMatrixPosition(mat4);
+
+      // Camera at box-frame (0, −1.00, +0.50) m, transformed into world.
+      camera.position.set(0, -1.00, 0.50).applyMatrix4(mat4);
+      // Up = box +Z axis in world (non-degenerate: dot with look-dir ≈ −0.45).
+      camera.up.set(0, 0, 1).transformDirection(mat4);
+      camera.lookAt(_centroid);
+
+      boxStatEl.textContent =
+        `BOX SET — centroid: (${_centroid.x.toFixed(3)}, ` +
+        `${_centroid.y.toFixed(3)}, ${_centroid.z.toFixed(3)}) m ` +
+        `[${BOX_W*100}×${BOX_H*100}×${BOX_D*100} cm]`;
+      boxStatEl.className = "ok";
+    }
+
+    // ── WebSocket ─────────────────────────────────────────────────────────────
+    let socket;
+
+    function send(msg) {
+      if (socket?.readyState === WebSocket.OPEN) socket.send(JSON.stringify(msg));
+    }
+
+    function connect() {
+      socket = new WebSocket(WS_URL);
+
+      socket.onopen = () => {
+        connEl.textContent = "connected";
+        connEl.className = "ok";
+        errEl.style.display = "none";
+      };
+
+      socket.onmessage = event => {
+        const data = JSON.parse(event.data);
+
+        if (data.error) {
+          errEl.textContent = data.error.replaceAll("_", " ");
+          errEl.style.display = "block";
+          return;
+        }
+        errEl.style.display = "none";
+
+        // Live transducer.
+        if (data.live_pose) {
+          const m = matFromRows(data.live_pose);
+          if (m) {
+            liveGroup.matrix.copy(m);
+            liveGroup.matrixWorldNeedsUpdate = true;
+            liveGroup.visible = true;
+            const p = new THREE.Vector3().setFromMatrixPosition(m);
+            posEl.textContent =
+              `tip origin: x=${p.x.toFixed(3)}  y=${p.y.toFixed(3)}  z=${p.z.toFixed(3)} m`;
+          }
+        } else {
+          liveGroup.visible = false;
+          posEl.textContent = "tracker not visible";
+        }
+
+        // Box (locked after first Set Box; re-locked if Set Box pressed again).
+        if (data.box_matrix) {
+          const bm = matFromRows(data.box_matrix);
+          if (bm) applyBoxMatrix(bm);
+        }
+
+        srcEl.textContent = data.source_label ? `source: ${data.source_label}` : "";
+      };
+
+      socket.onclose = () => {
+        connEl.textContent = "disconnected — reload to reconnect";
+        connEl.className = "error";
+      };
+      socket.onerror = () => { connEl.className = "error"; };
+    }
+
+    // ── Controls ──────────────────────────────────────────────────────────────
+    document.getElementById("set-box-btn").addEventListener("click", () => send({ cmd: "set_box" }));
+
+    document.addEventListener("keydown", e => {
+      const k = e.key.toLowerCase();
+      if (k === "b") { e.preventDefault(); send({ cmd: "set_box" }); return; }
+      // Nudge keys for --fake mode (1/2/3/4/5/6 and q/w/e/r/t/y).
+      if ("123456qwerty".includes(k)) { e.preventDefault(); send({ key: k }); }
+    });
+
+    // ── Resize ────────────────────────────────────────────────────────────────
+    function resize() {
+      const w = sceneEl.clientWidth, h = sceneEl.clientHeight;
+      renderer.setSize(w, h, false);
+      camera.aspect = w / h;
+      camera.updateProjectionMatrix();
+    }
+
+    // ── Render loop ───────────────────────────────────────────────────────────
+    (function animate() {
+      requestAnimationFrame(animate);
+      renderer.render(scene, camera);
+    })();
+
+    window.addEventListener("resize", resize);
+    resize();
+    connect();
+  </script>
+</body>
+</html>

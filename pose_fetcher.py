@@ -2,6 +2,12 @@
 
 A pose is a 4x4 numpy homogeneous transform. get_pose() returns one,
 or None if no valid pose is currently available.
+
+All poses returned by get_pose() are in scanning-head / tip coordinates.
+HEAD_OFFSET_M is applied in the base-class get_pose() wrapper so every
+consumer (1D/2D/3D, competition, study, set-box) inherits tip coords
+automatically.  Subclasses implement _raw_pose() (transducer-center coords)
+and must not apply the offset themselves.
 """
 
 from abc import ABC, abstractmethod
@@ -9,9 +15,18 @@ import numpy as np
 
 from calibration import DEFAULT_CALIBRATION, compute_transducer_from_tracker
 
+# Distance from transducer-center OBJ origin to scanning-head tip along
+# local +X (red axis).  Validated correct sign/magnitude on the rig in
+# --setbox mode.  Change here to recalibrate; zero to revert to OBJ-center.
+HEAD_OFFSET_M = 0.07
+
 
 class LivePoseFetcher(ABC):
-    """Interface for anything that supplies live poses on demand."""
+    """Interface for anything that supplies live poses on demand.
+
+    External callers always use get_pose(), which returns tip coordinates.
+    Subclasses implement _raw_pose() (transducer-center / OBJ-origin coords).
+    """
 
     source_mode = "unknown"
     source_label = "Unknown pose source"
@@ -22,9 +37,27 @@ class LivePoseFetcher(ABC):
         pass
 
     @abstractmethod
-    def get_pose(self) -> np.ndarray | None:
-        """Return the current pose as a 4x4 matrix, or None if invalid."""
+    def _raw_pose(self) -> np.ndarray | None:
+        """Return the raw transducer-center pose, or None if invalid.
+
+        Do NOT call directly from outside this class hierarchy.  Use get_pose().
+        """
         pass
+
+    def get_pose(self) -> np.ndarray | None:
+        """Return current tip pose (4x4), or None if invalid.
+
+        Applies HEAD_OFFSET_M along the transducer's local +X axis to convert
+        from transducer-center (_raw_pose) to scanning-head tip coordinates.
+        This is the single point where the offset is applied; all consumers
+        receive tip coordinates without any further adjustment.
+        """
+        pose = self._raw_pose()
+        if pose is None:
+            return None
+        result = pose.copy()
+        result[:3, 3] += pose[:3, 0] * HEAD_OFFSET_M
+        return result
 
     @abstractmethod
     def disconnect(self) -> None:
@@ -65,7 +98,7 @@ class TrackerPoseFetcher(LivePoseFetcher):
         openvr.shutdown()
         raise RuntimeError("No generic tracker found. Is it powered on and tracked by SteamVR?")
 
-    def get_pose(self) -> np.ndarray | None:
+    def _raw_pose(self) -> np.ndarray | None:
         import openvr
         poses = self.vr_system.getDeviceToAbsoluteTrackingPose(
             openvr.TrackingUniverseStanding, 0, openvr.k_unMaxTrackedDeviceCount

@@ -168,3 +168,53 @@ class PreferenceActivity(Activity):
     def set_rating(self, rating: int) -> None:
         """Inject a rating from outside (Step 3 transport hook)."""
         self._rating = rating
+
+
+# ── Practice ──────────────────────────────────────────────────────────────────
+
+class PracticeActivity(Activity):
+    """Practice phase: live reticle with box-origin pose as target.
+
+    Ends when Trial's 60 s timeout fires OR when request_end() is called from
+    outside (e.g. the user presses Ready on the study UI).  Match is displayed
+    but does NOT end the phase — the user is encouraged to explore freely.
+    """
+
+    def __init__(self, fetcher: LivePoseFetcher, target_pose: np.ndarray) -> None:
+        self._trial = Trial(fetcher, target_pose)
+        self._end_requested = False
+        self._done = False
+
+    @property
+    def target_pose(self) -> np.ndarray:
+        return self._trial.target_pose
+
+    def start(self) -> None:
+        self._trial.start()
+        self._end_requested = False
+        self._done = False
+
+    def request_end(self) -> None:
+        """Signal from server recv_loop that the user pressed Ready."""
+        self._end_requested = True
+
+    def step(self) -> dict:
+        if self._done:
+            return {
+                "done": True, "achieved": False, "hold_progress": 0.0,
+                "linear": None, "angular": None, "matched": False,
+                "timed_out": False, "elapsed": None,
+            }
+        state = self._trial.step()
+        if state["timed_out"] or self._end_requested:
+            self._done = True
+        return {
+            "done": self._done,
+            "achieved": False,
+            "hold_progress": 0.0,
+            "linear": state["linear"],
+            "angular": state["angular"],
+            "matched": state["matched"],
+            "timed_out": False,
+            "elapsed": state["elapsed"],
+        }

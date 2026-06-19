@@ -11,33 +11,56 @@ activity list the moment calibration returns done=True.
 from typing import Callable
 import numpy as np
 
-from .activities import Activity, CalibrationActivity, TrialActivity, PreferenceActivity
+from .activities import Activity, CalibrationActivity, TrialActivity, PreferenceActivity, PracticeActivity
 
 
 class Block:
-    """Runs one condition: Calibration → Trial×N → Preference in sequence."""
+    """Runs one condition: [Calibration?] → [Practice?] → Trial×N → Preference.
+
+    calibration=None skips the calibration step; trials are expanded immediately
+    from fallback_origin at start() time.
+    practice=None skips the practice phase.
+    """
 
     def __init__(
         self,
-        calibration: CalibrationActivity,
+        calibration: CalibrationActivity | None,
         trial_factory: Callable[[np.ndarray], list[TrialActivity]],
         preference: PreferenceActivity,
+        practice: PracticeActivity | None = None,
+        fallback_origin: np.ndarray | None = None,
     ) -> None:
         self._calibration = calibration
+        self._practice = practice
         self._trial_factory = trial_factory
         self._preference = preference
-        self._activities: list[Activity] = [calibration]
+        self._fallback_origin = fallback_origin
+        self._activities: list[Activity] = []
         self._idx = 0
         self._done = False
         self._origin: np.ndarray | None = None
 
     # ── Public interface ──────────────────────────────────────────────────────
 
+    @property
+    def origin(self) -> np.ndarray | None:
+        """Calibration origin (or fallback_origin when calibration is skipped)."""
+        return self._origin
+
     def start(self) -> None:
-        self._activities = [self._calibration]
         self._idx = 0
         self._done = False
         self._origin = None
+        if self._calibration is not None:
+            # Lazy expansion: start with calibration only; trials added after origin known.
+            self._activities = [self._calibration]
+        else:
+            # No calibration: expand immediately from fallback_origin.
+            origin = self._fallback_origin
+            self._origin = origin
+            trials = self._trial_factory(origin) if origin is not None else []
+            practice_part = [self._practice] if self._practice is not None else []
+            self._activities = practice_part + trials + [self._preference]
         self._activities[0].start()
 
     @property
@@ -84,13 +107,16 @@ class Block:
         data = current.step()
 
         if data["done"]:
-            # Calibration finished: expand trial activities now that origin is known.
+            # Calibration finished: expand full activity list now that origin is known.
             if current is self._calibration:
                 origin = data.get("origin")
                 if origin is not None:
                     self._origin = origin
                     trials = self._trial_factory(origin)
-                    self._activities = [self._calibration] + trials + [self._preference]
+                    practice_part = [self._practice] if self._practice is not None else []
+                    self._activities = (
+                        [self._calibration] + practice_part + trials + [self._preference]
+                    )
 
             self._idx += 1
             if self._idx >= len(self._activities):
@@ -114,6 +140,8 @@ class Block:
         a = self._activities[idx]
         if isinstance(a, CalibrationActivity):
             return "calibration"
+        if isinstance(a, PracticeActivity):
+            return "practice"
         if isinstance(a, TrialActivity):
             return "trial"
         if isinstance(a, PreferenceActivity):

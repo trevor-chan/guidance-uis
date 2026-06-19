@@ -32,7 +32,13 @@ from study.archiver import NoOpArchiver
 # ── Scripted fetcher ──────────────────────────────────────────────────────────
 
 class ScriptedFetcher(LivePoseFetcher):
-    """Returns whatever pose is set via set_pose(). No hardware required."""
+    """Returns whatever pose is set via set_pose(). No hardware required.
+
+    Overrides get_pose() directly (bypassing the base-class head-offset wrapper)
+    so that set_pose(exact_pose) injects that exact pose into the system.  This
+    lets the headless test match a trial target precisely without having to
+    account for the tip offset.
+    """
 
     def __init__(self, initial_pose: np.ndarray | None = None) -> None:
         self._pose = initial_pose
@@ -46,8 +52,12 @@ class ScriptedFetcher(LivePoseFetcher):
     def set_pose(self, pose: np.ndarray | None) -> None:
         self._pose = pose
 
-    def get_pose(self) -> np.ndarray | None:
+    def _raw_pose(self) -> np.ndarray | None:
         return self._pose.copy() if self._pose is not None else None
+
+    def get_pose(self) -> np.ndarray | None:
+        # Bypass head-offset: inject exact pose for scripted test scenarios.
+        return self._raw_pose()
 
 
 # ── Fixed poses ───────────────────────────────────────────────────────────────
@@ -72,7 +82,7 @@ def main() -> None:
 
     fetcher = ScriptedFetcher(FAR_POSE)
     archiver = NoOpArchiver()
-    runner = SequenceRunner(fetcher, n_trials=7, archiver=archiver)
+    runner = SequenceRunner(fetcher, n_trials=7, archiver=archiver, box_origin=ORIGIN_POSE)
     runner.start()
 
     # Grab block reference for introspection (current_activity, current_trial_index).
