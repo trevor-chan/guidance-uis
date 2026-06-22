@@ -9,7 +9,7 @@ from typing import Optional
 import numpy as np
 
 from pose_fetcher import LivePoseFetcher
-from core import random_study_target, LINEAR_TOL, HOLD_DURATION
+from core import random_study_target
 
 from .activities import CalibrationActivity, TrialActivity, PreferenceActivity, PracticeActivity
 from .block import Block
@@ -68,7 +68,7 @@ class SequenceGenerator:
         All other modes (1d, transducer) skip calibration and seed trials
         directly from the supplied origin.
         """
-        needs_calibration = frame == "user"   # patient/transducer/1d: no calibration step
+        needs_calibration = frame in ("user", "patient")
         calibration = CalibrationActivity(self._fetcher) if needs_calibration else None
         practice    = PracticeActivity(self._fetcher, origin)
         preference  = PreferenceActivity()

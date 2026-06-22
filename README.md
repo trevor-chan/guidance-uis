@@ -3,17 +3,53 @@ Guidance User Interface Study
 
 Code for evaluating a range of 3D pose guidance graphical interfaces
 
-## Run the 3D interface
+## Run the experiment dashboard
 
 Install the Python dependencies, then start one of the two pose modes:
 
 ```bash
 # Real-time SteamVR tracker (default, 60 Hz)
-python server.py
+python server.py --study
 
 # Keyboard-controlled test pose
-python server.py --fake
+python server.py --study --fake
 ```
+
+Open `http://localhost:8000/launcher.html`. The dashboard maps participant IDs
+P1-P7 to the seven condition-matrix rows in the experimental protocol, captures
+the target workspace, and advances through all seven modality conditions.
+
+The matrix modalities are M1 = 1D; M2-M4 = 2D user/patient/transducer; and
+M5-M7 = 3D user/patient/transducer.
+
+### Data storage and export
+
+The workflow records through a repository interface, so collection layout and
+analysis export are independent choices. SQLite is the current collection
+adapter and CSV is the current export adapter.
+
+```bash
+# Default: one SQLite database per session, plus CSV exports
+python server.py --study --data-layout session
+
+# One SQLite database containing all sessions for each participant
+python server.py --study --data-layout participant
+
+# One master SQLite database for the entire experiment
+python server.py --study --data-layout experiment
+
+# Change output location/name or disable automatic CSV export
+python server.py --study \
+  --data-root data \
+  --experiment-id modality-pilot \
+  --export-format none
+```
+
+All layouts use the same logical schema. Completed trials are committed
+immediately, trajectory samples are flushed in small batches, condition reruns
+are retained as new attempts, and the dashboard can restore saved progress.
+New collection backends implement `ExperimentRepository`; new analysis formats
+implement `DataExporter`.
 
 Fake-mode controls:
 
@@ -26,7 +62,8 @@ I/K  pitch +/-
 J/L  yaw +/-
 ```
 
-Open `http://localhost:8000/index-3d.html`. In tracker mode, **Calibrate**
+For standalone competition testing, run `python server.py --competition --modality 3d`
+and open `http://localhost:8000/index-3d.html`. In tracker mode, **Calibrate**
 captures the current tracker transform and makes it the center and orientation
 of the 50 x 50 x 50 cm workspace. The live transducer then follows the incoming
 SteamVR pose, and targets are generated within +/-25 cm on each calibrated axis.

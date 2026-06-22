@@ -13,7 +13,7 @@ import numpy as np
 import websockets
 
 from pose_fetcher import LivePoseFetcher, TrackerPoseFetcher, HEAD_OFFSET_M
-from trial import Trial, TARGET_POSE
+from trial import Trial, TARGET_POSE, LINEAR_TOLERANCE
 from pose_math import angular_distance, component_errors, workspace_component_errors
 from core import (CUBE_SIZE, HOLD_DURATION, LINEAR_TOL,
                   BOX_HALF_XY, BOX_Z_MIN, BOX_Z_MAX,
@@ -21,6 +21,12 @@ from core import (CUBE_SIZE, HOLD_DURATION, LINEAR_TOL,
 from study.sequence import SequenceRunner, SequenceGenerator
 from study.archiver import NoOpArchiver
 from study.activities import CalibrationActivity, PreferenceActivity, PracticeActivity
+from study.storage import (
+    ConditionRecorder,
+    ExperimentRepository,
+    StorageConfig,
+    create_data_store,
+)
 
 HOST = "localhost"
 PORT = 8765
@@ -32,10 +38,12 @@ ROT_STEP   = math.radians(2)  # 2° per keypress
 
 # (dof 0-2 = x/y/z translation, dof 3-5 = roll/pitch/yaw rotation)
 _KEY_MAP = {
-    '1': (0, +1), '2': (1, +1), '3': (2, +1),
-    '4': (3, +1), '5': (4, +1), '6': (5, +1),
-    'q': (0, -1), 'w': (1, -1), 'e': (2, -1),
-    'r': (3, -1), 't': (4, -1), 'y': (5, -1),
+    'd': (0, +1), 'a': (0, -1),
+    'w': (1, +1), 's': (1, -1),
+    'q': (2, +1), 'e': (2, -1),
+    'u': (3, +1), 'o': (3, -1),
+    'i': (4, +1), 'k': (4, -1),
+    'j': (5, +1), 'l': (5, -1),
 }
 
 GAME_DURATION      = 180.0   # 3 minutes
@@ -265,6 +273,7 @@ async def _competition_handler(websocket, fetcher, modality="1d", frame="transdu
                     state["target_workspace_components"] = None
                     state["workspace_component_errors"] = None
                     state["workspace_component_aligned"] = None
+
             if diagnostic:
                 _diag_frame += 1
                 if _diag_frame >= _DIAG_EVERY:
@@ -320,6 +329,15 @@ async def _competition_handler(websocket, fetcher, modality="1d", frame="transdu
 
             except (json.JSONDecodeError, AttributeError):
                 pass
+            except Exception as exc:
+                print(f"[STUDY] data command failed: {exc}")
+                try:
+                    await websocket.send(json.dumps({
+                        "error": "data_store_error",
+                        "detail": str(exc),
+                    }))
+                except websockets.exceptions.ConnectionClosed:
+                    pass
 
     try:
         await asyncio.gather(send_loop(), recv_loop())
@@ -362,7 +380,12 @@ def _study_blank(activity_type, frame, modality, n_trials, trial_index=None):
     }
 
 
-async def _new_study_handler(websocket, fetcher, n_trials=STUDY_BLOCK_TRIALS):
+async def _new_study_handler(
+    websocket,
+    fetcher,
+    data_store: ExperimentRepository,
+    n_trials=STUDY_BLOCK_TRIALS,
+):
     """Multi-mode study handler.
 
     Lifecycle per page visit:
@@ -383,6 +406,14 @@ async def _new_study_handler(websocket, fetcher, n_trials=STUDY_BLOCK_TRIALS):
         "preference_act":        None,
         "practice_act":          None,
         "trial_index":           None,
+        "participant_id":        None,
+        "condition_option":      None,
+        "condition_index":       None,
+        "target_set":            None,
+        "modality_id":           None,
+        "session_id":            None,
+        "recorder":              None,
+        "persistent_state":      None,
     }
 
     async def send_loop():
@@ -400,7 +431,11 @@ async def _new_study_handler(websocket, fetcher, n_trials=STUDY_BLOCK_TRIALS):
             if phase == "await_calibrate":
                 if session["calibrate_pending"]:
                     session["calibrate_pending"] = False
-                    block.step()           # CalibrationActivity: captures pose → done immediately
+                    calibration_data = block.step()
+                    origin = calibration_data["data"].get("origin")
+                    recorder = session.get("recorder")
+                    if recorder and origin is not None:
+                        recorder.record_calibration(origin)
                     session["phase"] = "running"
                 state = _study_blank("calibration", frame, modality, n)
                 live_arr = fetcher.get_pose()
@@ -421,6 +456,13 @@ async def _new_study_handler(websocket, fetcher, n_trials=STUDY_BLOCK_TRIALS):
                 block_data = block.step()
                 act_type   = block_data["activity_type"]
                 act_data   = block_data["data"]
+                recorder   = session.get("recorder")
+                if recorder:
+                    recorder.observe_activity(
+                        act_type,
+                        block_data["trial_index"],
+                        act_data,
+                    )
 
                 if act_type == "practice" and session["practice_act"] is None:
                     cur = block.current_activity
@@ -471,7 +513,9 @@ async def _new_study_handler(websocket, fetcher, n_trials=STUDY_BLOCK_TRIALS):
                             live_arr, target_arr, origin
                         )
                         state["workspace_component_aligned"] = {
-                            name: abs(val) <= (LINEAR_TOL if name in ("x", "y", "z") else 5.0)
+                            name: abs(val) <= (
+                                LINEAR_TOLERANCE if name in ("x", "y", "z") else 5.0
+                            )
                             for name, val in state["workspace_component_errors"].items()
                         }
                     if BOX_ORIGIN is not None:
@@ -490,6 +534,10 @@ async def _new_study_handler(websocket, fetcher, n_trials=STUDY_BLOCK_TRIALS):
                     if session["preference_act"]:
                         session["preference_act"].set_rating(rating)
                     block.step()              # PreferenceActivity → done → block.done = True
+                    recorder = session.get("recorder")
+                    if recorder:
+                        result = recorder.save_preference_and_finish(rating)
+                        session["persistent_state"] = result["state"]
                     session["phase"] = "complete"
                 state = _study_blank("preference", frame, modality, n, session["trial_index"])
                 await websocket.send(json.dumps(state))
@@ -498,6 +546,7 @@ async def _new_study_handler(websocket, fetcher, n_trials=STUDY_BLOCK_TRIALS):
 
             # complete
             state = _study_blank("complete", frame, modality, n)
+            state["persistent_state"] = session.get("persistent_state")
             await websocket.send(json.dumps(state))
             await asyncio.sleep(STEP_INTERVAL)
 
@@ -527,23 +576,71 @@ async def _new_study_handler(websocket, fetcher, n_trials=STUDY_BLOCK_TRIALS):
                         await websocket.send(json.dumps({"error": "tracker_not_visible"}))
                         continue
                     BOX_ORIGIN = pose.copy()
+                    session_id = data.get("session_id")
+                    participant_id = data.get("participant_id")
+                    if session_id and participant_id:
+                        data_store.save_box_pose(session_id, participant_id, pose)
                     print(
                         f"[STUDY] BOX_ORIGIN set: pos=("
                         f"{pose[0,3]:+.3f}, {pose[1,3]:+.3f}, {pose[2,3]:+.3f}) m"
                     )
                     await websocket.send(json.dumps({"cmd_ack": "set_box", "mode": "study"}))
 
+                elif cmd == "create_session":
+                    state = data_store.create_session(data["session"])
+                    await websocket.send(json.dumps({
+                        "cmd_ack": "create_session",
+                        "persistent_state": state,
+                    }))
+
+                elif cmd == "get_session_state":
+                    state = data_store.get_session_state(
+                        data.get("session_id", ""),
+                        data.get("participant_id"),
+                    )
+                    await websocket.send(json.dumps({
+                        "cmd_ack": "get_session_state",
+                        "persistent_state": state,
+                    }))
+
+                elif cmd == "find_latest_session":
+                    state = data_store.latest_session_for_participant(
+                        data.get("participant_id", "")
+                    )
+                    await websocket.send(json.dumps({
+                        "cmd_ack": "find_latest_session",
+                        "persistent_state": state,
+                    }))
+
                 elif cmd == "start_block":
+                    requested_session_id = data.get("session_id")
+                    requested_participant_id = data.get("participant_id")
                     if BOX_ORIGIN is None:
-                        pose = fetcher.get_pose()
-                        if pose is None:
-                            await websocket.send(json.dumps({"error": "box_not_set"}))
-                            continue
-                        BOX_ORIGIN = pose.copy()
-                        print(
-                            f"[STUDY] BOX_ORIGIN auto-set from fetcher: pos=("
-                            f"{pose[0,3]:+.3f}, {pose[1,3]:+.3f}, {pose[2,3]:+.3f}) m"
-                        )
+                        saved_pose = None
+                        if requested_session_id and requested_participant_id:
+                            saved_pose = data_store.get_box_pose(
+                                requested_session_id,
+                                requested_participant_id,
+                            )
+                        if saved_pose is not None:
+                            BOX_ORIGIN = saved_pose
+                            print("[STUDY] BOX_ORIGIN restored from durable session data.")
+                        else:
+                            pose = fetcher.get_pose()
+                            if pose is None:
+                                await websocket.send(json.dumps({"error": "box_not_set"}))
+                                continue
+                            BOX_ORIGIN = pose.copy()
+                            if requested_session_id and requested_participant_id:
+                                data_store.save_box_pose(
+                                    requested_session_id,
+                                    requested_participant_id,
+                                    pose,
+                                )
+                            print(
+                                f"[STUDY] BOX_ORIGIN auto-set from fetcher: pos=("
+                                f"{pose[0,3]:+.3f}, {pose[1,3]:+.3f}, {pose[2,3]:+.3f}) m"
+                            )
                     modality_req = data.get("modality", "1d")
                     frame_req    = data.get("frame", "none")
                     session["modality"]              = modality_req
@@ -554,15 +651,39 @@ async def _new_study_handler(websocket, fetcher, n_trials=STUDY_BLOCK_TRIALS):
                     session["calibrate_pending"]     = False
                     session["practice_done_pending"] = False
                     session["pending_rating"]        = None
+                    session["participant_id"]        = data.get("participant_id")
+                    session["condition_option"]      = data.get("condition_option")
+                    session["condition_index"]       = data.get("condition_index")
+                    session["target_set"]            = data.get("target_set")
+                    session["modality_id"]           = data.get("modality_id")
+                    session["session_id"]            = requested_session_id
+                    session["persistent_state"]      = None
+
+                    if not session["session_id"] or not session["participant_id"]:
+                        await websocket.send(json.dumps({
+                            "error": "missing_session_metadata"
+                        }))
+                        continue
 
                     gen   = SequenceGenerator(fetcher)
                     blk   = gen.make_block(modality_req, frame_req, BOX_ORIGIN, n_trials)
                     blk.start()
                     session["block"] = blk
+                    session["recorder"] = ConditionRecorder.start(
+                        data_store,
+                        session["session_id"],
+                        session["participant_id"],
+                        int(session["condition_index"]),
+                    )
                     needs_cal = isinstance(blk.current_activity, CalibrationActivity)
                     session["phase"] = "await_calibrate" if needs_cal else "running"
                     print(
-                        f"[STUDY] start_block: modality={modality_req} frame={frame_req} "
+                        f"[STUDY] start_block: participant={session['participant_id']} "
+                        f"option={session['condition_option']} "
+                        f"condition={session['condition_index']} "
+                        f"target_set={session['target_set']} "
+                        f"matrix_modality={session['modality_id']} "
+                        f"modality={modality_req} frame={frame_req} "
                         f"{'(calibration)' if needs_cal else '(no calibration)'}"
                     )
 
@@ -584,6 +705,10 @@ async def _new_study_handler(websocket, fetcher, n_trials=STUDY_BLOCK_TRIALS):
         await asyncio.gather(send_loop(), recv_loop())
     except websockets.exceptions.ConnectionClosed:
         pass
+    finally:
+        recorder = session.get("recorder")
+        if recorder:
+            recorder.flush(session.get("trial_index"))
 
 
 # ── Set-Box calibration test (throwaway — only active under --setbox flag) ─────
@@ -784,7 +909,15 @@ async def _study_handler(websocket, fetcher, runner):
 
 # ── Transport layer ────────────────────────────────────────────────────────────
 
-async def handler(websocket, fetcher_cls, mode, modality, frame="transducer", diagnostic=False):
+async def handler(
+    websocket,
+    fetcher_cls,
+    mode,
+    modality,
+    data_store,
+    frame="transducer",
+    diagnostic=False,
+):
     fetcher = fetcher_cls()
 
     if mode == "competition":
@@ -823,17 +956,37 @@ async def handler(websocket, fetcher_cls, mode, modality, frame="transducer", di
             return
         print(f"Client connected ({type(fetcher).__name__}) — study mode.")
         try:
-            await _new_study_handler(websocket, fetcher)
+            await _new_study_handler(websocket, fetcher, data_store)
         finally:
             fetcher.disconnect()
             print("Client disconnected.")
 
 
-async def main(fetcher_cls, mode, modality, frame="transducer", diagnostic=False):
-    async def _handler(websocket):
-        await handler(websocket, fetcher_cls, mode, modality, frame, diagnostic)
-
+async def main(
+    fetcher_cls,
+    mode,
+    modality,
+    frame="transducer",
+    diagnostic=False,
+    storage_config: StorageConfig | None = None,
+):
     root = Path(__file__).resolve().parent
+    data_store = create_data_store(
+        storage_config or StorageConfig(),
+        project_root=root,
+    )
+
+    async def _handler(websocket):
+        await handler(
+            websocket,
+            fetcher_cls,
+            mode,
+            modality,
+            data_store,
+            frame,
+            diagnostic,
+        )
+
     request_handler = partial(SimpleHTTPRequestHandler, directory=str(root))
     http_server = ThreadingHTTPServer((HOST, HTTP_PORT), request_handler)
     http_thread = threading.Thread(target=http_server.serve_forever, daemon=True)
@@ -852,6 +1005,10 @@ async def main(fetcher_cls, mode, modality, frame="transducer", diagnostic=False
                 print(f"Setbox UI: http://{HOST}:{HTTP_PORT}/setbox.html")
             if mode == "study":
                 print(f"Launcher:  http://{HOST}:{HTTP_PORT}/launcher.html")
+                print(
+                    f"Data:      {data_store.config.layout} layout at "
+                    f"{data_store.config.experiment_root}"
+                )
             await asyncio.Future()
     finally:
         http_server.shutdown()
@@ -875,10 +1032,36 @@ if __name__ == "__main__":
                         "user/patient=locked at calib pose")
     p.add_argument("--diagnostic", action="store_true",
                    help="Print live pose (position + basis axes) to terminal at ~3 Hz for coordinate-system verification")
+    p.add_argument("--data-root", default="data",
+                   help="Root directory for durable study data (default: data)")
+    p.add_argument("--data-backend", choices=["sqlite"], default="sqlite",
+                   help="Collection backend adapter (default: sqlite)")
+    p.add_argument("--data-layout", choices=["session", "participant", "experiment"],
+                   default="session",
+                   help="SQLite file layout: one file per session, participant, or experiment")
+    p.add_argument("--experiment-id", default="pose-guidance-ui",
+                   help="Experiment directory/name used by the data store")
+    p.add_argument("--export-format", choices=["csv", "none"], action="append",
+                   help="Export adapter to run after each completed condition (repeatable)")
     args = p.parse_args()
 
     mode        = "setbox" if args.setbox else ("study" if args.study else "competition")
     modality    = args.modality
     fetcher_cls = FakePoseFetcher if args.fake else TrackerPoseFetcher
+    export_formats = tuple(args.export_format or ["csv"])
+    storage_config = StorageConfig(
+        root=Path(args.data_root),
+        backend=args.data_backend,
+        layout=args.data_layout,
+        experiment_id=args.experiment_id,
+        export_formats=export_formats,
+    )
 
-    asyncio.run(main(fetcher_cls, mode, modality, args.frame, args.diagnostic))
+    asyncio.run(main(
+        fetcher_cls,
+        mode,
+        modality,
+        args.frame,
+        args.diagnostic,
+        storage_config,
+    ))

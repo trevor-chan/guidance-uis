@@ -3,15 +3,19 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Study Launcher</title>
+  <title>Experiment Dashboard</title>
   <style>
     :root {
-      --bg: #111;
-      --surface: #1e1e1e;
-      --text: #ddd;
-      --dim: #666;
+      --bg: #0b0d10;
+      --surface: #15191f;
+      --surface-2: #1d232b;
+      --line: #303844;
+      --text: #e5e7eb;
+      --dim: #87909d;
       --success: #4ade80;
       --accent: #38bdf8;
+      --warning: #facc15;
+      --danger: #f87171;
     }
     * { box-sizing: border-box; margin: 0; padding: 0; }
     body {
@@ -19,175 +23,756 @@
       background: var(--bg);
       color: var(--text);
       font-family: "Courier New", monospace;
-      display: flex;
-      flex-direction: column;
-      align-items: center;
-      justify-content: center;
-      padding: 32px 24px;
-      gap: 28px;
+      padding: 34px 22px 54px;
     }
-    h1 {
-      font-size: 1rem;
-      letter-spacing: 0.15em;
-      color: var(--dim);
+    button, input { font: inherit; }
+    button { cursor: pointer; }
+    button:disabled { cursor: default; opacity: 0.4; }
+    .shell { width: min(1120px, 100%); margin: 0 auto; }
+    .eyebrow {
+      color: var(--accent);
+      font-size: 0.7rem;
+      letter-spacing: 0.18em;
       text-transform: uppercase;
+      margin-bottom: 8px;
     }
-
-    /* ── Screen A: Set Box ─────────────────────────────────────────── */
-    #screen-a { display: flex; flex-direction: column; align-items: center; gap: 20px; }
-    #ref-image {
-      max-width: min(480px, 92vw);
-      border-radius: 8px;
-      background: #2a2a2a;
-      display: block;
-    }
-    #screen-a h2 {
-      font-size: 0.9rem;
-      letter-spacing: 0.08em;
-      color: var(--text);
-      text-align: center;
-      max-width: 440px;
-      line-height: 1.6;
-    }
-    #btn-set-box {
-      padding: 13px 40px;
-      border: 2px solid var(--success);
-      border-radius: 7px;
-      background: #14291a;
-      color: var(--success);
-      font: bold 0.95rem "Courier New", monospace;
-      letter-spacing: 0.1em;
-      text-transform: uppercase;
-      cursor: pointer;
-      transition: background 120ms;
-    }
-    #btn-set-box:hover:not(:disabled) { background: #1c3a22; }
-    #btn-set-box:disabled { opacity: 0.4; cursor: default; }
-    #set-box-status { font-size: 0.75rem; color: var(--dim); letter-spacing: 0.05em; }
-    #set-box-status.error { color: #f87171; }
-
-    /* ── Screen B: Mode Picker ─────────────────────────────────────── */
-    #screen-b { display: none; flex-direction: column; align-items: center; gap: 24px; width: 100%; }
-    #screen-b h2 {
-      font-size: 0.9rem;
-      letter-spacing: 0.1em;
-      color: var(--dim);
-      text-transform: uppercase;
-    }
-    .mode-grid {
-      display: flex;
-      flex-direction: column;
-      gap: 12px;
-      width: min(560px, 100%);
-    }
-    .mode-row {
-      display: flex;
-      gap: 10px;
-    }
-    .mode-btn {
-      flex: 1;
-      padding: 14px 8px;
-      border: 1px solid #444;
-      border-radius: 7px;
-      background: var(--surface);
-      color: var(--text);
-      font: 0.82rem "Courier New", monospace;
-      letter-spacing: 0.08em;
-      text-transform: uppercase;
-      text-align: center;
-      text-decoration: none;
-      cursor: pointer;
-      transition: background 120ms, border-color 120ms;
-      display: block;
-    }
-    .mode-btn:hover { background: #2a2a2a; border-color: var(--accent); color: var(--accent); }
-    .mode-btn.wide { flex: none; width: 100%; font-size: 1rem; letter-spacing: 0.12em; }
-    .row-label {
-      font-size: 0.65rem;
+    h1 { font-size: clamp(1.45rem, 3vw, 2.35rem); letter-spacing: -0.03em; }
+    h2 {
+      font-size: 0.83rem;
       letter-spacing: 0.12em;
-      color: var(--dim);
       text-transform: uppercase;
-      align-self: center;
-      min-width: 28px;
+      color: var(--dim);
+    }
+    p { line-height: 1.55; }
+    .subtitle { color: var(--dim); margin-top: 9px; font-size: 0.86rem; }
+    .topbar {
+      display: flex;
+      justify-content: space-between;
+      align-items: flex-start;
+      gap: 24px;
+      margin-bottom: 28px;
+    }
+    .ghost-btn, .primary-btn, .secondary-btn {
+      border-radius: 7px;
+      padding: 12px 18px;
+      border: 1px solid var(--line);
+      background: var(--surface-2);
+      color: var(--text);
+      transition: border-color 120ms, background 120ms, color 120ms;
+    }
+    .ghost-btn:hover, .secondary-btn:hover {
+      border-color: var(--accent);
+      color: var(--accent);
+    }
+    .primary-btn {
+      background: #0f3546;
+      border-color: var(--accent);
+      color: var(--accent);
+      font-weight: bold;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+    }
+    .primary-btn:hover:not(:disabled) { background: #164a61; }
+    .panel {
+      background: var(--surface);
+      border: 1px solid var(--line);
+      border-radius: 12px;
+      padding: 24px;
+    }
+    .panel + .panel { margin-top: 18px; }
+    .screen { display: none; }
+    .screen.active { display: block; }
+
+    /* Session setup */
+    .setup-grid {
+      display: grid;
+      grid-template-columns: minmax(230px, 0.7fr) minmax(0, 1.7fr);
+      gap: 22px;
+      margin-top: 20px;
+    }
+    .field-label {
+      display: block;
+      color: var(--dim);
+      font-size: 0.72rem;
+      letter-spacing: 0.1em;
+      text-transform: uppercase;
+      margin-bottom: 8px;
+    }
+    .setup-input {
+      width: 100%;
+      padding: 14px 15px;
+      border-radius: 7px;
+      border: 1px solid var(--line);
+      background: #0d1116;
+      color: var(--text);
+      text-transform: uppercase;
+      outline: none;
+      font-size: 1rem;
+    }
+    select.setup-input { text-transform: none; }
+    .setup-input:focus { border-color: var(--accent); }
+    .setup-field + .setup-field { margin-top: 13px; }
+    .helper { color: var(--dim); font-size: 0.72rem; margin-top: 9px; }
+    .protocol-list {
+      list-style: none;
+      display: grid;
+      gap: 10px;
+      margin-top: 16px;
+    }
+    .protocol-list li {
+      color: var(--dim);
+      font-size: 0.78rem;
+      padding-left: 22px;
+      position: relative;
+      line-height: 1.45;
+    }
+    .protocol-list li::before {
+      content: "□";
+      color: var(--accent);
+      position: absolute;
+      left: 0;
+    }
+    .option-grid {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 10px;
+      margin-top: 12px;
+    }
+    .option-btn {
+      text-align: left;
+      min-height: 83px;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      padding: 13px;
+      background: var(--surface-2);
+      color: var(--text);
+    }
+    .option-btn:hover { border-color: var(--accent); }
+    .option-btn.selected {
+      border-color: var(--accent);
+      background: #102c39;
+      box-shadow: inset 3px 0 var(--accent);
+    }
+    .option-number {
+      color: var(--accent);
+      font-size: 0.7rem;
+      letter-spacing: 0.1em;
+      text-transform: uppercase;
+      margin-bottom: 8px;
+    }
+    .option-order { font-size: 0.78rem; color: var(--dim); line-height: 1.45; }
+    .setup-actions {
+      display: flex;
+      justify-content: flex-end;
+      align-items: center;
+      gap: 14px;
+      margin-top: 22px;
+    }
+    .message { font-size: 0.74rem; color: var(--dim); flex: 1; }
+    .message.error { color: var(--danger); }
+    .message.ok { color: var(--success); }
+
+    /* Set box */
+    .box-layout {
+      display: grid;
+      grid-template-columns: minmax(240px, 430px) minmax(260px, 1fr);
+      gap: 28px;
+      align-items: center;
+    }
+    #ref-image {
+      width: 100%;
+      border-radius: 9px;
+      background: #252b33;
+      display: block;
+    }
+    .box-copy h2 { margin-bottom: 12px; }
+    .box-copy p { color: var(--dim); font-size: 0.84rem; margin-bottom: 18px; }
+    #set-box-status { margin-top: 12px; font-size: 0.74rem; color: var(--dim); }
+    #set-box-status.error { color: var(--danger); }
+
+    /* Dashboard */
+    .session-summary {
+      display: flex;
+      justify-content: space-between;
+      gap: 24px;
+      align-items: center;
+    }
+    .summary-tags { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 12px; }
+    .tag {
+      padding: 5px 9px;
+      border: 1px solid var(--line);
+      border-radius: 999px;
+      color: var(--dim);
+      font-size: 0.7rem;
+    }
+    .progress-copy { text-align: right; }
+    .progress-copy strong { color: var(--accent); font-size: 1.45rem; }
+    .condition-strip {
+      display: grid;
+      grid-template-columns: repeat(7, minmax(100px, 1fr));
+      gap: 9px;
+      margin-top: 18px;
+      overflow-x: auto;
+      padding-bottom: 4px;
+    }
+    .condition-card {
+      min-width: 100px;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      padding: 12px 10px;
+      background: #101419;
+      color: var(--text);
+      text-align: left;
+      font: inherit;
+      cursor: pointer;
+    }
+    .condition-card:hover { border-color: #526071; }
+    .condition-card.active { border-color: var(--accent); background: #102c39; }
+    .condition-card.complete { border-color: #27653c; background: #102319; }
+    .condition-step {
+      color: var(--dim);
+      font-size: 0.62rem;
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+    }
+    .condition-id { font-weight: bold; margin: 7px 0 4px; }
+    .condition-card.complete .condition-id { color: var(--success); }
+    .condition-card.active .condition-id { color: var(--accent); }
+    .condition-name { color: var(--dim); font-size: 0.66rem; line-height: 1.35; }
+    .current-layout {
+      display: grid;
+      grid-template-columns: minmax(260px, 0.78fr) minmax(420px, 1.4fr);
+      gap: 18px;
+      margin-top: 18px;
+    }
+    .current-condition h3 { margin: 10px 0 8px; font-size: 1.2rem; }
+    .current-condition p { color: var(--dim); font-size: 0.8rem; }
+    .current-meta {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 8px;
+      margin: 18px 0;
+    }
+    .meta-cell {
+      padding: 10px;
+      border: 1px solid var(--line);
+      border-radius: 7px;
+    }
+    .meta-cell span { display: block; color: var(--dim); font-size: 0.62rem; margin-bottom: 5px; }
+    .meta-cell strong { font-size: 0.78rem; }
+    .workflow {
+      display: grid;
+      grid-template-columns: repeat(4, 1fr);
+      gap: 9px;
+      margin-top: 16px;
+    }
+    .workflow-step {
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      padding: 12px;
+      min-height: 118px;
+    }
+    .workflow-step.skipped { opacity: 0.45; }
+    .workflow-index { color: var(--accent); font-size: 0.66rem; margin-bottom: 8px; }
+    .workflow-step h3 { font-size: 0.78rem; margin-bottom: 7px; }
+    .workflow-step p { color: var(--dim); font-size: 0.68rem; line-height: 1.45; }
+    .dashboard-actions {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: 14px;
+      margin-top: 18px;
+    }
+    .completion {
+      text-align: center;
+      padding: 44px 20px;
+    }
+    .completion h2 { color: var(--success); font-size: 1.05rem; margin-bottom: 12px; }
+    .completion p { color: var(--dim); margin-bottom: 20px; }
+
+    @media (max-width: 820px) {
+      .setup-grid, .box-layout, .current-layout { grid-template-columns: 1fr; }
+      .workflow { grid-template-columns: 1fr 1fr; }
+      .topbar, .session-summary { align-items: stretch; flex-direction: column; }
+      .progress-copy { text-align: left; }
+    }
+    @media (max-width: 520px) {
+      body { padding-inline: 14px; }
+      .panel { padding: 18px; }
+      .option-grid, .workflow { grid-template-columns: 1fr; }
+      .setup-actions, .dashboard-actions { align-items: stretch; flex-direction: column; }
+      .setup-actions button, .dashboard-actions button { width: 100%; }
     }
   </style>
 </head>
 <body>
-  <h1>Study Session</h1>
+  <div class="shell">
+    <header class="topbar">
+      <div>
+        <div class="eyebrow">Pose Guidance UI Study</div>
+        <h1>Experiment Dashboard</h1>
+        <p class="subtitle">Participant assignment, condition order, and modality workflow.</p>
+      </div>
+      <button class="ghost-btn" id="new-session-btn" hidden>End session</button>
+    </header>
 
-  <!-- Screen A: orient probe and press Set Box -->
-  <div id="screen-a">
-    <img src="assets/setbox_reference.png" id="ref-image"
-         alt="Orient probe as shown — crystal face toward patient, cable facing away">
-    <h2>Orient Probe as Shown and Press Set Box</h2>
-    <button id="btn-set-box">Set Box</button>
-    <div id="set-box-status">Ready</div>
+    <section class="screen active" id="setup-screen">
+      <div class="panel">
+        <h2>01 / Participant setup</h2>
+        <div class="setup-grid">
+          <div>
+            <label class="field-label" for="participant-id">Participant ID</label>
+            <input class="setup-input" id="participant-id" autocomplete="off"
+                   placeholder="P1" maxlength="12">
+            <p class="helper">Current protocol IDs P1-P7 automatically select the matching matrix row.</p>
+
+            <div class="setup-field">
+              <label class="field-label" for="participant-name">Participant full name</label>
+              <input class="setup-input" id="participant-name" autocomplete="off"
+                     placeholder="Optional direct identifier">
+            </div>
+            <div class="setup-field">
+              <label class="field-label" for="examiner-name">Examiner full name</label>
+              <input class="setup-input" id="examiner-name" autocomplete="off"
+                     placeholder="Examiner">
+            </div>
+            <div class="setup-field">
+              <label class="field-label" for="experiment-condition">Experiment condition</label>
+              <select class="setup-input" id="experiment-condition">
+                <option value="modality">Modality matrix</option>
+                <option value="noise">Noise</option>
+                <option value="latency">Latency</option>
+                <option value="learning_curve">Learning curve</option>
+              </select>
+            </div>
+
+            <ul class="protocol-list">
+              <li>Consent, IRB, and study documents complete</li>
+              <li>Hardware line-of-sight and 50 cm workspace explained</li>
+              <li>5 mm / 5 degree match threshold and 1 minute timeout explained</li>
+              <li>Front of the transducer and calibration controls identified</li>
+            </ul>
+          </div>
+
+          <div>
+            <span class="field-label">Condition matrix option</span>
+            <div class="option-grid" id="option-grid"></div>
+          </div>
+        </div>
+        <div class="setup-actions">
+          <div class="message" id="setup-message">Enter P1-P7 or choose one of the seven options.</div>
+          <button class="secondary-btn" id="resume-session-btn" disabled>Resume saved</button>
+          <button class="primary-btn" id="prepare-session-btn" disabled>Prepare session</button>
+        </div>
+      </div>
+    </section>
+
+    <section class="screen" id="box-screen">
+      <div class="panel box-layout">
+        <img src="assets/setbox_reference.png" id="ref-image"
+             alt="Orient probe with crystal face toward patient and cable facing away">
+        <div class="box-copy">
+          <h2>02 / Establish target workspace</h2>
+          <p>
+            Orient the probe as shown. The program will save this pose as the reference for
+            the target volume used by all seven conditions.
+          </p>
+          <button class="primary-btn" id="btn-set-box">Set box</button>
+          <div id="set-box-status">Ready to capture the workspace.</div>
+        </div>
+      </div>
+    </section>
+
+    <section class="screen" id="dashboard-screen">
+      <div class="panel">
+        <div class="session-summary">
+          <div>
+            <h2>03 / Condition sequence</h2>
+            <div class="summary-tags">
+              <span class="tag" id="participant-tag"></span>
+              <span class="tag" id="option-tag"></span>
+              <span class="tag" id="storage-tag"></span>
+              <span class="tag">3 trials per modality</span>
+            </div>
+          </div>
+          <div class="progress-copy">
+            <strong id="progress-count">0 / 7</strong>
+            <div class="helper">conditions complete</div>
+          </div>
+        </div>
+        <div class="condition-strip" id="condition-strip"></div>
+      </div>
+
+      <div class="current-layout" id="current-layout">
+        <div class="panel current-condition">
+          <h2>Next condition</h2>
+          <h3 id="current-title"></h3>
+          <p id="current-description"></p>
+          <div class="current-meta">
+            <div class="meta-cell">
+              <span>Target set</span>
+              <strong id="current-target-set"></strong>
+            </div>
+            <div class="meta-cell">
+              <span>Matrix modality</span>
+              <strong id="current-modality-id"></strong>
+            </div>
+            <div class="meta-cell">
+              <span>Visual display</span>
+              <strong id="current-display"></strong>
+            </div>
+            <div class="meta-cell">
+              <span>Reference frame</span>
+              <strong id="current-frame"></strong>
+            </div>
+          </div>
+          <button class="primary-btn" id="start-condition-btn">Start condition</button>
+        </div>
+
+        <div class="panel">
+          <h2>Per-modality experimental workflow</h2>
+          <div class="workflow">
+            <div class="workflow-step" id="calibration-step">
+              <div class="workflow-index">Step 1</div>
+              <h3>Calibration</h3>
+              <p id="calibration-copy"></p>
+            </div>
+            <div class="workflow-step">
+              <div class="workflow-index">Step 2</div>
+              <h3>Practice</h3>
+              <p>Up to 1 minute of free practice with live reticle feedback.</p>
+            </div>
+            <div class="workflow-step">
+              <div class="workflow-index">Step 3</div>
+              <h3>Data collection</h3>
+              <p>Run 3 target trials. Match within 5 mm and 5 degrees; each trial times out at 1 minute.</p>
+            </div>
+            <div class="workflow-step">
+              <div class="workflow-index">Step 4</div>
+              <h3>Preference</h3>
+              <p>Rate the effectiveness of the visual interface from 1 to 5.</p>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div class="panel completion" id="completion-panel" hidden>
+        <h2>All seven conditions complete</h2>
+        <p>Thank the participant and complete reimbursement or closing procedures.</p>
+        <button class="secondary-btn" id="finish-session-btn">Finish session</button>
+      </div>
+    </section>
   </div>
 
-  <!-- Screen B: select study mode (revealed after set_box ack) -->
-  <div id="screen-b">
-    <h2>Select Mode</h2>
-    <div class="mode-grid">
-      <!-- 1D -->
-      <div class="mode-row">
-        <a href="index.html?study=1&frame=none" class="mode-btn wide">1D</a>
-      </div>
-      <!-- 2D row -->
-      <div class="mode-row">
-        <span class="row-label">2D</span>
-        <a href="index-2d.html?study=1&frame=user"       class="mode-btn">User</a>
-        <a href="index-2d.html?study=1&frame=patient"    class="mode-btn">Patient</a>
-        <a href="index-2d.html?study=1&frame=transducer" class="mode-btn">Transducer</a>
-      </div>
-      <!-- 3D row -->
-      <div class="mode-row">
-        <span class="row-label">3D</span>
-        <a href="index-3d.html?study=1&frame=user"       class="mode-btn">User</a>
-        <a href="index-3d.html?study=1&frame=patient"    class="mode-btn">Patient</a>
-        <a href="index-3d.html?study=1&frame=transducer" class="mode-btn">Transducer</a>
-      </div>
-    </div>
-  </div>
-
+  <script src="experiment-session.js"></script>
   <script>
-    const WS_URL    = "ws://localhost:8765";
-    const btnSetBox = document.getElementById("btn-set-box");
-    const statusEl  = document.getElementById("set-box-status");
+    const WS_URL = "ws://localhost:8765";
+    const {
+      MODALITIES,
+      OPTION_ORDERS,
+      participantOption,
+      createSession,
+      getSession,
+      clearSession,
+      markBoxSet,
+      currentCondition,
+      conditionDetails,
+      conditionUrl,
+      persistencePayload,
+      applyPersistentState,
+      restorePersistentSession,
+      selectCondition,
+    } = window.ExperimentSession;
 
-    btnSetBox.addEventListener("click", () => {
-      btnSetBox.disabled = true;
-      statusEl.textContent = "Connecting to server…";
-      statusEl.className = "";
+    const screens = {
+      setup: document.getElementById("setup-screen"),
+      box: document.getElementById("box-screen"),
+      dashboard: document.getElementById("dashboard-screen"),
+    };
+    const participantInput = document.getElementById("participant-id");
+    const participantNameInput = document.getElementById("participant-name");
+    const examinerNameInput = document.getElementById("examiner-name");
+    const experimentConditionInput = document.getElementById("experiment-condition");
+    const optionGrid = document.getElementById("option-grid");
+    const prepareButton = document.getElementById("prepare-session-btn");
+    const resumeButton = document.getElementById("resume-session-btn");
+    const setupMessage = document.getElementById("setup-message");
+    const newSessionButton = document.getElementById("new-session-btn");
+    const setBoxButton = document.getElementById("btn-set-box");
+    const setBoxStatus = document.getElementById("set-box-status");
+    let selectedOption = null;
 
+    function requestStudyServer(message, expectedAck) {
+      return new Promise((resolve, reject) => {
+        const socket = new WebSocket(WS_URL);
+        socket.onopen = () => socket.send(JSON.stringify(message));
+        socket.onmessage = event => {
+          const data = JSON.parse(event.data);
+          if (data.error) {
+            socket.close();
+            reject(new Error(data.error.replaceAll("_", " ")));
+          } else if (data.cmd_ack === expectedAck) {
+            socket.close();
+            resolve(data);
+          }
+        };
+        socket.onerror = () => reject(new Error("Could not connect to the study server."));
+      });
+    }
+
+    function showScreen(name) {
+      Object.entries(screens).forEach(([key, element]) => {
+        element.classList.toggle("active", key === name);
+      });
+      newSessionButton.hidden = name === "setup";
+    }
+
+    function orderSummary(order) {
+      return order.map((modalityId, index) => `S${index + 1}:${modalityId}`).join("  ");
+    }
+
+    function renderOptionButtons() {
+      OPTION_ORDERS.forEach((order, index) => {
+        const option = index + 1;
+        const button = document.createElement("button");
+        button.type = "button";
+        button.className = "option-btn";
+        button.dataset.option = String(option);
+        button.innerHTML = `
+          <div class="option-number">Option ${option} / P${option}</div>
+          <div class="option-order">${orderSummary(order)}</div>
+        `;
+        button.addEventListener("click", () => {
+          selectedOption = option;
+          participantInput.value = `P${option}`;
+          updateSetupState();
+        });
+        optionGrid.appendChild(button);
+      });
+    }
+
+    function updateSetupState() {
+      const linked = participantOption(participantInput.value);
+      if (linked) selectedOption = linked;
+      document.querySelectorAll(".option-btn").forEach(button => {
+        button.classList.toggle("selected", Number(button.dataset.option) === selectedOption);
+      });
+
+      const ready = Boolean(participantInput.value.trim() && selectedOption);
+      prepareButton.disabled = !ready;
+      resumeButton.disabled = !participantInput.value.trim();
+      setupMessage.className = "message";
+      if (linked) {
+        setupMessage.textContent = `Participant P${linked} is linked to Option ${linked}.`;
+        setupMessage.classList.add("ok");
+      } else if (participantInput.value.trim()) {
+        setupMessage.textContent = "Choose the matrix option linked to this participant ID.";
+      } else {
+        setupMessage.textContent = "Enter P1-P7 or choose one of the seven options.";
+      }
+    }
+
+    async function prepareSession() {
+      prepareButton.disabled = true;
+      try {
+        const session = createSession(participantInput.value, selectedOption, {
+          participantName: participantNameInput.value,
+          examinerName: examinerNameInput.value,
+          experimentCondition: experimentConditionInput.value,
+        });
+        setupMessage.textContent = "Creating durable experiment record...";
+        const response = await requestStudyServer({
+          cmd: "create_session",
+          session: persistencePayload(session),
+        }, "create_session");
+        applyPersistentState(response.persistent_state);
+        setupMessage.textContent = "Session saved.";
+        setupMessage.className = "message ok";
+        showScreen("box");
+      } catch (error) {
+        setupMessage.textContent = error.message;
+        setupMessage.className = "message error";
+        prepareButton.disabled = false;
+      }
+    }
+
+    async function resumeSavedSession() {
+      resumeButton.disabled = true;
+      setupMessage.textContent = "Looking for a saved session...";
+      setupMessage.className = "message";
+      try {
+        const response = await requestStudyServer({
+          cmd: "find_latest_session",
+          participant_id: participantInput.value.trim().toUpperCase(),
+        }, "find_latest_session");
+        const session = restorePersistentSession(response.persistent_state);
+        if (!session) throw new Error("No saved session was found for this participant.");
+        selectedOption = Number(session.option);
+        renderDashboard();
+        showScreen(session.boxSet ? "dashboard" : "box");
+      } catch (error) {
+        setupMessage.textContent = error.message;
+        setupMessage.className = "message error";
+        resumeButton.disabled = false;
+      }
+    }
+
+    function captureBox() {
+      setBoxButton.disabled = true;
+      setBoxStatus.textContent = "Connecting to the study server...";
+      setBoxStatus.className = "";
       const socket = new WebSocket(WS_URL);
+      const session = getSession();
 
       socket.onopen = () => {
-        statusEl.textContent = "Connected — capturing box origin…";
-        socket.send(JSON.stringify({ cmd: "set_box" }));
+        setBoxStatus.textContent = "Connected - capturing workspace pose...";
+        socket.send(JSON.stringify({
+          cmd: "set_box",
+          session_id: session.sessionId,
+          participant_id: session.participantId,
+        }));
       };
-
       socket.onmessage = event => {
         const data = JSON.parse(event.data);
         if (data.cmd_ack === "set_box") {
+          markBoxSet();
           socket.close();
-          document.getElementById("screen-a").style.display = "none";
-          document.getElementById("screen-b").style.display = "flex";
+          renderDashboard();
+          showScreen("dashboard");
         } else if (data.error) {
-          statusEl.textContent = "Error: " + data.error.replaceAll("_", " ");
-          statusEl.className = "error";
-          btnSetBox.disabled = false;
+          setBoxStatus.textContent = `Error: ${data.error.replaceAll("_", " ")}`;
+          setBoxStatus.className = "error";
+          setBoxButton.disabled = false;
           socket.close();
         }
       };
-
       socket.onerror = () => {
-        statusEl.textContent = "Connection failed — is the server running?";
-        statusEl.className = "error";
-        btnSetBox.disabled = false;
+        setBoxStatus.textContent = "Connection failed - is server.py running in study mode?";
+        setBoxStatus.className = "error";
+        setBoxButton.disabled = false;
       };
+    }
 
-      socket.onclose = () => {};
-    });
+    function renderDashboard() {
+      const session = getSession();
+      if (!session) {
+        showScreen("setup");
+        return;
+      }
+
+      document.getElementById("participant-tag").textContent = `Participant ${session.participantId}`;
+      document.getElementById("option-tag").textContent = `Condition Option ${session.option}`;
+      const storage = session.persistentState;
+      document.getElementById("storage-tag").textContent = storage
+        ? `${storage.storageLayout} ${storage.storageBackend || "storage"} · ${(storage.exportFormats || []).join(", ") || "no export"}`
+        : "storage pending";
+      const completeCount = session.conditions.filter(item => item.status === "complete").length;
+      document.getElementById("progress-count").textContent = `${completeCount} / 7`;
+
+      const strip = document.getElementById("condition-strip");
+      strip.innerHTML = "";
+      session.conditions.forEach((condition, index) => {
+        const details = conditionDetails(condition);
+        const card = document.createElement("button");
+        card.type = "button";
+        card.className = "condition-card";
+        if (condition.status === "complete") card.classList.add("complete");
+        if (index === session.currentIndex) card.classList.add("active");
+        card.innerHTML = `
+          <div class="condition-step">${condition.targetSet} · ${index + 1}/7</div>
+          <div class="condition-id">${condition.modalityId}</div>
+          <div class="condition-name">${details.modality.shortLabel}<br>${condition.completedTrials || 0}/3 trials saved</div>
+        `;
+        card.addEventListener("click", () => {
+          selectCondition(index);
+          renderDashboard();
+        });
+        strip.appendChild(card);
+      });
+
+      const condition = currentCondition(session);
+      const currentLayout = document.getElementById("current-layout");
+      const completionPanel = document.getElementById("completion-panel");
+      if (!condition) {
+        currentLayout.hidden = true;
+        completionPanel.hidden = false;
+        return;
+      }
+
+      currentLayout.hidden = false;
+      completionPanel.hidden = true;
+      const details = conditionDetails(condition);
+      document.getElementById("current-title").textContent =
+        `${condition.modalityId} · ${details.modality.label}`;
+      document.getElementById("current-description").textContent =
+        `Condition ${condition.index + 1} uses target set ${condition.targetSet} in the protocol matrix.`;
+      document.getElementById("current-target-set").textContent = condition.targetSet;
+      document.getElementById("current-modality-id").textContent = condition.modalityId;
+      document.getElementById("current-display").textContent = details.modality.display;
+      document.getElementById("current-frame").textContent =
+        details.modality.frame === "none" ? "Not applicable" : details.modality.frame;
+
+      const calibrationStep = document.getElementById("calibration-step");
+      const calibrationCopy = document.getElementById("calibration-copy");
+      calibrationStep.classList.toggle("skipped", !details.modality.needsCalibration);
+      calibrationCopy.textContent = details.modality.needsCalibration
+        ? `Capture the ${details.modality.frame} reference pose before practice.`
+        : "No separate user/patient reference-frame calibration is required.";
+
+      document.getElementById("start-condition-btn").onclick = () => {
+        if (
+          condition.status === "complete" &&
+          !window.confirm("This condition is complete. Start a new recorded attempt?")
+        ) return;
+        window.location.href = conditionUrl(session, condition);
+      };
+      document.getElementById("start-condition-btn").textContent =
+        condition.status === "complete" ? "Re-run condition" : "Start condition";
+    }
+
+    async function syncExistingSession(session) {
+      try {
+        let response = await requestStudyServer({
+          cmd: "get_session_state",
+          session_id: session.sessionId,
+          participant_id: session.participantId,
+        }, "get_session_state");
+        if (!response.persistent_state) {
+          response = await requestStudyServer({
+            cmd: "create_session",
+            session: persistencePayload(session),
+          }, "create_session");
+        }
+        applyPersistentState(response.persistent_state);
+      } catch (error) {
+        console.warn("Durable session sync failed:", error.message);
+      }
+    }
+
+    function endSession() {
+      if (!window.confirm("End this experiment session and clear its local progress?")) return;
+      clearSession();
+      window.location.href = "launcher.html";
+    }
+
+    renderOptionButtons();
+    participantInput.addEventListener("input", updateSetupState);
+    prepareButton.addEventListener("click", prepareSession);
+    resumeButton.addEventListener("click", resumeSavedSession);
+    setBoxButton.addEventListener("click", captureBox);
+    newSessionButton.addEventListener("click", endSession);
+    document.getElementById("finish-session-btn").addEventListener("click", endSession);
+
+    const existingSession = getSession();
+    if (existingSession) {
+      syncExistingSession(existingSession).finally(() => {
+        const syncedSession = getSession();
+        renderDashboard();
+        showScreen(syncedSession.boxSet ? "dashboard" : "box");
+      });
+    } else {
+      updateSetupState();
+    }
   </script>
 </body>
 </html>

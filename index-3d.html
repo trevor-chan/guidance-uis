@@ -235,6 +235,11 @@
                             letter-spacing: 0.08em; text-transform: uppercase; }
     #calib-img-3d { max-width: 100%; border-radius: 4px; background: #2a2a2a;
                     display: block; margin: 0 auto 14px; }
+    .study-context-3d {
+      color: #38bdf8; font-size: 0.66rem; line-height: 1.5; letter-spacing: 0.04em;
+      text-align: center; padding-bottom: 14px; margin-bottom: 16px;
+      border-bottom: 1px solid #333;
+    }
   </style>
   <script type="importmap">
     {
@@ -250,15 +255,16 @@
 
     <!-- Study overlay card (shown in study mode, hidden in competition) -->
     <section class="card" id="study-card-3d">
+      <div class="study-context-3d" id="study-context-3d"></div>
       <div class="study-phase-3d" id="s3-cal">
         <div class="study-heading-3d">Study Mode — Calibrate</div>
         <img src="assets/calib_user_reference.png" id="calib-img-3d" alt="Calibration reference">
-        <p class="study-prompt-3d">Orient probe as shown. Press Calibrate when ready.</p>
+        <p class="study-prompt-3d" id="calibration-prompt-3d">Orient probe as shown. Press Calibrate when ready.</p>
         <button class="study-card-btn-3d" id="btn-3d-calibrate">Calibrate</button>
       </div>
       <div class="study-phase-3d" id="s3-practice">
         <div class="study-heading-3d">Study Mode — Practice</div>
-        <p class="study-prompt-3d">Practice phase. Move the probe freely.<br>Press Ready when comfortable.</p>
+        <p class="study-prompt-3d">Up to 1 minute of free practice. Move the probe freely.<br>Press Ready when comfortable.</p>
         <button class="study-card-btn-3d" id="btn-3d-practice-done">Ready</button>
       </div>
       <div class="study-phase-3d" id="s3-trial">
@@ -267,7 +273,7 @@
       </div>
       <div class="study-phase-3d" id="s3-pref">
         <div class="study-heading-3d">Study Mode — Preference</div>
-        <p class="study-prompt-3d">This modality was intuitive</p>
+        <p class="study-prompt-3d">On a scale of 1-5, how would you rate the effectiveness of this visual user interface?</p>
         <div class="rating-row-3d" id="rating-row-3d">
           <button data-r="1">1<br><small>Strongly<br>disagree</small></button>
           <button data-r="2">2<br><small>Disagree</small></button>
@@ -342,6 +348,7 @@
     <div id="connection">connecting...</div>
   </main>
 
+  <script src="experiment-session.js"></script>
   <script type="module">
     import * as THREE from "three";
     import { OBJLoader } from "./vendor/OBJLoader.js";
@@ -352,6 +359,13 @@
     const _p3 = new URLSearchParams(window.location.search);
     const _isStudy3    = _p3.get("study") === "1";
     const _studyFrame3 = _p3.get("frame") || "transducer";
+    if (_isStudy3) {
+      window.ExperimentSession.renderContext(document.getElementById("study-context-3d"));
+      document.getElementById("calibration-prompt-3d").textContent =
+        _studyFrame3 === "patient"
+          ? "Place the transducer in the indicated patient reference pose, then press Calibrate."
+          : "Place the transducer at the center of the chest, pointing forward and horizontal, then press Calibrate.";
+    }
     const MODEL_SCALE = 0.01; // The supplied OBJ is modeled in centimeters.
     const MODEL_Z_ROTATION = -Math.PI / 2; // Visual alignment only.
     const DISPLAY_FRAME_X_ROTATION = -Math.PI / 2; // Local Z is visually vertical.
@@ -697,7 +711,7 @@
         document.getElementById("s3-pref").style.display = "block";
         document.querySelectorAll("#rating-row-3d button").forEach(b => b.disabled = false);
       } else if (act === "complete") {
-        window.location.href = "launcher.html";
+        window.ExperimentSession.completeAndReturnToDashboard();
         return;
       } else {
         document.getElementById("s3-done").style.display = "block";
@@ -729,6 +743,7 @@
         if (_isStudy3) {
           socket.send(JSON.stringify({
             cmd: "start_block", modality: "3d", frame: _studyFrame3,
+            ...window.ExperimentSession.startBlockMetadata(),
           }));
         }
       };

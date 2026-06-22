@@ -9,8 +9,8 @@ import time
 import numpy as np
 
 from pose_fetcher import LivePoseFetcher
-from trial import Trial
-from core import LINEAR_TOL, HOLD_DURATION
+from trial import Trial, LINEAR_TOLERANCE
+from core import HOLD_DURATION
 
 
 class Activity(ABC):
@@ -79,7 +79,7 @@ class TrialActivity(Activity):
         self,
         fetcher: LivePoseFetcher,
         target_pose: np.ndarray,
-        linear_tol: float = LINEAR_TOL,
+        linear_tol: float = LINEAR_TOLERANCE,
         angular_tol: float = 5.0,
         hold_duration: float = HOLD_DURATION,
     ) -> None:
@@ -111,6 +111,9 @@ class TrialActivity(Activity):
                 "matched": False,
                 "timed_out": not self._achieved,
                 "elapsed": None,
+                "live_pose": None,
+                "target_pose": self.target_pose.tolist(),
+                "components": None,
             }
 
         state = self._trial.step()
@@ -140,6 +143,9 @@ class TrialActivity(Activity):
             "matched": state["matched"],
             "timed_out": state["timed_out"],
             "elapsed": state["elapsed"],
+            "live_pose": state["live_pose"],
+            "target_pose": self.target_pose.tolist(),
+            "components": state["components"],
         }
 
 
@@ -204,6 +210,8 @@ class PracticeActivity(Activity):
                 "done": True, "achieved": False, "hold_progress": 0.0,
                 "linear": None, "angular": None, "matched": False,
                 "timed_out": False, "elapsed": None,
+                "live_pose": None, "target_pose": self.target_pose.tolist(),
+                "components": None,
             }
         state = self._trial.step()
         if state["timed_out"] or self._end_requested:
@@ -217,4 +225,7 @@ class PracticeActivity(Activity):
             "matched": state["matched"],
             "timed_out": False,
             "elapsed": state["elapsed"],
+            "live_pose": state["live_pose"],
+            "target_pose": self.target_pose.tolist(),
+            "components": state["components"],
         }

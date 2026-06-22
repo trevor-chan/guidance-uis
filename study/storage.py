@@ -1,0 +1,1143 @@
+"""Configurable experiment persistence and export adapters.
+
+The study workflow talks only to the ExperimentRepository port. Storage layout
+(one database per session, participant, or experiment) and export format are
+policies selected at server startup, not decisions embedded in trial logic.
+"""
+
+from __future__ import annotations
+
+from abc import ABC, abstractmethod
+import csv
+from contextlib import contextmanager
+from dataclasses import dataclass, field
+from datetime import datetime, timezone
+import json
+from pathlib import Path
+import re
+import sqlite3
+import subprocess
+from typing import Any, Iterable, Protocol
+import uuid
+
+import numpy as np
+
+
+SCHEMA_VERSION = 1
+LAYOUTS = ("session", "participant", "experiment")
+
+
+def utc_now() -> str:
+    return datetime.now(timezone.utc).isoformat()
+
+
+def _safe_name(value: str, fallback: str) -> str:
+    cleaned = re.sub(r"[^A-Za-z0-9_.-]+", "-", str(value or "").strip())
+    return cleaned.strip("-._") or fallback
+
+
+def _jsonable(value: Any) -> Any:
+    if isinstance(value, np.ndarray):
+        return value.tolist()
+    if isinstance(value, np.generic):
+        return value.item()
+    if isinstance(value, dict):
+        return {str(key): _jsonable(item) for key, item in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_jsonable(item) for item in value]
+    return value
+
+
+def _json(value: Any) -> str:
+    return json.dumps(_jsonable(value), separators=(",", ":"), sort_keys=True)
+
+
+def current_git_commit(root: Path) -> str | None:
+    try:
+        return subprocess.check_output(
+            ["git", "rev-parse", "HEAD"],
+            cwd=root,
+            text=True,
+            stderr=subprocess.DEVNULL,
+        ).strip()
+    except (OSError, subprocess.CalledProcessError):
+        return None
+
+
+@dataclass(frozen=True)
+class StorageConfig:
+    root: Path = Path("data")
+    backend: str = "sqlite"
+    layout: str = "session"
+    experiment_id: str = "pose-guidance-ui"
+    export_formats: tuple[str, ...] = ("csv",)
+
+    def __post_init__(self) -> None:
+        if self.layout not in LAYOUTS:
+            raise ValueError(f"Unknown data layout {self.layout!r}; choose from {LAYOUTS}.")
+
+    @property
+    def experiment_root(self) -> Path:
+        return self.root / _safe_name(self.experiment_id, "experiment")
+
+    def database_path(self, session_id: str, participant_id: str) -> Path:
+        if self.layout == "session":
+            return (
+                self.experiment_root
+                / "sessions"
+                / _safe_name(session_id, "session")
+                / "experiment.sqlite"
+            )
+        if self.layout == "participant":
+            return (
+                self.experiment_root
+                / "participants"
+                / _safe_name(participant_id, "participant")
+                / "experiment.sqlite"
+            )
+        return self.experiment_root / "experiment.sqlite"
+
+    def export_root(self, session_id: str) -> Path:
+        return self.experiment_root / "exports" / _safe_name(session_id, "session")
+
+
+class DataExporter(ABC):
+    """Adapter interface for analysis-oriented exports."""
+
+    name: str
+
+    @abstractmethod
+    def export_session(
+        self,
+        database_path: Path,
+        session_id: str,
+        output_dir: Path,
+    ) -> list[Path]:
+        """Export one session and return the files written."""
+
+
+class CsvExporter(DataExporter):
+    name = "csv"
+    TABLES = (
+        "sessions",
+        "conditions",
+        "condition_runs",
+        "box_poses",
+        "calibrations",
+        "practice_periods",
+        "trials",
+        "trajectory_samples",
+        "preferences",
+        "events",
+    )
+
+    def export_session(
+        self,
+        database_path: Path,
+        session_id: str,
+        output_dir: Path,
+    ) -> list[Path]:
+        output_dir.mkdir(parents=True, exist_ok=True)
+        written: list[Path] = []
+        with sqlite3.connect(database_path) as connection:
+            connection.row_factory = sqlite3.Row
+            for table in self.TABLES:
+                columns = [
+                    row["name"]
+                    for row in connection.execute(f"PRAGMA table_info({table})")
+                ]
+                if not columns:
+                    continue
+                if "session_id" in columns:
+                    rows = connection.execute(
+                        f"SELECT * FROM {table} WHERE session_id = ? ORDER BY rowid",
+                        (session_id,),
+                    ).fetchall()
+                elif "run_id" in columns:
+                    rows = connection.execute(
+                        f"""
+                        SELECT table_data.*
+                        FROM {table} AS table_data
+                        JOIN condition_runs AS runs ON runs.run_id = table_data.run_id
+                        WHERE runs.session_id = ?
+                        ORDER BY table_data.rowid
+                        """,
+                        (session_id,),
+                    ).fetchall()
+                else:
+                    continue
+
+                path = output_dir / f"{table}.csv"
+                with path.open("w", newline="", encoding="utf-8") as handle:
+                    writer = csv.DictWriter(handle, fieldnames=columns)
+                    writer.writeheader()
+                    writer.writerows(dict(row) for row in rows)
+                written.append(path)
+        return written
+
+
+EXPORTERS: dict[str, type[DataExporter]] = {
+    CsvExporter.name: CsvExporter,
+}
+
+
+class ExperimentRepository(Protocol):
+    """Storage port consumed by the experiment workflow."""
+
+    config: StorageConfig
+
+    def create_session(self, payload: dict) -> dict: ...
+    def get_session_state(
+        self, session_id: str, participant_id: str | None = None
+    ) -> dict | None: ...
+    def latest_session_for_participant(self, participant_id: str) -> dict | None: ...
+    def get_box_pose(
+        self, session_id: str, participant_id: str
+    ) -> np.ndarray | None: ...
+    def save_box_pose(
+        self, session_id: str, participant_id: str, pose: np.ndarray
+    ) -> None: ...
+    def start_condition(
+        self, session_id: str, participant_id: str, condition_index: int
+    ) -> str: ...
+    def save_calibration(self, run_id: str, pose: np.ndarray) -> None: ...
+    def start_practice(self, run_id: str) -> None: ...
+    def finish_practice(self, run_id: str) -> None: ...
+    def start_trial(
+        self, run_id: str, trial_index: int, target_pose: Any, start_pose: Any
+    ) -> None: ...
+    def append_trajectory_samples(
+        self, run_id: str, trial_index: int, samples: Iterable[dict]
+    ) -> None: ...
+    def finish_trial(
+        self, run_id: str, trial_index: int, result: dict
+    ) -> None: ...
+    def save_preference(self, run_id: str, rating: int) -> None: ...
+    def finish_condition(self, run_id: str) -> dict: ...
+    def export_session(self, session_id: str) -> list[Path]: ...
+
+
+class SqliteExperimentRepository:
+    """Facade used by the server for durable experiment records.
+
+    Every public mutation opens a short SQLite transaction and commits before
+    returning. This keeps trial/block boundaries crash-recoverable and avoids
+    coupling callers to a particular file layout.
+    """
+
+    def __init__(self, config: StorageConfig, project_root: Path) -> None:
+        self.config = config
+        self.project_root = project_root
+        self.git_commit = current_git_commit(project_root)
+        self._session_locations: dict[str, tuple[str, Path]] = {}
+        self._run_locations: dict[str, tuple[Path, str, int]] = {}
+        self._exporters = [
+            EXPORTERS[name]()
+            for name in config.export_formats
+            if name != "none" and name in EXPORTERS
+        ]
+
+    # -- Session lifecycle -------------------------------------------------
+
+    def create_session(self, payload: dict) -> dict:
+        session_id = str(payload["session_id"])
+        participant_id = str(payload["participant_id"])
+        database_path = self.config.database_path(session_id, participant_id)
+        database_path.parent.mkdir(parents=True, exist_ok=True)
+        self._session_locations[session_id] = (participant_id, database_path)
+        now = payload.get("started_at") or utc_now()
+
+        with self._connect(database_path) as connection:
+            connection.execute(
+                """
+                INSERT INTO sessions (
+                    session_id, experiment_id, participant_id, participant_name,
+                    examiner_name, experiment_condition, condition_option,
+                    started_at, status, git_commit, schema_version,
+                    storage_layout, metadata_json
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'in_progress', ?, ?, ?, ?)
+                ON CONFLICT(session_id) DO UPDATE SET
+                    participant_name = excluded.participant_name,
+                    examiner_name = excluded.examiner_name,
+                    experiment_condition = excluded.experiment_condition,
+                    condition_option = excluded.condition_option,
+                    metadata_json = excluded.metadata_json
+                """,
+                (
+                    session_id,
+                    self.config.experiment_id,
+                    participant_id,
+                    payload.get("participant_name"),
+                    payload.get("examiner_name"),
+                    payload.get("experiment_condition", "modality"),
+                    payload.get("condition_option"),
+                    now,
+                    self.git_commit,
+                    SCHEMA_VERSION,
+                    self.config.layout,
+                    _json(payload.get("metadata", {})),
+                ),
+            )
+            for condition in payload.get("conditions", []):
+                connection.execute(
+                    """
+                    INSERT INTO conditions (
+                        session_id, condition_index, target_set, modality_id,
+                        modality, frame, noise, latency_ms, learning_curve, status
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending')
+                    ON CONFLICT(session_id, condition_index) DO UPDATE SET
+                        target_set = excluded.target_set,
+                        modality_id = excluded.modality_id,
+                        modality = excluded.modality,
+                        frame = excluded.frame,
+                        noise = excluded.noise,
+                        latency_ms = excluded.latency_ms,
+                        learning_curve = excluded.learning_curve
+                    """,
+                    (
+                        session_id,
+                        condition["condition_index"],
+                        condition.get("target_set"),
+                        condition.get("modality_id"),
+                        condition.get("modality"),
+                        condition.get("frame"),
+                        condition.get("noise"),
+                        condition.get("latency_ms"),
+                        condition.get("learning_curve"),
+                    ),
+                )
+            self._event(
+                connection,
+                session_id,
+                "session_created",
+                payload={"storage_layout": self.config.layout},
+            )
+        return self.get_session_state(session_id, participant_id)
+
+    def get_session_state(
+        self,
+        session_id: str,
+        participant_id: str | None = None,
+    ) -> dict | None:
+        database_path = self._locate_database(session_id, participant_id)
+        if database_path is None or not database_path.exists():
+            return None
+        with self._connect(database_path) as connection:
+            connection.row_factory = sqlite3.Row
+            session = connection.execute(
+                "SELECT * FROM sessions WHERE session_id = ?",
+                (session_id,),
+            ).fetchone()
+            if session is None:
+                return None
+            conditions = connection.execute(
+                """
+                SELECT conditions.*,
+                       (
+                           SELECT COUNT(*)
+                           FROM trials
+                           JOIN condition_runs
+                             ON condition_runs.run_id = trials.run_id
+                           WHERE condition_runs.run_id = conditions.latest_run_id
+                             AND trials.status = 'complete'
+                       ) AS completed_trials
+                FROM conditions
+                WHERE session_id = ?
+                ORDER BY condition_index
+                """,
+                (session_id,),
+            ).fetchall()
+            box_pose = connection.execute(
+                "SELECT pose_json FROM box_poses WHERE session_id = ?",
+                (session_id,),
+            ).fetchone()
+            return {
+                "session": dict(session),
+                "conditions": [dict(row) for row in conditions],
+                "has_box_pose": box_pose is not None,
+                "database_path": str(database_path),
+                "storage_backend": self.config.backend,
+                "storage_layout": self.config.layout,
+                "export_formats": [exporter.name for exporter in self._exporters],
+            }
+
+    def get_box_pose(
+        self,
+        session_id: str,
+        participant_id: str,
+    ) -> np.ndarray | None:
+        database_path = self._locate_database(session_id, participant_id)
+        if database_path is None:
+            return None
+        with self._connect(database_path) as connection:
+            row = connection.execute(
+                "SELECT pose_json FROM box_poses WHERE session_id = ?",
+                (session_id,),
+            ).fetchone()
+        return np.array(json.loads(row[0]), dtype=float) if row else None
+
+    def latest_session_for_participant(self, participant_id: str) -> dict | None:
+        candidates: list[tuple[str, Path]] = []
+        if self.config.layout == "participant":
+            path = self.config.database_path("unused", participant_id)
+            if path.exists():
+                candidates.append((participant_id, path))
+        elif self.config.layout == "experiment":
+            path = self.config.database_path("unused", participant_id)
+            if path.exists():
+                candidates.append((participant_id, path))
+        else:
+            candidates.extend(
+                (participant_id, path)
+                for path in self.config.experiment_root.glob(
+                    "sessions/*/experiment.sqlite"
+                )
+            )
+
+        latest: tuple[str, str, Path] | None = None
+        for _, path in candidates:
+            with self._connect(path) as connection:
+                row = connection.execute(
+                    """
+                    SELECT session_id, started_at
+                    FROM sessions
+                    WHERE participant_id = ?
+                    ORDER BY started_at DESC
+                    LIMIT 1
+                    """,
+                    (participant_id,),
+                ).fetchone()
+                if row and (latest is None or row[1] > latest[1]):
+                    latest = (row[0], row[1], path)
+        if latest is None:
+            return None
+        self._session_locations[latest[0]] = (participant_id, latest[2])
+        return self.get_session_state(latest[0], participant_id)
+
+    def save_box_pose(
+        self,
+        session_id: str,
+        participant_id: str,
+        pose: np.ndarray,
+    ) -> None:
+        database_path = self._require_database(session_id, participant_id)
+        with self._connect(database_path) as connection:
+            connection.execute(
+                """
+                INSERT INTO box_poses (session_id, captured_at, pose_json)
+                VALUES (?, ?, ?)
+                ON CONFLICT(session_id) DO UPDATE SET
+                    captured_at = excluded.captured_at,
+                    pose_json = excluded.pose_json
+                """,
+                (session_id, utc_now(), _json(pose)),
+            )
+            self._event(connection, session_id, "box_pose_saved")
+
+    # -- Condition workflow ------------------------------------------------
+
+    def start_condition(
+        self,
+        session_id: str,
+        participant_id: str,
+        condition_index: int,
+    ) -> str:
+        database_path = self._require_database(session_id, participant_id)
+        run_id = str(uuid.uuid4())
+        with self._connect(database_path) as connection:
+            attempt = connection.execute(
+                """
+                SELECT COALESCE(MAX(attempt_number), 0) + 1
+                FROM condition_runs
+                WHERE session_id = ? AND condition_index = ?
+                """,
+                (session_id, condition_index),
+            ).fetchone()[0]
+            connection.execute(
+                """
+                INSERT INTO condition_runs (
+                    run_id, session_id, condition_index, attempt_number,
+                    status, started_at
+                ) VALUES (?, ?, ?, ?, 'in_progress', ?)
+                """,
+                (run_id, session_id, condition_index, attempt, utc_now()),
+            )
+            connection.execute(
+                """
+                UPDATE conditions
+                SET status = 'in_progress', started_at = ?,
+                    completed_at = NULL, latest_run_id = ?
+                WHERE session_id = ? AND condition_index = ?
+                """,
+                (utc_now(), run_id, session_id, condition_index),
+            )
+            self._event(
+                connection,
+                session_id,
+                "condition_started",
+                condition_index=condition_index,
+                run_id=run_id,
+                payload={"attempt_number": attempt},
+            )
+        self._run_locations[run_id] = (
+            database_path,
+            session_id,
+            condition_index,
+        )
+        return run_id
+
+    def save_calibration(self, run_id: str, pose: np.ndarray) -> None:
+        database_path, session_id, condition_index = self._run_location(run_id)
+        with self._connect(database_path) as connection:
+            connection.execute(
+                """
+                INSERT INTO calibrations (run_id, captured_at, pose_json)
+                VALUES (?, ?, ?)
+                """,
+                (run_id, utc_now(), _json(pose)),
+            )
+            self._event(
+                connection,
+                session_id,
+                "calibration_saved",
+                condition_index=condition_index,
+                run_id=run_id,
+            )
+
+    def start_practice(self, run_id: str) -> None:
+        database_path, session_id, condition_index = self._run_location(run_id)
+        with self._connect(database_path) as connection:
+            connection.execute(
+                """
+                INSERT INTO practice_periods (run_id, started_at, status)
+                VALUES (?, ?, 'in_progress')
+                ON CONFLICT(run_id) DO NOTHING
+                """,
+                (run_id, utc_now()),
+            )
+            self._event(
+                connection,
+                session_id,
+                "practice_started",
+                condition_index=condition_index,
+                run_id=run_id,
+            )
+
+    def finish_practice(self, run_id: str) -> None:
+        database_path, session_id, condition_index = self._run_location(run_id)
+        with self._connect(database_path) as connection:
+            connection.execute(
+                """
+                UPDATE practice_periods
+                SET ended_at = ?, status = 'complete'
+                WHERE run_id = ?
+                """,
+                (utc_now(), run_id),
+            )
+            self._event(
+                connection,
+                session_id,
+                "practice_completed",
+                condition_index=condition_index,
+                run_id=run_id,
+            )
+
+    def start_trial(
+        self,
+        run_id: str,
+        trial_index: int,
+        target_pose: Any,
+        start_pose: Any,
+    ) -> None:
+        database_path, session_id, condition_index = self._run_location(run_id)
+        with self._connect(database_path) as connection:
+            connection.execute(
+                """
+                INSERT INTO trials (
+                    run_id, trial_index, status, started_at,
+                    start_pose_json, target_pose_json
+                ) VALUES (?, ?, 'in_progress', ?, ?, ?)
+                ON CONFLICT(run_id, trial_index) DO NOTHING
+                """,
+                (
+                    run_id,
+                    trial_index,
+                    utc_now(),
+                    _json(start_pose),
+                    _json(target_pose),
+                ),
+            )
+            self._event(
+                connection,
+                session_id,
+                "trial_started",
+                condition_index=condition_index,
+                trial_index=trial_index,
+                run_id=run_id,
+            )
+
+    def append_trajectory_samples(
+        self,
+        run_id: str,
+        trial_index: int,
+        samples: Iterable[dict],
+    ) -> None:
+        rows = list(samples)
+        if not rows:
+            return
+        database_path, _, _ = self._run_location(run_id)
+        with self._connect(database_path) as connection:
+            connection.executemany(
+                """
+                INSERT OR REPLACE INTO trajectory_samples (
+                    run_id, trial_index, sample_index, captured_at, elapsed_s,
+                    live_pose_json, target_pose_json, linear_m, angular_deg,
+                    components_json
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                [
+                    (
+                        run_id,
+                        trial_index,
+                        sample["sample_index"],
+                        sample.get("captured_at") or utc_now(),
+                        sample.get("elapsed"),
+                        _json(sample.get("live_pose")),
+                        _json(sample.get("target_pose")),
+                        sample.get("linear"),
+                        sample.get("angular"),
+                        _json(sample.get("components")),
+                    )
+                    for sample in rows
+                ],
+            )
+
+    def finish_trial(
+        self,
+        run_id: str,
+        trial_index: int,
+        result: dict,
+    ) -> None:
+        database_path, session_id, condition_index = self._run_location(run_id)
+        with self._connect(database_path) as connection:
+            connection.execute(
+                """
+                UPDATE trials
+                SET status = 'complete', ended_at = ?, achieved = ?,
+                    timed_out = ?, elapsed_s = ?, end_pose_json = ?,
+                    final_linear_m = ?, final_angular_deg = ?
+                WHERE run_id = ? AND trial_index = ?
+                """,
+                (
+                    utc_now(),
+                    int(bool(result.get("achieved"))),
+                    int(bool(result.get("timed_out"))),
+                    result.get("elapsed"),
+                    _json(result.get("live_pose")),
+                    result.get("linear"),
+                    result.get("angular"),
+                    run_id,
+                    trial_index,
+                ),
+            )
+            self._event(
+                connection,
+                session_id,
+                "trial_completed",
+                condition_index=condition_index,
+                trial_index=trial_index,
+                run_id=run_id,
+                payload={
+                    "achieved": bool(result.get("achieved")),
+                    "timed_out": bool(result.get("timed_out")),
+                },
+            )
+
+    def save_preference(self, run_id: str, rating: int) -> None:
+        database_path, session_id, condition_index = self._run_location(run_id)
+        with self._connect(database_path) as connection:
+            connection.execute(
+                """
+                INSERT INTO preferences (run_id, recorded_at, rating)
+                VALUES (?, ?, ?)
+                ON CONFLICT(run_id) DO UPDATE SET
+                    recorded_at = excluded.recorded_at,
+                    rating = excluded.rating
+                """,
+                (run_id, utc_now(), rating),
+            )
+            self._event(
+                connection,
+                session_id,
+                "preference_saved",
+                condition_index=condition_index,
+                run_id=run_id,
+                payload={"rating": rating},
+            )
+
+    def finish_condition(self, run_id: str) -> dict:
+        database_path, session_id, condition_index = self._run_location(run_id)
+        now = utc_now()
+        with self._connect(database_path) as connection:
+            connection.execute(
+                """
+                UPDATE condition_runs
+                SET status = 'complete', completed_at = ?
+                WHERE run_id = ?
+                """,
+                (now, run_id),
+            )
+            connection.execute(
+                """
+                UPDATE conditions
+                SET status = 'complete', completed_at = ?
+                WHERE session_id = ? AND condition_index = ?
+                """,
+                (now, session_id, condition_index),
+            )
+            incomplete = connection.execute(
+                """
+                SELECT COUNT(*) FROM conditions
+                WHERE session_id = ? AND status != 'complete'
+                """,
+                (session_id,),
+            ).fetchone()[0]
+            if incomplete == 0:
+                connection.execute(
+                    """
+                    UPDATE sessions
+                    SET status = 'complete', completed_at = ?
+                    WHERE session_id = ?
+                    """,
+                    (now, session_id),
+                )
+            self._event(
+                connection,
+                session_id,
+                "condition_completed",
+                condition_index=condition_index,
+                run_id=run_id,
+            )
+
+        export_error = None
+        try:
+            exported = self.export_session(session_id)
+        except Exception as exc:
+            exported = []
+            export_error = str(exc)
+            with self._connect(database_path) as connection:
+                self._event(
+                    connection,
+                    session_id,
+                    "export_failed",
+                    condition_index=condition_index,
+                    run_id=run_id,
+                    payload={"error": export_error},
+                )
+        return {
+            "state": self.get_session_state(session_id),
+            "exported": [str(path) for path in exported],
+            "export_error": export_error,
+        }
+
+    # -- Export ------------------------------------------------------------
+
+    def export_session(self, session_id: str) -> list[Path]:
+        database_path = self._locate_database(session_id)
+        if database_path is None:
+            return []
+        written: list[Path] = []
+        for exporter in self._exporters:
+            written.extend(
+                exporter.export_session(
+                    database_path,
+                    session_id,
+                    self.config.export_root(session_id) / exporter.name,
+                )
+            )
+        return written
+
+    # -- SQLite helpers ----------------------------------------------------
+
+    @contextmanager
+    def _connect(self, database_path: Path):
+        database_path.parent.mkdir(parents=True, exist_ok=True)
+        connection = sqlite3.connect(database_path, timeout=5.0)
+        try:
+            connection.execute("PRAGMA foreign_keys = ON")
+            connection.execute("PRAGMA busy_timeout = 5000")
+            connection.execute("PRAGMA journal_mode = DELETE")
+            connection.execute("PRAGMA synchronous = FULL")
+            self._ensure_schema(connection)
+            yield connection
+            connection.commit()
+        except Exception:
+            connection.rollback()
+            raise
+        finally:
+            connection.close()
+
+    def _locate_database(
+        self,
+        session_id: str,
+        participant_id: str | None = None,
+    ) -> Path | None:
+        cached = self._session_locations.get(session_id)
+        if cached:
+            return cached[1]
+        if participant_id:
+            path = self.config.database_path(session_id, participant_id)
+            if path.exists():
+                self._session_locations[session_id] = (participant_id, path)
+                return path
+        if self.config.layout == "experiment":
+            path = self.config.database_path(session_id, participant_id or "participant")
+            return path if path.exists() else None
+        if self.config.layout == "session":
+            path = self.config.database_path(session_id, participant_id or "participant")
+            return path if path.exists() else None
+        for path in self.config.experiment_root.glob(
+            "participants/*/experiment.sqlite"
+        ):
+            with self._connect(path) as connection:
+                row = connection.execute(
+                    "SELECT participant_id FROM sessions WHERE session_id = ?",
+                    (session_id,),
+                ).fetchone()
+                if row:
+                    self._session_locations[session_id] = (row[0], path)
+                    return path
+        return None
+
+    def _require_database(self, session_id: str, participant_id: str) -> Path:
+        path = self._locate_database(session_id, participant_id)
+        if path is None:
+            raise KeyError(f"Unknown experiment session {session_id!r}.")
+        return path
+
+    def _run_location(self, run_id: str) -> tuple[Path, str, int]:
+        cached = self._run_locations.get(run_id)
+        if cached:
+            return cached
+        paths: list[Path]
+        if self.config.layout == "experiment":
+            paths = [self.config.experiment_root / "experiment.sqlite"]
+        elif self.config.layout == "session":
+            paths = list(
+                self.config.experiment_root.glob("sessions/*/experiment.sqlite")
+            )
+        else:
+            paths = list(
+                self.config.experiment_root.glob(
+                    "participants/*/experiment.sqlite"
+                )
+            )
+        for database_path in paths:
+            if not database_path.exists():
+                continue
+            with self._connect(database_path) as connection:
+                row = connection.execute(
+                    """
+                    SELECT session_id, condition_index
+                    FROM condition_runs
+                    WHERE run_id = ?
+                    """,
+                    (run_id,),
+                ).fetchone()
+                if row:
+                    location = (database_path, row[0], row[1])
+                    self._run_locations[run_id] = location
+                    return location
+        raise KeyError(f"Unknown condition run {run_id!r}.")
+
+    @staticmethod
+    def _event(
+        connection: sqlite3.Connection,
+        session_id: str,
+        event_type: str,
+        *,
+        condition_index: int | None = None,
+        trial_index: int | None = None,
+        run_id: str | None = None,
+        payload: dict | None = None,
+    ) -> None:
+        connection.execute(
+            """
+            INSERT INTO events (
+                session_id, run_id, condition_index, trial_index,
+                event_type, occurred_at, payload_json
+            ) VALUES (?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                session_id,
+                run_id,
+                condition_index,
+                trial_index,
+                event_type,
+                utc_now(),
+                _json(payload or {}),
+            ),
+        )
+
+    @staticmethod
+    def _ensure_schema(connection: sqlite3.Connection) -> None:
+        connection.executescript(
+            """
+            CREATE TABLE IF NOT EXISTS sessions (
+                session_id TEXT PRIMARY KEY,
+                experiment_id TEXT NOT NULL,
+                participant_id TEXT NOT NULL,
+                participant_name TEXT,
+                examiner_name TEXT,
+                experiment_condition TEXT NOT NULL,
+                condition_option INTEGER,
+                started_at TEXT NOT NULL,
+                completed_at TEXT,
+                status TEXT NOT NULL,
+                git_commit TEXT,
+                schema_version INTEGER NOT NULL,
+                storage_layout TEXT NOT NULL,
+                metadata_json TEXT NOT NULL
+            );
+
+            CREATE TABLE IF NOT EXISTS conditions (
+                session_id TEXT NOT NULL,
+                condition_index INTEGER NOT NULL,
+                target_set TEXT,
+                modality_id TEXT,
+                modality TEXT,
+                frame TEXT,
+                noise REAL,
+                latency_ms REAL,
+                learning_curve TEXT,
+                status TEXT NOT NULL,
+                started_at TEXT,
+                completed_at TEXT,
+                latest_run_id TEXT,
+                PRIMARY KEY (session_id, condition_index),
+                FOREIGN KEY (session_id) REFERENCES sessions(session_id)
+            );
+
+            CREATE TABLE IF NOT EXISTS condition_runs (
+                run_id TEXT PRIMARY KEY,
+                session_id TEXT NOT NULL,
+                condition_index INTEGER NOT NULL,
+                attempt_number INTEGER NOT NULL,
+                status TEXT NOT NULL,
+                started_at TEXT NOT NULL,
+                completed_at TEXT,
+                FOREIGN KEY (session_id, condition_index)
+                    REFERENCES conditions(session_id, condition_index)
+            );
+
+            CREATE TABLE IF NOT EXISTS box_poses (
+                session_id TEXT PRIMARY KEY,
+                captured_at TEXT NOT NULL,
+                pose_json TEXT NOT NULL,
+                FOREIGN KEY (session_id) REFERENCES sessions(session_id)
+            );
+
+            CREATE TABLE IF NOT EXISTS calibrations (
+                calibration_id INTEGER PRIMARY KEY AUTOINCREMENT,
+                run_id TEXT NOT NULL,
+                captured_at TEXT NOT NULL,
+                pose_json TEXT NOT NULL,
+                FOREIGN KEY (run_id) REFERENCES condition_runs(run_id)
+            );
+
+            CREATE TABLE IF NOT EXISTS practice_periods (
+                run_id TEXT PRIMARY KEY,
+                started_at TEXT NOT NULL,
+                ended_at TEXT,
+                status TEXT NOT NULL,
+                FOREIGN KEY (run_id) REFERENCES condition_runs(run_id)
+            );
+
+            CREATE TABLE IF NOT EXISTS trials (
+                run_id TEXT NOT NULL,
+                trial_index INTEGER NOT NULL,
+                status TEXT NOT NULL,
+                started_at TEXT NOT NULL,
+                ended_at TEXT,
+                achieved INTEGER,
+                timed_out INTEGER,
+                elapsed_s REAL,
+                start_pose_json TEXT,
+                target_pose_json TEXT,
+                end_pose_json TEXT,
+                final_linear_m REAL,
+                final_angular_deg REAL,
+                PRIMARY KEY (run_id, trial_index),
+                FOREIGN KEY (run_id) REFERENCES condition_runs(run_id)
+            );
+
+            CREATE TABLE IF NOT EXISTS trajectory_samples (
+                run_id TEXT NOT NULL,
+                trial_index INTEGER NOT NULL,
+                sample_index INTEGER NOT NULL,
+                captured_at TEXT NOT NULL,
+                elapsed_s REAL,
+                live_pose_json TEXT,
+                target_pose_json TEXT,
+                linear_m REAL,
+                angular_deg REAL,
+                components_json TEXT,
+                PRIMARY KEY (run_id, trial_index, sample_index),
+                FOREIGN KEY (run_id, trial_index)
+                    REFERENCES trials(run_id, trial_index)
+            );
+
+            CREATE TABLE IF NOT EXISTS preferences (
+                run_id TEXT PRIMARY KEY,
+                recorded_at TEXT NOT NULL,
+                rating INTEGER NOT NULL CHECK (rating BETWEEN 1 AND 5),
+                FOREIGN KEY (run_id) REFERENCES condition_runs(run_id)
+            );
+
+            CREATE TABLE IF NOT EXISTS events (
+                event_id INTEGER PRIMARY KEY AUTOINCREMENT,
+                session_id TEXT NOT NULL,
+                run_id TEXT,
+                condition_index INTEGER,
+                trial_index INTEGER,
+                event_type TEXT NOT NULL,
+                occurred_at TEXT NOT NULL,
+                payload_json TEXT NOT NULL,
+                FOREIGN KEY (session_id) REFERENCES sessions(session_id)
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_sessions_participant
+                ON sessions(participant_id, started_at);
+            CREATE INDEX IF NOT EXISTS idx_runs_session_condition
+                ON condition_runs(session_id, condition_index, attempt_number);
+            CREATE INDEX IF NOT EXISTS idx_events_session
+                ON events(session_id, occurred_at);
+            """
+        )
+
+
+@dataclass
+class ConditionRecorder:
+    """Small stateful adapter that batches trajectory writes for one block."""
+
+    store: ExperimentRepository
+    session_id: str
+    participant_id: str
+    condition_index: int
+    run_id: str
+    flush_every: int = 30
+    _activity_key: tuple[str, int | None] | None = None
+    _sample_index: int = 0
+    _buffer: list[dict] = field(default_factory=list)
+
+    @classmethod
+    def start(
+        cls,
+        store: ExperimentRepository,
+        session_id: str,
+        participant_id: str,
+        condition_index: int,
+    ) -> "ConditionRecorder":
+        run_id = store.start_condition(
+            session_id,
+            participant_id,
+            condition_index,
+        )
+        return cls(
+            store=store,
+            session_id=session_id,
+            participant_id=participant_id,
+            condition_index=condition_index,
+            run_id=run_id,
+        )
+
+    def record_calibration(self, pose: np.ndarray) -> None:
+        self.store.save_calibration(self.run_id, pose)
+
+    def observe_activity(
+        self,
+        activity_type: str,
+        trial_index: int | None,
+        data: dict,
+    ) -> None:
+        key = (activity_type, trial_index)
+        if key != self._activity_key:
+            self._begin_activity(activity_type, trial_index, data)
+            self._activity_key = key
+
+        if activity_type == "trial" and trial_index is not None:
+            self._buffer.append(
+                {
+                    "sample_index": self._sample_index,
+                    "captured_at": utc_now(),
+                    "elapsed": data.get("elapsed"),
+                    "live_pose": data.get("live_pose"),
+                    "target_pose": data.get("target_pose"),
+                    "linear": data.get("linear"),
+                    "angular": data.get("angular"),
+                    "components": data.get("components"),
+                }
+            )
+            self._sample_index += 1
+            if len(self._buffer) >= self.flush_every:
+                self.flush(trial_index)
+
+        if data.get("done"):
+            if activity_type == "practice":
+                self.store.finish_practice(self.run_id)
+            elif activity_type == "trial" and trial_index is not None:
+                self.flush(trial_index)
+                self.store.finish_trial(self.run_id, trial_index, data)
+
+    def save_preference_and_finish(self, rating: int) -> dict:
+        self.store.save_preference(self.run_id, rating)
+        return self.store.finish_condition(self.run_id)
+
+    def flush(self, trial_index: int | None) -> None:
+        if trial_index is None or not self._buffer:
+            return
+        self.store.append_trajectory_samples(
+            self.run_id,
+            trial_index,
+            self._buffer,
+        )
+        self._buffer.clear()
+
+    def _begin_activity(
+        self,
+        activity_type: str,
+        trial_index: int | None,
+        data: dict,
+    ) -> None:
+        if activity_type == "practice":
+            self.store.start_practice(self.run_id)
+        elif activity_type == "trial" and trial_index is not None:
+            self._sample_index = 0
+            self._buffer.clear()
+            self.store.start_trial(
+                self.run_id,
+                trial_index,
+                data.get("target_pose"),
+                data.get("live_pose"),
+            )
+
+
+REPOSITORIES: dict[str, type[SqliteExperimentRepository]] = {
+    "sqlite": SqliteExperimentRepository,
+}
+
+
+def create_data_store(
+    config: StorageConfig,
+    project_root: Path,
+) -> ExperimentRepository:
+    """Build the configured collection backend.
+
+    Adding another collection format requires one repository adapter and one
+    registry entry; the server, runner, and dashboard remain unchanged.
+    """
+    try:
+        repository_type = REPOSITORIES[config.backend]
+    except KeyError as exc:
+        raise ValueError(f"Unknown storage backend {config.backend!r}.") from exc
+    return repository_type(config, project_root)

@@ -69,7 +69,7 @@ class PoseFetcherTests(unittest.TestCase):
     def test_fake_translation_keys_use_requested_local_axes(self):
         fetcher = FakePoseFetcher()
         fetcher.connect()
-        pairs = (("1", "q", 0), ("2", "w", 1), ("3", "e", 2))
+        pairs = (("d", "a", 0), ("w", "s", 1), ("q", "e", 2))
         reference = np.eye(4)
         reference[:3, :3] = _rot_z(0.7) @ _rot_y(-0.4)
 
@@ -96,7 +96,7 @@ class PoseFetcherTests(unittest.TestCase):
     def test_fake_rotation_keys_use_requested_local_axes(self):
         fetcher = FakePoseFetcher()
         fetcher.connect()
-        pairs = (("4", "r"), ("5", "t"), ("6", "y"))
+        pairs = (("u", "o"), ("i", "k"), ("j", "l"))
         reference = np.eye(4)
         reference[:3, :3] = _rot_x(-0.3) @ _rot_z(0.5)
 

@@ -229,6 +229,16 @@
       color: #4ade80;
       letter-spacing: 0.05em;
     }
+    .study-context {
+      color: #38bdf8;
+      font-size: 0.66rem;
+      line-height: 1.5;
+      letter-spacing: 0.04em;
+      text-align: center;
+      padding-bottom: 14px;
+      margin-bottom: 16px;
+      border-bottom: 1px solid #333;
+    }
   </style>
 </head>
 <body>
@@ -265,6 +275,7 @@
 
   <!-- Study card — shown instead of comp card in study mode -->
   <div class="card" id="study-card">
+    <div class="study-context" id="study-context-1d"></div>
 
     <!-- Waiting for calibrate -->
     <div class="study-phase" id="study-cal-phase">
@@ -278,7 +289,7 @@
     <!-- Practice in progress -->
     <div class="study-phase" id="study-practice-phase">
       <div class="study-heading">Study Mode</div>
-      <p class="study-prompt">Practice phase. Move the probe freely.<br>Press Ready when comfortable.</p>
+      <p class="study-prompt">Up to 1 minute of free practice. Move the probe freely.<br>Press Ready when comfortable.</p>
       <div class="comp-buttons">
         <button class="comp-btn" id="btn-practice-done">Ready</button>
       </div>
@@ -293,7 +304,7 @@
     <!-- Preference rating -->
     <div class="study-phase" id="study-pref-phase">
       <div class="study-heading">Study Mode</div>
-      <p class="study-prompt">This modality was intuitive</p>
+      <p class="study-prompt">On a scale of 1-5, how would you rate the effectiveness of this visual user interface?</p>
       <div class="rating-buttons">
         <button class="rating-btn" data-rating="1">1<br><small>Strongly<br>disagree</small></button>
         <button class="rating-btn" data-rating="2">2<br><small>Disagree</small></button>
@@ -344,6 +355,7 @@
 
   <div id="ws-status">connecting…</div>
 
+  <script src="experiment-session.js"></script>
   <script>
     const WS_URL      = "ws://localhost:8765";
     const MAX_LINEAR  = 0.5;   // meters  — full cold at or beyond this
@@ -410,6 +422,9 @@
     const _params     = new URLSearchParams(window.location.search);
     const _isStudy    = _params.get("study") === "1";
     const _studyFrame = _params.get("frame") || "none";
+    if (_isStudy) {
+      window.ExperimentSession.renderContext(document.getElementById("study-context-1d"));
+    }
 
     function connect() {
       const ws = new WebSocket(WS_URL);
@@ -519,7 +534,7 @@
           document.getElementById("study-pref-phase").style.display   = "block";
           document.querySelectorAll(".rating-btn").forEach(b => b.disabled = false);
         } else if (act === "complete") {
-          window.location.href = "launcher.html";
+          window.ExperimentSession.completeAndReturnToDashboard();
           return;
         } else {
           document.getElementById("study-done-phase").style.display   = "block";
@@ -538,7 +553,12 @@
         statusEl.textContent = "connected";
         statusEl.className   = "ws-ok";
         if (_isStudy) {
-          ws.send(JSON.stringify({ cmd: "start_block", modality: "1d", frame: _studyFrame }));
+          ws.send(JSON.stringify({
+            cmd: "start_block",
+            modality: "1d",
+            frame: _studyFrame,
+            ...window.ExperimentSession.startBlockMetadata(),
+          }));
         }
       };
 
