@@ -1173,14 +1173,15 @@
         // Patient: 1 m left (−bX) and 1 m up (+bY) from centroid, looking at centroid.
         eye = centroid.clone().addScaledVector(bX, -1.0).addScaledVector(bY, 1.0);
       } else {
-        // User: calibrated probe pos, raised 0.25 m along box up-axis (+bY).
+        // User: calibrated probe pos, raised 0.4 m along world vertical (scene +Z = SteamVR +Y).
+        // bY is the probe's own elevation axis — tilted with probe orientation, not world-vertical.
         if (!data.calibration_origin) return;
         const calibMat = matrixFromRows(data.calibration_origin);
         if (!calibMat) return;
         const calibScene = DISPLAY_FRAME_MATRIX.clone()
           .multiply(refMat.clone().invert().multiply(calibMat));
         const cpos = new THREE.Vector3().setFromMatrixPosition(calibScene);
-        eye = cpos.clone().addScaledVector(bY, 0.4);
+        eye = cpos.clone().addScaledVector(new THREE.Vector3(0, 0, 1), 0.4);
       }
 
       activeCamera.position.copy(eye);
