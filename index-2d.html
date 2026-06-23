@@ -539,10 +539,10 @@
         // Identical to 3D initStudyCamera: 1 m left (−lateral) and 1 m up (+elevation).
         eye = _vadd(_vadd(centroid, _vscale(bX, -1.0)), _vscale(bY, 1.0));
       } else {
-        // user: calibrated probe position, 0.5 m back (−depth) and 0.5 m up (+elevation).
+        // user: calibrated probe position, raised 0.25 m along box up-axis (+bY).
         if (!d.calibration_origin) return null;
         const cpos = _vtrans(d.calibration_origin);
-        eye = _vadd(_vadd(cpos, _vscale(bZ, -0.5)), _vscale(bY, 0.5));
+        eye = _vadd(cpos, _vscale(bY, 0.25));
       }
 
       // View basis matching spec: look toward centroid, right/vUp perpendicular.

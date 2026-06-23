@@ -19,7 +19,7 @@ from core import (CUBE_SIZE, HOLD_DURATION, LINEAR_TOL,
                   BOX_HALF_XY, BOX_Z_MIN, BOX_Z_MAX,
                   _rot_x, _rot_y, _rot_z, _random_target_pose)
 from study.sequence import SequenceRunner, SequenceGenerator
-from study.archiver import NoOpArchiver
+from study.archiver import CsvArchiver, NoOpArchiver
 from study.activities import CalibrationActivity, PreferenceActivity, PracticeActivity
 
 HOST = "localhost"
@@ -385,6 +385,13 @@ async def _new_study_handler(websocket, fetcher, n_trials=STUDY_BLOCK_TRIALS):
         "preference_act":        None,
         "practice_act":          None,
         "trial_index":           None,
+        # archiver fields (additive)
+        "archiver":              None,
+        "block_idx":             -1,
+        "trajectory":            [],
+        "prev_trial_idx":        None,
+        "trial_start_time":      None,
+        "trial_target_pose":     None,
     }
 
     async def send_loop():
@@ -404,6 +411,8 @@ async def _new_study_handler(websocket, fetcher, n_trials=STUDY_BLOCK_TRIALS):
                     session["calibrate_pending"] = False
                     block.step()           # CalibrationActivity: captures pose → done immediately
                     session["phase"] = "running"
+                    if session["archiver"] is not None and block.origin is not None:
+                        session["archiver"].save_calibration(session["block_idx"], block.origin)
                 state = _study_blank("calibration", frame, modality, n)
                 live_arr = fetcher.get_pose()
                 if live_arr is not None:
@@ -431,6 +440,42 @@ async def _new_study_handler(websocket, fetcher, n_trials=STUDY_BLOCK_TRIALS):
 
                 if act_type == "trial":
                     session["trial_index"] = block_data["trial_index"]
+                    _t_idx = block_data["trial_index"]
+                    if _t_idx != session["prev_trial_idx"]:
+                        # new trial starting — reset trajectory and capture target_pose
+                        # (current_activity is still this TrialActivity on the first step)
+                        session["trajectory"]       = []
+                        session["prev_trial_idx"]   = _t_idx
+                        session["trial_start_time"] = time.strftime("%Y-%m-%dT%H:%M:%S")
+                        if not act_data.get("done"):
+                            _cur = block.current_activity
+                            session["trial_target_pose"] = (
+                                _cur.target_pose.tolist()
+                                if hasattr(_cur, "target_pose") else None
+                            )
+                    # accumulate one trajectory sample per tick (including final step)
+                    _tp = fetcher.get_pose()
+                    _pf = _tp.flatten().tolist() if _tp is not None else [None] * 16
+                    session["trajectory"].append({
+                        "timestamp":   f"{time.time():.6f}",
+                        **{f"live_pose_{i}": (f"{v:.6f}" if v is not None else "")
+                           for i, v in enumerate(_pf)},
+                        "linear_m":    act_data["linear"]  if act_data.get("linear")  is not None else "",
+                        "angular_deg": act_data["angular"] if act_data.get("angular") is not None else "",
+                    })
+                    if act_data.get("done") and session["archiver"] is not None:
+                        _res = dict(act_data)
+                        _res["target_pose"] = session["trial_target_pose"]
+                        session["archiver"].save_trial(
+                            session["block_idx"], _t_idx, _res,
+                            trajectory=session["trajectory"],
+                            start_time=session["trial_start_time"],
+                            end_time=time.strftime("%Y-%m-%dT%H:%M:%S"),
+                        )
+                        session["trajectory"]        = []
+                        session["trial_target_pose"] = None
+                        session["trial_start_time"]  = None
+                        session["prev_trial_idx"]    = None
 
                 if isinstance(block.current_activity, PreferenceActivity):
                     session["phase"]          = "await_preference"
@@ -493,6 +538,8 @@ async def _new_study_handler(websocket, fetcher, n_trials=STUDY_BLOCK_TRIALS):
                         session["preference_act"].set_rating(rating)
                     block.step()              # PreferenceActivity → done → block.done = True
                     session["phase"] = "complete"
+                    if session["archiver"] is not None:
+                        session["archiver"].save_preference(session["block_idx"], rating)
                 state = _study_blank("preference", frame, modality, n, session["trial_index"])
                 await websocket.send(json.dumps(state))
                 await asyncio.sleep(STEP_INTERVAL)
@@ -529,6 +576,8 @@ async def _new_study_handler(websocket, fetcher, n_trials=STUDY_BLOCK_TRIALS):
                         await websocket.send(json.dumps({"error": "tracker_not_visible"}))
                         continue
                     BOX_ORIGIN = pose.copy()
+                    if session["archiver"] is not None:
+                        session["archiver"].set_box_origin(BOX_ORIGIN)
                     print(
                         f"[STUDY] BOX_ORIGIN set: pos=("
                         f"{pose[0,3]:+.3f}, {pose[1,3]:+.3f}, {pose[2,3]:+.3f}) m"
@@ -561,8 +610,19 @@ async def _new_study_handler(websocket, fetcher, n_trials=STUDY_BLOCK_TRIALS):
                     blk   = gen.make_block(modality_req, frame_req, BOX_ORIGIN, n_trials)
                     blk.start()
                     session["block"] = blk
+                    session["block_idx"] += 1
+                    _bid = session["block_idx"]
+                    if session["archiver"] is None:
+                        _pid = data.get("participant_id") or time.strftime("p_%Y%m%d_%H%M%S")
+                        session["archiver"] = CsvArchiver("./study_data", _pid)
+                        if BOX_ORIGIN is not None:
+                            session["archiver"].set_box_origin(BOX_ORIGIN)
+                    session["archiver"].set_block_context(_bid, modality_req, frame_req)
                     needs_cal = isinstance(blk.current_activity, CalibrationActivity)
                     session["phase"] = "await_calibrate" if needs_cal else "running"
+                    if not needs_cal and BOX_ORIGIN is not None:
+                        # no CalibrationActivity: record BOX_ORIGIN as effective origin
+                        session["archiver"].save_calibration(_bid, BOX_ORIGIN)
                     print(
                         f"[STUDY] start_block: modality={modality_req} frame={frame_req} "
                         f"{'(calibration)' if needs_cal else '(no calibration)'}"
@@ -586,6 +646,9 @@ async def _new_study_handler(websocket, fetcher, n_trials=STUDY_BLOCK_TRIALS):
         await asyncio.gather(send_loop(), recv_loop())
     except websockets.exceptions.ConnectionClosed:
         pass
+    finally:
+        if session["archiver"] is not None:
+            session["archiver"].finalize()
 
 
 # ── Set-Box calibration test (throwaway — only active under --setbox flag) ─────
