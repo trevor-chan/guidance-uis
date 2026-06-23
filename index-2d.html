@@ -447,8 +447,8 @@
       elements.depth.setAttribute("y1", depthY);
       elements.depth.setAttribute("y2", depthY);
 
-      const yawX = scaled(pose.yaw, 180, 85);
-      const pitchY = -scaled(pose.pitch, 180, 85);
+      const yawX = scaled(pose.yaw, 180, 255);
+      const pitchY = -scaled(pose.pitch, 180, 255);
       const rollRad = (pose.roll + 180) * Math.PI / 180;
       const rolledX = yawX * Math.cos(rollRad) - pitchY * Math.sin(rollRad);
       const rolledY = yawX * Math.sin(rollRad) + pitchY * Math.cos(rollRad);
