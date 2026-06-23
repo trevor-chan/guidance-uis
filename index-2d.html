@@ -449,8 +449,11 @@
 
       const yawX = scaled(pose.yaw, 180, 85);
       const pitchY = -scaled(pose.pitch, 180, 85);
-      const markerX = centerX + yawX;
-      const markerY = centerY + pitchY;
+      const rollRad = (pose.roll + 180) * Math.PI / 180;
+      const rolledX = yawX * Math.cos(rollRad) - pitchY * Math.sin(rollRad);
+      const rolledY = yawX * Math.sin(rollRad) + pitchY * Math.cos(rollRad);
+      const markerX = centerX + rolledX;
+      const markerY = centerY + rolledY;
       elements.circle.setAttribute("cx", markerX);
       elements.circle.setAttribute("cy", markerY);
     }
