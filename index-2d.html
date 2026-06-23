@@ -543,9 +543,9 @@
         // user: calibrated probe position, raised 0.25 m along box up-axis (+bY).
         if (!d.calibration_origin) return null;
         const cpos = _vtrans(d.calibration_origin);
-        eye = _vadd(cpos, _vscale(bY, 0.25));
+        eye = _vadd(cpos, _vscale(bY, 0.4));
         // World up (+Y in tracker space) for a roll-free horizon; not probe-orientation-dependent.
-        upHint = [0, 1, 0];
+        upHint = [0, -1, 0];
       }
 
       // View basis: look toward centroid; right/vUp from upHint.

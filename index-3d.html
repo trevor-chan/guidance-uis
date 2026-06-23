@@ -1180,13 +1180,13 @@
         const calibScene = DISPLAY_FRAME_MATRIX.clone()
           .multiply(refMat.clone().invert().multiply(calibMat));
         const cpos = new THREE.Vector3().setFromMatrixPosition(calibScene);
-        eye = cpos.clone().addScaledVector(bY, 0.25);
+        eye = cpos.clone().addScaledVector(bY, 0.4);
       }
 
       activeCamera.position.copy(eye);
       // World up (+Y in SteamVR) → scene (0,0,−1) under DISPLAY_FRAME_MATRIX: DFM×(0,1,0)=(0,0,−1).
       // Using world vertical (not bY) keeps the horizon level regardless of calibration roll.
-      activeCamera.up.set(0, 0, -1);
+      activeCamera.up.set(0, 0, 1);
       controls.target.copy(centroid);
       _swayBase.copy(eye);
       controls.update();
