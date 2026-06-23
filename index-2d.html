@@ -536,16 +536,16 @@
 
       let eye, upHint;
       if (_studyFrame2 === "patient") {
-        // Identical to 3D initStudyCamera: 1 m left (−lateral) and 1 m up (+elevation).
-        eye = _vadd(_vadd(centroid, _vscale(bX, -1.0)), _vscale(bY, 1.0));
-        upHint = bY;
+        // Patient: 0.7 m above centroid along true world vertical (+Y in tracker space).
+        eye = _vadd(centroid, [0, 0.7, 0]);
+        upHint = _vscale(bX, -1);  // box -X
       } else {
         // User: calibrated probe pos, raised 0.4 m along world vertical (+Y in tracker space).
         // bY is the probe's own elevation axis — tilted with probe orientation, not world-vertical.
         // upHint [0,-1,0] is a view-basis convention only; the physical ceiling is still at +Y.
         if (!d.calibration_origin) return null;
         const cpos = _vtrans(d.calibration_origin);
-        eye = _vadd(cpos, [0, 0.4, 0]);
+        eye = _vadd(cpos, [0, 0.3, 0]);
         // World up (+Y in tracker space) for a roll-free horizon; not probe-orientation-dependent.
         upHint = [0, -1, 0];
       }
