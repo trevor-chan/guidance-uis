@@ -534,22 +534,26 @@
 
       const { bX, bY, bZ, centroid } = _boxBasis(d.box_origin);
 
-      let eye;
+      let eye, upHint;
       if (_studyFrame2 === "patient") {
         // Identical to 3D initStudyCamera: 1 m left (−lateral) and 1 m up (+elevation).
         eye = _vadd(_vadd(centroid, _vscale(bX, -1.0)), _vscale(bY, 1.0));
+        upHint = bY;
       } else {
         // user: calibrated probe position, raised 0.25 m along box up-axis (+bY).
         if (!d.calibration_origin) return null;
         const cpos = _vtrans(d.calibration_origin);
         eye = _vadd(cpos, _vscale(bY, 0.25));
+        // World up (+Y in tracker space) for a roll-free horizon; not probe-orientation-dependent.
+        upHint = [0, 1, 0];
       }
 
-      // View basis matching spec: look toward centroid, right/vUp perpendicular.
-      // up_hint = bY (elevation); provisional — may need eyeballing on the rig.
-      const look  = _vnorm(_vsub(centroid, eye));
-      const right = _vnorm(_cross(look, bY)); // TODO(2d-frame): verify handedness on rig
-      const vUp   = _cross(right, look);
+      // View basis: look toward centroid; right/vUp from upHint.
+      // Degenerate guard: if look ≈ upHint (probe nearly vertical), fall back to bY.
+      const look   = _vnorm(_vsub(centroid, eye));
+      const _upRef = Math.abs(_dot(look, upHint)) < 0.99 ? upHint : bY;
+      const right  = _vnorm(_cross(look, _upRef));
+      const vUp    = _cross(right, look);
 
       function project(poseM, wc) {
         const delta = _vsub(_vtrans(poseM), centroid);
