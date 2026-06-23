@@ -1186,8 +1186,8 @@
 
       activeCamera.position.copy(eye);
       if (referenceFrame === 'patient') {
-        // Box -X at screen top; right = cross(look, -bX) → box -Z (depth) lands screen-left.
-        activeCamera.up.copy(bX.clone().negate());
+        // Box +X at screen top (180° flip of previous -bX orientation).
+        activeCamera.up.copy(bX.clone());
       } else {
         // World up keeps the horizon level regardless of calibration roll.
         activeCamera.up.set(0, 0, 1);
