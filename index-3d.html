@@ -1185,21 +1185,28 @@
 
       let eye;
       if (referenceFrame === 'patient') {
-        // Patient: 1 m left (−bX) and 1 m up (+bY) from centroid, looking at centroid.
-        eye = centroid.clone().addScaledVector(bX, -1.0).addScaledVector(bY, 1.0);
+        // Patient: 0.7 m above centroid along true world vertical (scene +Z = SteamVR +Y).
+        eye = centroid.clone().addScaledVector(new THREE.Vector3(0, 0, 1), 0.7);
       } else {
-        // User: calibrated probe pos, 0.5 m back (−bZ) and 0.5 m up (+bY), in box axes.
+        // User: calibrated probe pos, raised 0.4 m along world vertical (scene +Z = SteamVR +Y).
+        // bY is the probe's own elevation axis — tilted with probe orientation, not world-vertical.
         if (!data.calibration_origin) return;
         const calibMat = matrixFromRows(data.calibration_origin);
         if (!calibMat) return;
         const calibScene = DISPLAY_FRAME_MATRIX.clone()
           .multiply(refMat.clone().invert().multiply(calibMat));
         const cpos = new THREE.Vector3().setFromMatrixPosition(calibScene);
-        eye = cpos.clone().addScaledVector(bZ, -0.5).addScaledVector(bY, 0.5);
+        eye = cpos.clone().addScaledVector(new THREE.Vector3(0, 0, 1), 0.3);
       }
 
       activeCamera.position.copy(eye);
-      activeCamera.up.copy(bY); // box elevation (up) — provisional, may need eyeballing
+      if (referenceFrame === 'patient') {
+        // Box +X at screen top (180° flip of previous -bX orientation).
+        activeCamera.up.copy(bX.clone());
+      } else {
+        // World up keeps the horizon level regardless of calibration roll.
+        activeCamera.up.set(0, 0, 1);
+      }
       controls.target.copy(centroid);
       _swayBase.copy(eye);
       controls.update();

@@ -461,10 +461,13 @@
       elements.depth.setAttribute("y1", depthY);
       elements.depth.setAttribute("y2", depthY);
 
-      const yawX = scaled(pose.yaw, 180, 85);
-      const pitchY = -scaled(pose.pitch, 180, 85);
-      const markerX = centerX + yawX;
-      const markerY = centerY + pitchY;
+      const yawX = scaled(pose.yaw, 180, 255);
+      const pitchY = -scaled(pose.pitch, 180, 255);
+      const rollRad = (pose.roll + 180) * Math.PI / 180;
+      const rolledX = yawX * Math.cos(rollRad) - pitchY * Math.sin(rollRad);
+      const rolledY = yawX * Math.sin(rollRad) + pitchY * Math.cos(rollRad);
+      const markerX = centerX + rolledX;
+      const markerY = centerY + rolledY;
       elements.circle.setAttribute("cx", markerX);
       elements.circle.setAttribute("cy", markerY);
     }
@@ -548,22 +551,28 @@
 
       const { bX, bY, bZ, centroid } = _boxBasis(d.box_origin);
 
-      let eye;
+      let eye, upHint;
       if (_studyFrame2 === "patient") {
-        // Identical to 3D initStudyCamera: 1 m left (−lateral) and 1 m up (+elevation).
-        eye = _vadd(_vadd(centroid, _vscale(bX, -1.0)), _vscale(bY, 1.0));
+        // Patient: 0.7 m above centroid along true world vertical (+Y in tracker space).
+        eye = _vadd(centroid, [0, 0.7, 0]);
+        upHint = bX;  // box +X (180° flip)
       } else {
-        // user: calibrated probe position, 0.5 m back (−depth) and 0.5 m up (+elevation).
+        // User: calibrated probe pos, raised 0.4 m along world vertical (+Y in tracker space).
+        // bY is the probe's own elevation axis — tilted with probe orientation, not world-vertical.
+        // upHint [0,-1,0] is a view-basis convention only; the physical ceiling is still at +Y.
         if (!d.calibration_origin) return null;
         const cpos = _vtrans(d.calibration_origin);
-        eye = _vadd(_vadd(cpos, _vscale(bZ, -0.5)), _vscale(bY, 0.5));
+        eye = _vadd(cpos, [0, 0.3, 0]);
+        // World up (+Y in tracker space) for a roll-free horizon; not probe-orientation-dependent.
+        upHint = [0, -1, 0];
       }
 
-      // View basis matching spec: look toward centroid, right/vUp perpendicular.
-      // up_hint = bY (elevation); provisional — may need eyeballing on the rig.
-      const look  = _vnorm(_vsub(centroid, eye));
-      const right = _vnorm(_cross(look, bY)); // TODO(2d-frame): verify handedness on rig
-      const vUp   = _cross(right, look);
+      // View basis: look toward centroid; right/vUp from upHint.
+      // Degenerate guard: if look ≈ upHint (probe nearly vertical), fall back to bY.
+      const look   = _vnorm(_vsub(centroid, eye));
+      const _upRef = Math.abs(_dot(look, upHint)) < 0.99 ? upHint : bY;
+      const right  = _vnorm(_cross(look, _upRef));
+      const vUp    = _cross(right, look);
 
       function project(poseM, wc) {
         const delta = _vsub(_vtrans(poseM), centroid);
