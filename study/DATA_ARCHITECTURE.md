@@ -16,11 +16,13 @@ practice, preference, event, state-query, and export operations.
 
 ## File-layout policy
 
-`StorageConfig.layout` controls where the SQLite adapter resolves its database:
+`StorageConfig.layout` controls where the SQLite adapter resolves its database.
+By default, the root is `~/Documents/visualexperiment`, and each server run
+uses a dated experiment folder:
 
-- `session`: `data/<experiment>/sessions/<session-id>/experiment.sqlite`
-- `participant`: `data/<experiment>/participants/<participant-id>/experiment.sqlite`
-- `experiment`: `data/<experiment>/experiment.sqlite`
+- `session`: `<root>/YYYY-MM-DD/<experiment>/sessions/<session-id>/experiment.sqlite`
+- `participant`: `<root>/YYYY-MM-DD/<experiment>/participants/<participant-id>/experiment.sqlite`
+- `experiment`: `<root>/YYYY-MM-DD/<experiment>/experiment.sqlite`
 
 The logical schema is identical in every layout. Therefore changing layout does
 not change collection code or downstream column definitions.
@@ -31,10 +33,20 @@ Exporters implement `DataExporter` and are registered in `EXPORTERS`. CSV is
 currently implemented. Export failures are recorded as events and do not undo
 completed trial or condition records.
 
-Exports are session-scoped even when the source database is participant- or
-experiment-scoped:
+The normalized CSV exports are session-scoped even when the source database is
+participant- or experiment-scoped:
 
-`data/<experiment>/exports/<session-id>/<format>/`
+`<root>/YYYY-MM-DD/<experiment>/exports/<session-id>/csv/`
+
+The `patient_trials` export is analysis-oriented and grouped by participant:
+
+`<root>/YYYY-MM-DD/<experiment>/exports/by_patient/<participant-id>/completed_trials.csv`
+
+Each row represents one completed trial. Scalar fields from the session,
+condition, run, trial, box pose, practice period, and preference tables are
+prefixed into columns. Multi-row details such as trajectory samples,
+calibrations, and events are included as JSON columns so the row remains one
+trial wide without discarding detail.
 
 ## Recovery model
 

@@ -31,6 +31,10 @@ def utc_now() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
+def local_today() -> str:
+    return datetime.now().astimezone().date().isoformat()
+
+
 def _safe_name(value: str, fallback: str) -> str:
     cleaned = re.sub(r"[^A-Za-z0-9_.-]+", "-", str(value or "").strip())
     return cleaned.strip("-._") or fallback
@@ -66,19 +70,27 @@ def current_git_commit(root: Path) -> str | None:
 
 @dataclass(frozen=True)
 class StorageConfig:
-    root: Path = Path("data")
+    root: Path = field(
+        default_factory=lambda: Path.home() / "Documents" / "visualexperiment"
+    )
     backend: str = "sqlite"
-    layout: str = "session"
+    layout: str = "participant"
     experiment_id: str = "pose-guidance-ui"
-    export_formats: tuple[str, ...] = ("csv",)
+    export_formats: tuple[str, ...] = ("csv", "patient_trials")
+    collection_date: str = field(default_factory=local_today)
 
     def __post_init__(self) -> None:
         if self.layout not in LAYOUTS:
             raise ValueError(f"Unknown data layout {self.layout!r}; choose from {LAYOUTS}.")
+        object.__setattr__(self, "root", self.root.expanduser())
 
     @property
     def experiment_root(self) -> Path:
-        return self.root / _safe_name(self.experiment_id, "experiment")
+        return (
+            self.root
+            / _safe_name(self.collection_date, "date")
+            / _safe_name(self.experiment_id, "experiment")
+        )
 
     def database_path(self, session_id: str, participant_id: str) -> Path:
         if self.layout == "session":
@@ -176,8 +188,203 @@ class CsvExporter(DataExporter):
         return written
 
 
+class PatientTrialsExporter(DataExporter):
+    """Analysis export with one wide row per completed trial, grouped by patient."""
+
+    name = "patient_trials"
+
+    BASE_COLUMNS = (
+        "participant_id",
+        "session_id",
+        "condition_index",
+        "run_id",
+        "trial_index",
+        "completed_date",
+    )
+
+    def export_session(
+        self,
+        database_path: Path,
+        session_id: str,
+        output_dir: Path,
+    ) -> list[Path]:
+        with sqlite3.connect(database_path) as connection:
+            connection.row_factory = sqlite3.Row
+            session = connection.execute(
+                "SELECT * FROM sessions WHERE session_id = ?",
+                (session_id,),
+            ).fetchone()
+            if session is None:
+                return []
+
+            participant_id = str(session["participant_id"])
+            patient_sessions = connection.execute(
+                """
+                SELECT * FROM sessions
+                WHERE participant_id = ?
+                ORDER BY started_at, session_id
+                """,
+                (participant_id,),
+            ).fetchall()
+            rows: list[dict[str, Any]] = []
+            for patient_session in patient_sessions:
+                rows.extend(
+                    self._completed_trial_rows(
+                        connection,
+                        str(patient_session["session_id"]),
+                        patient_session,
+                    )
+                )
+
+        exports_root = output_dir.parent.parent
+        path = (
+            exports_root
+            / "by_patient"
+            / _safe_name(participant_id, "participant")
+            / "completed_trials.csv"
+        )
+        path.parent.mkdir(parents=True, exist_ok=True)
+        fieldnames = self._fieldnames(rows)
+        with path.open("w", newline="", encoding="utf-8") as handle:
+            writer = csv.DictWriter(handle, fieldnames=fieldnames)
+            writer.writeheader()
+            writer.writerows(rows)
+        return [path]
+
+    def _completed_trial_rows(
+        self,
+        connection: sqlite3.Connection,
+        session_id: str,
+        session: sqlite3.Row,
+    ) -> list[dict[str, Any]]:
+        trial_rows = connection.execute(
+            """
+            SELECT
+                trials.*,
+                runs.session_id,
+                runs.condition_index,
+                runs.attempt_number,
+                runs.status AS run_status,
+                runs.started_at AS run_started_at,
+                runs.completed_at AS run_completed_at
+            FROM trials
+            JOIN condition_runs AS runs ON runs.run_id = trials.run_id
+            WHERE runs.session_id = ? AND trials.status = 'complete'
+            ORDER BY runs.condition_index, runs.attempt_number, trials.trial_index
+            """,
+            (session_id,),
+        ).fetchall()
+        box_pose = connection.execute(
+            "SELECT * FROM box_poses WHERE session_id = ?",
+            (session_id,),
+        ).fetchone()
+
+        rows: list[dict[str, Any]] = []
+        for trial in trial_rows:
+            condition = connection.execute(
+                """
+                SELECT * FROM conditions
+                WHERE session_id = ? AND condition_index = ?
+                """,
+                (session_id, trial["condition_index"]),
+            ).fetchone()
+            practice = connection.execute(
+                "SELECT * FROM practice_periods WHERE run_id = ?",
+                (trial["run_id"],),
+            ).fetchone()
+            preference = connection.execute(
+                "SELECT * FROM preferences WHERE run_id = ?",
+                (trial["run_id"],),
+            ).fetchone()
+            calibrations = connection.execute(
+                "SELECT * FROM calibrations WHERE run_id = ? ORDER BY calibration_id",
+                (trial["run_id"],),
+            ).fetchall()
+            trajectory_samples = connection.execute(
+                """
+                SELECT * FROM trajectory_samples
+                WHERE run_id = ? AND trial_index = ?
+                ORDER BY sample_index
+                """,
+                (trial["run_id"], trial["trial_index"]),
+            ).fetchall()
+            events = connection.execute(
+                """
+                SELECT * FROM events
+                WHERE session_id = ?
+                  AND (run_id = ? OR run_id IS NULL)
+                  AND (trial_index = ? OR trial_index IS NULL)
+                ORDER BY event_id
+                """,
+                (session_id, trial["run_id"], trial["trial_index"]),
+            ).fetchall()
+
+            row: dict[str, Any] = {
+                "participant_id": session["participant_id"],
+                "session_id": session_id,
+                "condition_index": trial["condition_index"],
+                "run_id": trial["run_id"],
+                "trial_index": trial["trial_index"],
+                "completed_date": str(trial["ended_at"] or "")[:10],
+                "trajectory_sample_count": len(trajectory_samples),
+                "calibration_count": len(calibrations),
+                "event_count": len(events),
+                "trajectory_samples_json": _json([dict(item) for item in trajectory_samples]),
+                "calibrations_json": _json([dict(item) for item in calibrations]),
+                "events_json": _json([dict(item) for item in events]),
+            }
+            row.update(self._prefixed("session", session))
+            row.update(self._prefixed("condition", condition))
+            row.update(self._prefixed("run", trial, only=(
+                "attempt_number",
+                "run_status",
+                "run_started_at",
+                "run_completed_at",
+            )))
+            row.update(self._prefixed("box_pose", box_pose))
+            row.update(self._prefixed("practice", practice))
+            row.update(self._prefixed("preference", preference))
+            row.update(self._prefixed("trial", trial, skip=(
+                "session_id",
+                "condition_index",
+                "attempt_number",
+                "run_status",
+                "run_started_at",
+                "run_completed_at",
+            )))
+            rows.append(row)
+        return rows
+
+    def _fieldnames(self, rows: list[dict[str, Any]]) -> list[str]:
+        ordered = list(self.BASE_COLUMNS)
+        for row in rows:
+            for key in row:
+                if key not in ordered:
+                    ordered.append(key)
+        return ordered or list(self.BASE_COLUMNS)
+
+    def _prefixed(
+        self,
+        prefix: str,
+        row: sqlite3.Row | None,
+        *,
+        only: tuple[str, ...] | None = None,
+        skip: tuple[str, ...] = (),
+    ) -> dict[str, Any]:
+        if row is None:
+            return {}
+        data = dict(row)
+        keys = only or tuple(data.keys())
+        return {
+            f"{prefix}_{key}": data.get(key)
+            for key in keys
+            if key not in skip
+        }
+
+
 EXPORTERS: dict[str, type[DataExporter]] = {
     CsvExporter.name: CsvExporter,
+    PatientTrialsExporter.name: PatientTrialsExporter,
 }
 
 

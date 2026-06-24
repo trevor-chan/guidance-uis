@@ -1032,23 +1032,25 @@ if __name__ == "__main__":
                         "user/patient=locked at calib pose")
     p.add_argument("--diagnostic", action="store_true",
                    help="Print live pose (position + basis axes) to terminal at ~3 Hz for coordinate-system verification")
-    p.add_argument("--data-root", default="data",
-                   help="Root directory for durable study data (default: data)")
+    p.add_argument("--data-root",
+                   default=str(Path.home() / "Documents" / "visualexperiment"),
+                   help="Root directory for durable study data "
+                        "(default: ~/Documents/visualexperiment)")
     p.add_argument("--data-backend", choices=["sqlite"], default="sqlite",
                    help="Collection backend adapter (default: sqlite)")
     p.add_argument("--data-layout", choices=["session", "participant", "experiment"],
-                   default="session",
+                   default="participant",
                    help="SQLite file layout: one file per session, participant, or experiment")
     p.add_argument("--experiment-id", default="pose-guidance-ui",
                    help="Experiment directory/name used by the data store")
-    p.add_argument("--export-format", choices=["csv", "none"], action="append",
+    p.add_argument("--export-format", choices=["csv", "patient_trials", "none"], action="append",
                    help="Export adapter to run after each completed condition (repeatable)")
     args = p.parse_args()
 
     mode        = "setbox" if args.setbox else ("study" if args.study else "competition")
     modality    = args.modality
     fetcher_cls = FakePoseFetcher if args.fake else TrackerPoseFetcher
-    export_formats = tuple(args.export_format or ["csv"])
+    export_formats = tuple(args.export_format or ["csv", "patient_trials"])
     storage_config = StorageConfig(
         root=Path(args.data_root),
         backend=args.data_backend,

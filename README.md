@@ -29,8 +29,9 @@ analysis export are independent choices. SQLite is the current collection
 adapter and CSV is the current export adapter.
 
 ```bash
-# Default: one SQLite database per session, plus CSV exports
-python server.py --study --data-layout session
+# Default: daily folder in Documents, one SQLite database per participant,
+# plus normalized CSV exports and patient-level completed-trial exports
+python server.py --study
 
 # One SQLite database containing all sessions for each participant
 python server.py --study --data-layout participant
@@ -40,16 +41,23 @@ python server.py --study --data-layout experiment
 
 # Change output location/name or disable automatic CSV export
 python server.py --study \
-  --data-root data \
+  --data-root ~/Documents/visualexperiment \
   --experiment-id modality-pilot \
   --export-format none
 ```
 
-All layouts use the same logical schema. Completed trials are committed
-immediately, trajectory samples are flushed in small batches, condition reruns
-are retained as new attempts, and the dashboard can restore saved progress.
-New collection backends implement `ExperimentRepository`; new analysis formats
-implement `DataExporter`.
+Data is grouped by collection date under
+`~/Documents/visualexperiment/YYYY-MM-DD/<experiment-id>/`. All layouts use the
+same logical schema. Completed trials are committed immediately, trajectory
+samples are flushed in small batches, condition reruns are retained as new
+attempts, and the dashboard can restore saved progress. New collection backends
+implement `ExperimentRepository`; new analysis formats implement `DataExporter`.
+
+The normalized CSV files stay session-scoped at
+`exports/<session-id>/csv/`. The patient analysis export writes one row per
+completed trial at `exports/by_patient/<participant-id>/completed_trials.csv`;
+it includes prefixed session, condition, run, trial, box-pose, practice,
+preference, calibration, trajectory, and event data.
 
 Fake-mode controls:
 
