@@ -563,13 +563,13 @@
     // Lies in group local X-Y plane (Z=0 = table surface).
     // Local +X→bXd (lateral), +Y→bYd (head/fwd = box +Y), +Z→bZd (up = box +Z).
     // X-mark at image (5.5 in, 12.25 in) from top-left → box origin (0,0,0).
-    // Page center is 3.75 in (0.09525 m) above X-mark → plane offset +Y by 0.09525 m.
+    // rotation.z = π flips local Y; X-mark (geometry −Y) lands at group +0.09525 m.
+    // Group is placed at tipD −0.09525 m bYd so X-mark hits tipD exactly.
     const _silPageTex = new THREE.TextureLoader().load("assets/patient_silhouette_page.png");
     const _silPageMesh = new THREE.Mesh(
       new THREE.PlaneGeometry(0.2794, 0.4318),
       new THREE.MeshBasicMaterial({ map: _silPageTex, side: THREE.DoubleSide })
     );
-    _silPageMesh.position.set(0, 0.09525, 0);
     _silPageMesh.rotation.z = Math.PI; // 180° flip: head +Y (box) = +Y on page
 
     const patientSilhouettePage = new THREE.Group();
@@ -788,11 +788,12 @@
       boxWireframeGroup.matrixWorldNeedsUpdate = true;
       boxWireframeGroup.visible = true;
 
-      // Silhouette page: lowered 7cm (−bZd) to true tip plane; shifted +0.09525m (+bYd) so X-mark (page 5.5,12.25in,
+      // Silhouette page: lowered 7cm (−bZd) to true tip plane; shifted −0.09525m (−bYd) so X-mark (page 5.5,12.25in,
       // which is 0.09525m toward foot from page center) aligns exactly with box_origin (tipD).
+      // After the 180° flip, the X-mark lands +0.09525m in group +Y; placing the group −0.09525m along bYd cancels this.
       // Local +X→bXd (lateral), +Y→bYd (head/fwd = box +Y), +Z→bZd (up = box +Z).
       const silM = new THREE.Matrix4().makeBasis(bXd, bYd, bZd);
-      silM.setPosition(tipD.clone().addScaledVector(bZd, -0.07).addScaledVector(bYd, 0.09525));
+      silM.setPosition(tipD.clone().addScaledVector(bZd, -0.07).addScaledVector(bYd, -0.09525));
       patientSilhouettePage.matrix.copy(silM);
       patientSilhouettePage.matrixWorldNeedsUpdate = true;
       patientSilhouettePage.visible = true;
