@@ -374,9 +374,10 @@
             <path id="target-back-band"
                   d="M -34,-36 L 34,-36 A 20,20 0 0,1 54,-16 L 54,-18 L -54,-18 L -54,-16 A 20,20 0 0,1 -34,-36 Z"
                   fill="#3b82f6"/>
-            <!-- front: probe face, rounded-corner triangle, offset by pitch/yaw -->
+            <!-- front: probe face, circular-fillet triangle, offset by pitch/yaw -->
+            <!-- sharp vertices: apex (0,-90), BR (80,54), BL (-80,54); height=144, r=24 -->
             <path id="target-front"
-                  d="M 18,-60 L 62,24 Q 80,54 44,54 L -44,54 Q -80,54 -62,24 L -18,-60 Q 0,-90 18,-60 Z"
+                  d="M 20.98,-52.24 L 60.19,18.34 A 24,24 0 0,1 39.21,54 L -39.21,54 A 24,24 0 0,1 -60.19,18.34 L -20.98,-52.24 A 24,24 0 0,1 20.98,-52.24 Z"
                   fill="#3b82f6" fill-opacity="0.25" stroke="#3b82f6" stroke-width="2.5"/>
           </g>
           <!-- LIVE: unfilled, opaque black outline -->
@@ -389,7 +390,7 @@
                   d="M -34,-36 L 34,-36 A 20,20 0 0,1 54,-16 L 54,-18 L -54,-18 L -54,-16 A 20,20 0 0,1 -34,-36 Z"
                   fill="#111"/>
             <path id="live-front"
-                  d="M 18,-60 L 62,24 Q 80,54 44,54 L -44,54 Q -80,54 -62,24 L -18,-60 Q 0,-90 18,-60 Z"
+                  d="M 20.98,-52.24 L 60.19,18.34 A 24,24 0 0,1 39.21,54 L -39.21,54 A 24,24 0 0,1 -60.19,18.34 L -20.98,-52.24 A 24,24 0 0,1 20.98,-52.24 Z"
                   fill="none" stroke="#111" stroke-width="2.5"/>
           </g>
 
