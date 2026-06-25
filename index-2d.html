@@ -495,11 +495,22 @@
       elements.group.setAttribute("transform",
         `translate(${centerX} ${centerY}) rotate(${pose.roll + 180 + extraRoll})`);
 
-      // Front blob offset in local (pre-roll) space; roll is inherited from group.
-      // Same magnitude scale as the old orientation circle (255px at ±180°).
-      const yawX   =  scaled(pose.yaw,   180, 255);
-      const pitchY = -scaled(pose.pitch,  180, 255);
-      elements.front.setAttribute("transform", `translate(${yawX} ${pitchY})`);
+      // Front blob offset in the group's pre-roll local SVG frame.
+      // Real geometry when available (user/patient study frames); euler-angle
+      // fallback for competition / transducer frames.
+      let frontOffX, frontOffY;
+      if (pose.frontDeltaRight != null) {
+        const PX_PER_M = 145 / TRANSLATION_RANGE_M;           // 580 px/m
+        const dSVGx    =  pose.frontDeltaRight * PX_PER_M;
+        const dSVGy    = -(pose.frontDeltaUp ?? 0) * PX_PER_M;
+        const rollRad  = (pose.roll + 180 + extraRoll) * Math.PI / 180;
+        frontOffX =  dSVGx * Math.cos(rollRad) + dSVGy * Math.sin(rollRad);
+        frontOffY = -dSVGx * Math.sin(rollRad) + dSVGy * Math.cos(rollRad);
+      } else {
+        frontOffX =  scaled(pose.yaw,   180, 255);
+        frontOffY = -scaled(pose.pitch, 180, 255);
+      }
+      elements.front.setAttribute("transform", `translate(${frontOffX} ${frontOffY})`);
 
       // Depth ruler (unchanged)
       const depthY = CENTER_Y - scaled(pose.x, TRANSLATION_RANGE_M, 185);
@@ -601,14 +612,16 @@
       const vUp    = _cross(right, look);
 
       function project(poseM, wc) {
-        const delta = _vsub(_vtrans(poseM), centroid);
+        const delta    = _vsub(_vtrans(poseM), centroid);
+        const probeFwd = _vscale(_vcol(poseM, 0), -1);   // −col0 = probe depth-forward axis
+        const frontSep = _vscale(probeFwd, 0.10);         // 0.10 m front-to-back probe span
         return {
-          y:     _dot(delta, right), // screen horizontal → setPoseVisual pose.y
-          z:     _dot(delta, vUp),   // screen vertical (+up) → setPoseVisual pose.z
-          x:     _dot(delta, look),  // depth along view → side ruler
-          roll:  wc.roll,            // orientation unchanged from workspace components
-          pitch: wc.pitch,
-          yaw:   wc.yaw,
+          y:               _dot(delta,   right),
+          z:               _dot(delta,   vUp),
+          x:               _dot(delta,   look),
+          roll:            wc.roll,
+          frontDeltaRight: _dot(frontSep, right),
+          frontDeltaUp:    _dot(frontSep, vUp),
         };
       }
 
@@ -616,16 +629,16 @@
         const lp = project(d.live_pose,   d.live_workspace_components);
         const tp = project(d.target_pose, d.target_workspace_components);
         return {
-          livePose:   { x: lp.x, y: -lp.y, z: -lp.z, roll: lp.roll, pitch: -lp.pitch, yaw: -lp.yaw },
-          targetPose: { x: tp.x, y: -tp.y, z: -tp.z, roll: tp.roll, pitch: -tp.pitch, yaw: -tp.yaw },
+          livePose:   { x: lp.x, y: -lp.y, z: -lp.z, roll: lp.roll, frontDeltaRight: -lp.frontDeltaRight, frontDeltaUp: -lp.frontDeltaUp },
+          targetPose: { x: tp.x, y: -tp.y, z: -tp.z, roll: tp.roll, frontDeltaRight: -tp.frontDeltaRight, frontDeltaUp: -tp.frontDeltaUp },
         };
       }
       // patient frame: depth inverted, vertical corrected, colors: target=blue live=black
       const lp = project(d.live_pose,   d.live_workspace_components);
       const tp = project(d.target_pose, d.target_workspace_components);
       return {
-        livePose:   { x: -lp.x, y: lp.y, z: lp.z, roll: lp.roll, pitch: lp.pitch, yaw: lp.yaw },
-        targetPose: { x: -tp.x, y: tp.y, z: tp.z, roll: tp.roll, pitch: tp.pitch, yaw: tp.yaw },
+        livePose:   { x: -lp.x, y: lp.y, z: lp.z, roll: lp.roll, frontDeltaRight: lp.frontDeltaRight, frontDeltaUp: lp.frontDeltaUp },
+        targetPose: { x: -tp.x, y: tp.y, z: tp.z, roll: tp.roll, frontDeltaRight: tp.frontDeltaRight, frontDeltaUp: tp.frontDeltaUp },
       };
     }
 
