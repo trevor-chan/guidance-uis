@@ -492,7 +492,7 @@ async def _new_study_handler(websocket, fetcher, n_trials=STUDY_BLOCK_TRIALS):
                 state["timed_out"]       = act_data.get("timed_out", False)
                 state["comp_calibrated"] = act_type in ("practice", "trial")
 
-                if modality in ("2d", "3d"):
+                if modality in ("1d", "2d", "3d"):
                     live_arr = fetcher.get_pose()
                     origin   = block.origin
                     cur_act  = block.current_activity

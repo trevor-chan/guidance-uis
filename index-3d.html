@@ -524,6 +524,8 @@
     const ghostAxes = createPoseAxes(0.65);
     liveGroup.add(liveAxes);
     ghostGroup.add(ghostAxes);
+    liveAxes.position.set(0.07, 0, 0);
+    ghostAxes.position.set(0.07, 0, 0);
 
     // Bounding box wireframe — shows the target spawn volume (±0.125 lateral/up, 0→0.10 depth).
     const _boxWireGeo = new THREE.BoxGeometry(0.25, 0.25, 0.10);

@@ -324,7 +324,7 @@
           <rect x="4" y="4" width="752" height="512" rx="4"
                 fill="#f8fafc" stroke="#111" stroke-width="8"/>
 
-          <!-- Black target pose -->
+          <!-- OLD reticle shapes — kept for restoration
           <g id="target-cross">
             <line class="target-line" x1="-150" y1="0" x2="150" y2="0"/>
             <line class="target-line" id="target-cross-tick" x1="0" y1="0" x2="0" y2="40"/>
@@ -333,17 +333,38 @@
             <circle class="target-line" id="target-orientation-circle"
                     cx="355" cy="260" r="25"/>
           </g>
-
-          <!-- Red current translation and roll -->
           <g id="current-cross">
             <line class="current-line" x1="-150" y1="0" x2="150" y2="0"/>
             <line class="current-line" id="current-cross-tick" x1="0" y1="0" x2="0" y2="40"/>
           </g>
-
-          <!-- Red pitch/yaw orientation marker -->
           <g id="current-orientation">
             <circle class="current-line" id="orientation-circle"
                     cx="355" cy="260" r="25"/>
+          </g>
+          END OLD reticle shapes -->
+
+          <!-- Cross-section blobs: target (blue) drawn first, live (black) on top.
+               Each group: translate+rotate handles position+roll; front path gets
+               an additional translate for the pitch/yaw offset (pre-roll local space). -->
+          <!-- TARGET: semi-opaque mesh-blue -->
+          <g id="target-group">
+            <!-- back blob: tracker shape, smaller circle -->
+            <path id="target-back"
+                  d="M 0,-18 C 10,-18 18,-10 18,0 C 18,10 10,18 0,18 C -10,18 -18,10 -18,0 C -18,-10 -10,-18 0,-18 Z"
+                  fill="rgba(59,130,246,0.40)" stroke="rgba(59,130,246,0.70)" stroke-width="2.5"/>
+            <!-- front blob: probe face, 3-lobe organic shape, offset by pitch/yaw -->
+            <path id="target-front"
+                  d="M 0,-36 C 5.7,-36 11.8,-19 17,-10 C 22.2,-1 33.8,13 31,18 C 28.2,23 10.3,20 0,20 C -10.3,20 -28.2,23 -31,18 C -33.8,13 -22.2,-1 -17,-10 C -11.8,-19 -5.7,-36 0,-36 Z"
+                  fill="rgba(59,130,246,0.40)" stroke="rgba(59,130,246,0.70)" stroke-width="2.5"/>
+          </g>
+          <!-- LIVE: solid black -->
+          <g id="live-group">
+            <path id="live-back"
+                  d="M 0,-18 C 10,-18 18,-10 18,0 C 18,10 10,18 0,18 C -10,18 -18,10 -18,0 C -18,-10 -10,-18 0,-18 Z"
+                  fill="#111" stroke="#111" stroke-width="2.5"/>
+            <path id="live-front"
+                  d="M 0,-36 C 5.7,-36 11.8,-19 17,-10 C 22.2,-1 33.8,13 31,18 C 28.2,23 10.3,20 0,20 C -10.3,20 -28.2,23 -31,18 C -33.8,13 -22.2,-1 -17,-10 C -11.8,-19 -5.7,-36 0,-36 Z"
+                  fill="#111" stroke="#111" stroke-width="2.5"/>
           </g>
 
           <!-- depth ruler -->
@@ -399,14 +420,23 @@
     const _isStudy2    = _p2.get("study") === "1";
     const _studyFrame2 = _p2.get("frame") || "transducer";
 
-    const currentCross = document.getElementById("current-cross");
-    const targetCross = document.getElementById("target-cross");
+    // OLD element refs — kept for restoration
+    // const currentCross = document.getElementById("current-cross");
+    // const targetCross = document.getElementById("target-cross");
+    // const currentCrossTick = document.getElementById("current-cross-tick");
+    // const orientationCircle = document.getElementById("orientation-circle");
+    // const targetCrossTick = document.getElementById("target-cross-tick");
+    // const targetOrientationCircle = document.getElementById("target-orientation-circle");
+
+    // Cross-section blob elements
+    const liveGroup   = document.getElementById("live-group");
+    const liveFront   = document.getElementById("live-front");
+    const targetGroup = document.getElementById("target-group");
+    const targetFront = document.getElementById("target-front");
+
+    // Depth bar refs (unchanged)
     const currentDepth = document.getElementById("current-depth");
-    const targetDepth = document.getElementById("target-depth");
-    const currentCrossTick = document.getElementById("current-cross-tick");
-    const orientationCircle = document.getElementById("orientation-circle");
-    const targetCrossTick = document.getElementById("target-cross-tick");
-    const targetOrientationCircle = document.getElementById("target-orientation-circle");
+    const targetDepth  = document.getElementById("target-depth");
     const alignedValue = document.getElementById("aligned-value");
     const sourceStatus = document.getElementById("source-status");
     const connection = document.getElementById("connection");
@@ -432,30 +462,49 @@
       return `${minutes}:${String(secs).padStart(2, "0")}`;
     }
 
+    // OLD setPoseVisual — kept for restoration
+    // function setPoseVisual(elements, pose) {
+    //   const screenX = scaled(pose.y, TRANSLATION_RANGE_M, 145);
+    //   const screenY = -scaled(pose.z, TRANSLATION_RANGE_M, 145);
+    //   const centerX = CENTER_X + screenX;
+    //   const centerY = CENTER_Y + screenY;
+    //   elements.cross.setAttribute("transform",
+    //     `translate(${centerX} ${centerY}) rotate(${pose.roll + 180})`);
+    //   const depthY = CENTER_Y - scaled(pose.x, TRANSLATION_RANGE_M, 185);
+    //   elements.depth.setAttribute("y1", depthY);
+    //   elements.depth.setAttribute("y2", depthY);
+    //   const yawX = scaled(pose.yaw, 180, 255);
+    //   const pitchY = -scaled(pose.pitch, 180, 255);
+    //   const rollRad = (pose.roll + 180) * Math.PI / 180;
+    //   const rolledX = yawX * Math.cos(rollRad) - pitchY * Math.sin(rollRad);
+    //   const rolledY = yawX * Math.sin(rollRad) + pitchY * Math.cos(rollRad);
+    //   const markerX = centerX + rolledX;
+    //   const markerY = centerY + rolledY;
+    //   elements.circle.setAttribute("cx", markerX);
+    //   elements.circle.setAttribute("cy", markerY);
+    // }
+
     function setPoseVisual(elements, pose) {
       const screenX = scaled(pose.y, TRANSLATION_RANGE_M, 145);
       const screenY = -scaled(pose.z, TRANSLATION_RANGE_M, 145);
       const centerX = CENTER_X + screenX;
       const centerY = CENTER_Y + screenY;
 
-      elements.cross.setAttribute(
-        "transform",
-        `translate(${centerX} ${centerY}) rotate(${pose.roll + 180})`
-      );
+      // Whole group: translate to screen position, then roll.
+      // Back blob sits at origin inside the group; roll applies to both shapes.
+      elements.group.setAttribute("transform",
+        `translate(${centerX} ${centerY}) rotate(${pose.roll + 180})`);
 
+      // Front blob offset in local (pre-roll) space; roll is inherited from group.
+      // Same magnitude scale as the old orientation circle (255px at ±180°).
+      const yawX   =  scaled(pose.yaw,   180, 255);
+      const pitchY = -scaled(pose.pitch,  180, 255);
+      elements.front.setAttribute("transform", `translate(${yawX} ${pitchY})`);
+
+      // Depth ruler (unchanged)
       const depthY = CENTER_Y - scaled(pose.x, TRANSLATION_RANGE_M, 185);
       elements.depth.setAttribute("y1", depthY);
       elements.depth.setAttribute("y2", depthY);
-
-      const yawX = scaled(pose.yaw, 180, 255);
-      const pitchY = -scaled(pose.pitch, 180, 255);
-      const rollRad = (pose.roll + 180) * Math.PI / 180;
-      const rolledX = yawX * Math.cos(rollRad) - pitchY * Math.sin(rollRad);
-      const rolledY = yawX * Math.sin(rollRad) + pitchY * Math.cos(rollRad);
-      const markerX = centerX + rolledX;
-      const markerY = centerY + rolledY;
-      elements.circle.setAttribute("cx", markerX);
-      elements.circle.setAttribute("cy", markerY);
     }
 
     function updateReticle(components, aligned, livePose, targetPose) {
@@ -464,18 +513,8 @@
         return;
       }
 
-      setPoseVisual({
-        cross: targetCross,
-        depth: targetDepth,
-        tick: targetCrossTick,
-        circle: targetOrientationCircle,
-      }, targetPose);
-      setPoseVisual({
-        cross: currentCross,
-        depth: currentDepth,
-        tick: currentCrossTick,
-        circle: orientationCircle,
-      }, livePose);
+      setPoseVisual({ group: targetGroup, front: targetFront, depth: targetDepth  }, targetPose);
+      setPoseVisual({ group: liveGroup,   front: liveFront,   depth: currentDepth }, livePose);
 
       let alignedCount = 0;
       for (const name of AXES) {
@@ -572,9 +611,19 @@
         };
       }
 
+      if (_studyFrame2 === "user") {
+        const lp = project(d.live_pose, d.live_workspace_components);
+        return {
+          livePose:   { x: lp.x, y: -lp.y, z: -lp.z, roll: lp.roll, pitch: lp.pitch, yaw: lp.yaw },
+          targetPose: { x: 0, y: 0, z: 0, roll: 0, pitch: 0, yaw: 0 },
+        };
+      }
+      // patient frame: negate z so +bX maps screen-up, matching 3D patient camera (up=+bX)
+      const lp = project(d.live_pose,   d.live_workspace_components);
+      const tp = project(d.target_pose, d.target_workspace_components);
       return {
-        livePose:   project(d.live_pose,   d.live_workspace_components),
-        targetPose: project(d.target_pose, d.target_workspace_components),
+        livePose:   { x: lp.x, y: lp.y, z: -lp.z, roll: lp.roll, pitch: lp.pitch, yaw: lp.yaw },
+        targetPose: { x: tp.x, y: tp.y, z: -tp.z, roll: tp.roll, pitch: tp.pitch, yaw: tp.yaw },
       };
     }
 
@@ -629,8 +678,8 @@
         },
         _proj ? _proj.targetPose : {
           x: d.workspace_component_errors?.x ?? 0,
-          y: d.workspace_component_errors?.y ?? 0,
-          z: d.workspace_component_errors?.z ?? 0,
+          y: -(d.workspace_component_errors?.y ?? 0),
+          z: -(d.workspace_component_errors?.z ?? 0),
           roll:  d.workspace_component_errors?.roll  ?? 0,
           pitch: d.workspace_component_errors?.pitch ?? 0,
           yaw:   d.workspace_component_errors?.yaw   ?? 0,
