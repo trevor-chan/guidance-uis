@@ -368,7 +368,6 @@
 
   <!-- Trial status -->
   <div class="card status-row" id="status-card">
-    <span id="elapsed">—</span>
     <span class="badge badge-running" id="trial-state">WAITING</span>
   </div>
 
@@ -462,7 +461,6 @@
       const ws = new WebSocket(WS_URL);
 
       const statusEl       = document.getElementById("ws-status");
-      const elapsedEl      = document.getElementById("elapsed");
       const stateEl        = document.getElementById("trial-state");
       const nullNotice     = document.getElementById("null-notice");
       const compTimeEl     = document.getElementById("comp-time-val");
@@ -486,7 +484,6 @@
                   v => `${v.toFixed(4)} m`);
         updateBar("angular-bar", "angular-value", d.angular, MAX_ANGULAR,
                   v => `${v.toFixed(2)}°`);
-        elapsedEl.textContent = `${(d.elapsed ?? 0).toFixed(1)} s`;
         if (d.matched) {
           stateEl.textContent = "MATCHED";
           stateEl.className   = "badge badge-matched";
