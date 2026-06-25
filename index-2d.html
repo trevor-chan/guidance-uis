@@ -118,13 +118,13 @@
     }
     .target-line {
       fill: none;
-      stroke: var(--target);
+      stroke: #3b82f6;
       stroke-linecap: round;
       stroke-width: 4;
     }
     .current-line {
       fill: none;
-      stroke: var(--current);
+      stroke: #111;
       stroke-linecap: round;
       stroke-width: 4;
     }
@@ -351,20 +351,20 @@
             <!-- back blob: tracker shape, rounded rect -->
             <rect id="target-back"
                   x="-54" y="-36" width="108" height="72" rx="20"
-                  fill="rgba(59,130,246,0.40)" stroke="rgba(59,130,246,0.70)" stroke-width="2.5"/>
+                  fill="none" stroke="#3b82f6" stroke-width="2.5"/>
             <!-- front blob: probe face, 3-lobe organic shape, offset by pitch/yaw -->
             <path id="target-front"
                   d="M 0,-108 C 17.1,-108 35.4,-57 51,-30 C 66.6,-3 101.4,39 93,54 C 84.6,69 30.9,60 0,60 C -30.9,60 -84.6,69 -93,54 C -101.4,39 -66.6,-3 -51,-30 C -35.4,-57 -17.1,-108 0,-108 Z"
-                  fill="rgba(59,130,246,0.40)" stroke="rgba(59,130,246,0.70)" stroke-width="2.5"/>
+                  fill="none" stroke="#3b82f6" stroke-width="2.5"/>
           </g>
           <!-- LIVE: solid black -->
           <g id="live-group">
             <rect id="live-back"
                   x="-54" y="-36" width="108" height="72" rx="20"
-                  fill="#111" stroke="#111" stroke-width="2.5"/>
+                  fill="none" stroke="#111" stroke-width="2.5"/>
             <path id="live-front"
                   d="M 0,-108 C 17.1,-108 35.4,-57 51,-30 C 66.6,-3 101.4,39 93,54 C 84.6,69 30.9,60 0,60 C -30.9,60 -84.6,69 -93,54 C -101.4,39 -66.6,-3 -51,-30 C -35.4,-57 -17.1,-108 0,-108 Z"
-                  fill="#111" stroke="#111" stroke-width="2.5"/>
+                  fill="none" stroke="#111" stroke-width="2.5"/>
           </g>
 
           <!-- depth ruler -->
@@ -484,7 +484,7 @@
     //   elements.circle.setAttribute("cy", markerY);
     // }
 
-    function setPoseVisual(elements, pose) {
+    function setPoseVisual(elements, pose, extraRoll = 0) {
       const screenX = scaled(pose.y, TRANSLATION_RANGE_M, 145);
       const screenY = -scaled(pose.z, TRANSLATION_RANGE_M, 145);
       const centerX = CENTER_X + screenX;
@@ -493,7 +493,7 @@
       // Whole group: translate to screen position, then roll.
       // Back blob sits at origin inside the group; roll applies to both shapes.
       elements.group.setAttribute("transform",
-        `translate(${centerX} ${centerY}) rotate(${pose.roll + 180})`);
+        `translate(${centerX} ${centerY}) rotate(${pose.roll + 180 + extraRoll})`);
 
       // Front blob offset in local (pre-roll) space; roll is inherited from group.
       // Same magnitude scale as the old orientation circle (255px at ±180°).
@@ -513,8 +513,9 @@
         return;
       }
 
-      setPoseVisual({ group: targetGroup, front: targetFront, depth: targetDepth  }, targetPose);
-      setPoseVisual({ group: liveGroup,   front: liveFront,   depth: currentDepth }, livePose);
+      const extraRoll = (_studyFrame2 === "patient") ? -90 : 0;
+      setPoseVisual({ group: targetGroup, front: targetFront, depth: targetDepth  }, targetPose, extraRoll);
+      setPoseVisual({ group: liveGroup,   front: liveFront,   depth: currentDepth }, livePose, extraRoll);
 
       let alignedCount = 0;
       for (const name of AXES) {
@@ -612,18 +613,19 @@
       }
 
       if (_studyFrame2 === "user") {
-        const lp = project(d.live_pose, d.live_workspace_components);
+        const lp = project(d.live_pose,   d.live_workspace_components);
+        const tp = project(d.target_pose, d.target_workspace_components);
         return {
           livePose:   { x: lp.x, y: -lp.y, z: -lp.z, roll: lp.roll, pitch: -lp.pitch, yaw: -lp.yaw },
-          targetPose: { x: 0, y: 0, z: 0, roll: 0, pitch: 0, yaw: 0 },
+          targetPose: { x: tp.x, y: -tp.y, z: -tp.z, roll: tp.roll, pitch: -tp.pitch, yaw: -tp.yaw },
         };
       }
       // patient frame: depth inverted, vertical corrected, colors: target=blue live=black
       const lp = project(d.live_pose,   d.live_workspace_components);
       const tp = project(d.target_pose, d.target_workspace_components);
       return {
-        livePose:   { x: -tp.x, y: tp.y, z: tp.z, roll: tp.roll, pitch: tp.pitch, yaw: tp.yaw },
-        targetPose: { x: -lp.x, y: lp.y, z: lp.z, roll: lp.roll, pitch: lp.pitch, yaw: lp.yaw },
+        livePose:   { x: -lp.x, y: lp.y, z: lp.z, roll: lp.roll, pitch: lp.pitch, yaw: lp.yaw },
+        targetPose: { x: -tp.x, y: tp.y, z: tp.z, roll: tp.roll, pitch: tp.pitch, yaw: tp.yaw },
       };
     }
 
