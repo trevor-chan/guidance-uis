@@ -364,33 +364,33 @@
           <!-- Cross-section blobs: target (blue) drawn first, live (black) on top.
                Each group: translate+rotate handles position+roll; front path gets
                an additional translate for the pitch/yaw offset (pre-roll local space). -->
-          <!-- TARGET: filled mesh-blue, no stroke -->
+          <!-- TARGET: filled mesh-blue, translucent so overlaps darken -->
           <g id="target-group">
             <!-- back: tracker shape, rounded rect -->
             <rect id="target-back"
                   x="-54" y="-36" width="108" height="72" rx="20"
-                  fill="#3b82f6" stroke="none"/>
-            <!-- orientation tick: centered on top edge, length = short side (72), parallel to top edge -->
-            <line id="target-back-tick"
-                  x1="-36" y1="-36" x2="36" y2="-36"
-                  stroke="#3b82f6" stroke-width="2.5" stroke-linecap="round"/>
+                  fill="#3b82f6" fill-opacity="0.25" stroke="none"/>
             <!-- front: probe face, rounded-corner triangle, offset by pitch/yaw -->
             <path id="target-front"
                   d="M 6,-80 L 74,44 Q 80,54 68,54 L -68,54 Q -80,54 -74,44 L -6,-80 Q 0,-90 6,-80 Z"
-                  fill="#3b82f6" stroke="none"/>
+                  fill="#3b82f6" fill-opacity="0.25" stroke="none"/>
+            <!-- orientation tick: perpendicular to top edge, pointing outward toward apex -->
+            <line id="target-back-tick"
+                  x1="0" y1="-36" x2="0" y2="-72"
+                  stroke="#1e40af" stroke-width="2.5" stroke-linecap="round"/>
           </g>
           <!-- LIVE: unfilled, opaque black outline -->
           <g id="live-group">
             <rect id="live-back"
                   x="-54" y="-36" width="108" height="72" rx="20"
                   fill="none" stroke="#111" stroke-width="2.5"/>
-            <!-- orientation tick: centered on top edge, length = short side (72), parallel to top edge -->
-            <line id="live-back-tick"
-                  x1="-36" y1="-36" x2="36" y2="-36"
-                  stroke="#111" stroke-width="2.5" stroke-linecap="round"/>
             <path id="live-front"
                   d="M 6,-80 L 74,44 Q 80,54 68,54 L -68,54 Q -80,54 -74,44 L -6,-80 Q 0,-90 6,-80 Z"
                   fill="none" stroke="#111" stroke-width="2.5"/>
+            <!-- orientation tick: perpendicular to top edge, pointing outward toward apex -->
+            <line id="live-back-tick"
+                  x1="0" y1="-36" x2="0" y2="-72"
+                  stroke="#111" stroke-width="2.5" stroke-linecap="round"/>
           </g>
 
           <!-- depth ruler -->
