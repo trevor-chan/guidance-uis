@@ -513,7 +513,7 @@
         return;
       }
 
-      const extraRoll = (_studyFrame2 === "patient") ? -90 : 0;
+      const extraRoll = (_studyFrame2 === "patient") ? 90 : 0;
       setPoseVisual({ group: targetGroup, front: targetFront, depth: targetDepth  }, targetPose, extraRoll);
       setPoseVisual({ group: liveGroup,   front: liveFront,   depth: currentDepth }, livePose, extraRoll);
 
