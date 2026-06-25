@@ -557,6 +557,65 @@
     boxWireframeGroup.add(_boxWireMesh);
     displayFrame.add(boxWireframeGroup);
 
+    // ── Patient silhouette ───────────────────────────────────────────────────
+    // Flat in box X-Y plane (Z=0 = table). X-mark at box_origin tip (0,0,0).
+    // Local axes of silhouetteGroup: +X→bXd (lateral), +Y→bZd (depth/fwd=box +Y), +Z→bYd (up).
+    // True scale: 1 in = 0.0254 m. Head toward box +Y; body extends -Y.
+    const _silMat = new THREE.LineBasicMaterial({ color: 0xff4d88, transparent: true, opacity: 0.55 });
+
+    // Head: circle r=0.0889 m (3.5 in), center 0.2159 m (8.5 in) forward of X-mark.
+    const _headSegs = 48;
+    const _headR = 0.0889, _headCy = 0.2159;
+    const _headPts = new Float32Array(_headSegs * 3);
+    for (let i = 0; i < _headSegs; i++) {
+      const a = (i / _headSegs) * Math.PI * 2;
+      _headPts[i * 3]     = _headR * Math.cos(a);             // lateral (box X)
+      _headPts[i * 3 + 1] = _headCy + _headR * Math.sin(a);  // forward (box Y)
+      _headPts[i * 3 + 2] = 0;
+    }
+    const _headLine = new THREE.LineLoop(
+      new THREE.BufferGeometry().setAttribute('position', new THREE.BufferAttribute(_headPts, 3)),
+      _silMat
+    );
+
+    // Body/shoulder outline: R neck→shoulders→trunk→L neck (open line strip).
+    // Neck base ±0.047 m (±1.85 in) wide at Y=0.127 m; shoulders ±0.1397 m (±5.5 in) at Y=0.
+    const _bodyXY = [
+       0.047,  0.127,   // R neck base
+       0.090,  0.065,   // R upper shoulder
+       0.135,  0.015,   // R shoulder
+       0.1397, 0.000,   // R shoulder widest (X-mark level)
+       0.130, -0.045,   // R lower shoulder
+       0.110, -0.100,   // R side
+       0.100, -0.200,   // R waist
+       0.095, -0.250,   // R lower trunk
+      -0.095, -0.250,   // L lower trunk
+      -0.100, -0.200,   // L waist
+      -0.110, -0.100,   // L side
+      -0.130, -0.045,   // L lower shoulder
+      -0.1397, 0.000,   // L shoulder widest
+      -0.135,  0.015,   // L shoulder
+      -0.090,  0.065,   // L upper shoulder
+      -0.047,  0.127,   // L neck base
+    ];
+    const _nBody = _bodyXY.length >> 1;
+    const _bodyPts = new Float32Array(_nBody * 3);
+    for (let i = 0; i < _nBody; i++) {
+      _bodyPts[i * 3]     = _bodyXY[i * 2];
+      _bodyPts[i * 3 + 1] = _bodyXY[i * 2 + 1];
+      _bodyPts[i * 3 + 2] = 0;
+    }
+    const _bodyLine = new THREE.Line(
+      new THREE.BufferGeometry().setAttribute('position', new THREE.BufferAttribute(_bodyPts, 3)),
+      _silMat
+    );
+
+    const patientSilhouetteGroup = new THREE.Group();
+    patientSilhouetteGroup.matrixAutoUpdate = false;
+    patientSilhouetteGroup.visible = false;
+    patientSilhouetteGroup.add(_headLine, _bodyLine);
+    displayFrame.add(patientSilhouetteGroup);
+
     function createDropLine(color) {
       const geo = new THREE.BufferGeometry();
       geo.setAttribute('position', new THREE.BufferAttribute(new Float32Array(6), 3));
@@ -742,10 +801,18 @@
     }
 
     function updateBoxWireframe(data) {
-      if (!data.box_origin || !data.reference_pose) { boxWireframeGroup.visible = false; return; }
+      if (!data.box_origin || !data.reference_pose) {
+        boxWireframeGroup.visible = false;
+        patientSilhouetteGroup.visible = false;
+        return;
+      }
       const refMat = matrixFromRows(data.reference_pose);
       const boxMat = matrixFromRows(data.box_origin);
-      if (!refMat || !boxMat) { boxWireframeGroup.visible = false; return; }
+      if (!refMat || !boxMat) {
+        boxWireframeGroup.visible = false;
+        patientSilhouetteGroup.visible = false;
+        return;
+      }
       // Box origin expressed in displayFrame local space (children of displayFrame use ref⁻¹ × boxMat).
       const relBox = refMat.clone().invert().multiply(boxMat);
       const bXd = new THREE.Vector3().setFromMatrixColumn(relBox, 1);          // lateral
@@ -758,6 +825,14 @@
       boxWireframeGroup.matrix.copy(m);
       boxWireframeGroup.matrixWorldNeedsUpdate = true;
       boxWireframeGroup.visible = true;
+
+      // Silhouette flat in box X-Y plane at tipD (Z=0 in box coords = table surface).
+      // Local +X→bXd (lateral), local +Y→bZd (depth/fwd = box +Y), local +Z→bYd (elevation).
+      const silM = new THREE.Matrix4().makeBasis(bXd, bZd, bYd);
+      silM.setPosition(tipD);
+      patientSilhouetteGroup.matrix.copy(silM);
+      patientSilhouetteGroup.matrixWorldNeedsUpdate = true;
+      patientSilhouetteGroup.visible = true;
     }
 
     function connect() {
