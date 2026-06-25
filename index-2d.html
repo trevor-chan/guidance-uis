@@ -610,6 +610,8 @@
           z:               _dot(delta,   vUp),
           x:               _dot(delta,   look),
           roll:            wc.roll,
+          yaw:             wc.yaw,
+          pitch:           wc.pitch,
           frontDeltaRight: _dot(frontSep, right),
           frontDeltaUp:    _dot(frontSep, vUp),
           frontDepthLook:  _dot(frontSep, look),  // +look = further from eye; negative = front nearer
@@ -620,16 +622,16 @@
         const lp = project(d.live_pose,   d.live_workspace_components);
         const tp = project(d.target_pose, d.target_workspace_components);
         return {
-          livePose:   { x: lp.x, y: -lp.y, z: -lp.z, roll: lp.roll, frontDeltaRight: -lp.frontDeltaRight, frontDeltaUp: -lp.frontDeltaUp, frontIsNearer: lp.frontDepthLook < 0 },
-          targetPose: { x: tp.x, y: -tp.y, z: -tp.z, roll: tp.roll, frontDeltaRight: -tp.frontDeltaRight, frontDeltaUp: -tp.frontDeltaUp, frontIsNearer: tp.frontDepthLook < 0 },
+          livePose:   { x: lp.x, y: -lp.y, z: -lp.z, roll: lp.roll, yaw: -lp.yaw, pitch: -lp.pitch, frontDeltaRight: -lp.frontDeltaRight, frontDeltaUp: -lp.frontDeltaUp, frontIsNearer: lp.frontDepthLook < 0 },
+          targetPose: { x: tp.x, y: -tp.y, z: -tp.z, roll: tp.roll, yaw: -tp.yaw, pitch: -tp.pitch, frontDeltaRight: -tp.frontDeltaRight, frontDeltaUp: -tp.frontDeltaUp, frontIsNearer: tp.frontDepthLook < 0 },
         };
       }
       // patient frame: depth inverted, vertical corrected, colors: target=blue live=black
       const lp = project(d.live_pose,   d.live_workspace_components);
       const tp = project(d.target_pose, d.target_workspace_components);
       return {
-        livePose:   { x: -lp.x, y: lp.y, z: lp.z, roll: lp.roll, frontDeltaRight: lp.frontDeltaRight, frontDeltaUp: lp.frontDeltaUp, frontIsNearer: lp.frontDepthLook < 0 },
-        targetPose: { x: -tp.x, y: tp.y, z: tp.z, roll: tp.roll, frontDeltaRight: tp.frontDeltaRight, frontDeltaUp: tp.frontDeltaUp, frontIsNearer: tp.frontDepthLook < 0 },
+        livePose:   { x: -lp.x, y: lp.y, z: lp.z, roll: lp.roll, yaw: lp.yaw, pitch: lp.pitch, frontDeltaRight: lp.frontDeltaRight, frontDeltaUp: lp.frontDeltaUp, frontIsNearer: lp.frontDepthLook < 0 },
+        targetPose: { x: -tp.x, y: tp.y, z: tp.z, roll: tp.roll, yaw: tp.yaw, pitch: tp.pitch, frontDeltaRight: tp.frontDeltaRight, frontDeltaUp: tp.frontDeltaUp, frontIsNearer: tp.frontDepthLook < 0 },
       };
     }
 
