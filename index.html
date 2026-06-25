@@ -97,6 +97,23 @@
     }
     .ws-ok  { color: #4ade80 !important; }
     .ws-err { color: #f87171 !important; }
+    #set-box-btn {
+      position: fixed;
+      top: 14px;
+      right: 16px;
+      z-index: 20;
+      padding: 6px 11px;
+      border: 1px solid #444;
+      border-radius: 5px;
+      background: #2a2a2a;
+      color: #aaa;
+      font: 0.68rem "Courier New", monospace;
+      letter-spacing: 0.06em;
+      text-transform: uppercase;
+      cursor: pointer;
+    }
+    #set-box-btn:hover { background: #383838; }
+    #set-box-btn.ack { border-color: #4ade80; color: #4ade80; }
 
     /* ── Competition card ── */
     .comp-scoreboard {
@@ -250,6 +267,7 @@
   </style>
 </head>
 <body>
+  <button id="set-box-btn">Set Box</button>
   <div id="hold-bg"></div>
   <h1>TRIAL MONITOR</h1>
 
@@ -457,6 +475,8 @@
     const _isStudy    = _params.get("study") === "1";
     const _studyFrame = _params.get("frame") || "none";
 
+    const setBoxBtn = document.getElementById("set-box-btn");
+
     function connect() {
       const ws = new WebSocket(WS_URL);
 
@@ -578,6 +598,10 @@
 
       // ── Message dispatch ────────────────────────────────────────────────────
 
+      setBoxBtn.onclick = () => {
+        if (ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify({ cmd: "set_box" }));
+      };
+
       ws.onopen = () => {
         statusEl.textContent = "connected";
         statusEl.className   = "ws-ok";
@@ -588,6 +612,13 @@
 
       ws.onmessage = (evt) => {
         const d = JSON.parse(evt.data);
+
+        if (d.cmd_ack === "set_box") {
+          setBoxBtn.classList.add("ack");
+          setBoxBtn.textContent = "Box Set";
+          setTimeout(() => { setBoxBtn.classList.remove("ack"); setBoxBtn.textContent = "Set Box"; }, 1500);
+          return;
+        }
 
         if (d.error === "tracker_not_visible") {
           statusEl.textContent = "tracker not visible — try again";

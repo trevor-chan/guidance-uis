@@ -201,6 +201,23 @@
     }
     #connection.ok { color: var(--success); }
     #connection.error { color: #f87171; }
+    #set-box-btn {
+      position: fixed;
+      top: 14px;
+      right: 16px;
+      z-index: 20;
+      padding: 6px 11px;
+      border: 1px solid #444;
+      border-radius: 5px;
+      background: #2a2a2a;
+      color: #aaa;
+      font: 0.68rem "Courier New", monospace;
+      letter-spacing: 0.06em;
+      text-transform: uppercase;
+      cursor: pointer;
+    }
+    #set-box-btn:hover { background: #383838; }
+    #set-box-btn.ack { border-color: #4ade80; color: #4ade80; }
     @media (max-width: 760px) {
       body { padding: 12px; }
       .scoreboard { grid-template-columns: repeat(2, 1fr); }
@@ -248,6 +265,7 @@
   </style>
 </head>
 <body>
+  <button id="set-box-btn">Set Box</button>
   <main>
     <h1>2D POSE GUIDANCE</h1>
 
@@ -346,24 +364,32 @@
           <!-- Cross-section blobs: target (blue) drawn first, live (black) on top.
                Each group: translate+rotate handles position+roll; front path gets
                an additional translate for the pitch/yaw offset (pre-roll local space). -->
-          <!-- TARGET: semi-opaque mesh-blue -->
+          <!-- TARGET: filled mesh-blue, no stroke -->
           <g id="target-group">
-            <!-- back blob: tracker shape, rounded rect -->
+            <!-- back: tracker shape, rounded rect -->
             <rect id="target-back"
                   x="-54" y="-36" width="108" height="72" rx="20"
-                  fill="none" stroke="#3b82f6" stroke-width="2.5"/>
-            <!-- front blob: probe face, 3-lobe organic shape, offset by pitch/yaw -->
+                  fill="#3b82f6" stroke="none"/>
+            <!-- orientation tick: centered on top edge, length = short side (72), parallel to top edge -->
+            <line id="target-back-tick"
+                  x1="-36" y1="-36" x2="36" y2="-36"
+                  stroke="#3b82f6" stroke-width="2.5" stroke-linecap="round"/>
+            <!-- front: probe face, rounded-corner triangle, offset by pitch/yaw -->
             <path id="target-front"
-                  d="M 0,-108 C 17.1,-108 35.4,-57 51,-30 C 66.6,-3 101.4,39 93,54 C 84.6,69 30.9,60 0,60 C -30.9,60 -84.6,69 -93,54 C -101.4,39 -66.6,-3 -51,-30 C -35.4,-57 -17.1,-108 0,-108 Z"
-                  fill="none" stroke="#3b82f6" stroke-width="2.5"/>
+                  d="M 6,-80 L 74,44 Q 80,54 68,54 L -68,54 Q -80,54 -74,44 L -6,-80 Q 0,-90 6,-80 Z"
+                  fill="#3b82f6" stroke="none"/>
           </g>
-          <!-- LIVE: solid black -->
+          <!-- LIVE: unfilled, opaque black outline -->
           <g id="live-group">
             <rect id="live-back"
                   x="-54" y="-36" width="108" height="72" rx="20"
                   fill="none" stroke="#111" stroke-width="2.5"/>
+            <!-- orientation tick: centered on top edge, length = short side (72), parallel to top edge -->
+            <line id="live-back-tick"
+                  x1="-36" y1="-36" x2="36" y2="-36"
+                  stroke="#111" stroke-width="2.5" stroke-linecap="round"/>
             <path id="live-front"
-                  d="M 0,-108 C 17.1,-108 35.4,-57 51,-30 C 66.6,-3 101.4,39 93,54 C 84.6,69 30.9,60 0,60 C -30.9,60 -84.6,69 -93,54 C -101.4,39 -66.6,-3 -51,-30 C -35.4,-57 -17.1,-108 0,-108 Z"
+                  d="M 6,-80 L 74,44 Q 80,54 68,54 L -68,54 Q -80,54 -74,44 L -6,-80 Q 0,-90 6,-80 Z"
                   fill="none" stroke="#111" stroke-width="2.5"/>
           </g>
 
@@ -448,6 +474,9 @@
     const holdProgress = document.getElementById("hold-progress");
     const keyGrid = document.querySelector(".key-grid");
     const trackerHelp = document.getElementById("tracker-help");
+    const setBoxBtn = document.getElementById("set-box-btn");
+
+    setBoxBtn.addEventListener("click", () => send({ cmd: "set_box" }));
 
     function clamp(value, min, max) {
       return Math.min(max, Math.max(min, value));
@@ -497,9 +526,9 @@
       elements.group.setAttribute("transform",
         `translate(${centerX} ${centerY}) rotate(${pose.roll + 180 + extraRoll})`);
 
-      // Front blob offset in the group's pre-roll local SVG frame (euler pitch/yaw ×765).
-      const frontOffX =  scaled(pose.yaw,   180, 765);
-      const frontOffY = -scaled(pose.pitch, 180, 765);
+      // Front blob offset in the group's pre-roll local SVG frame (euler pitch/yaw ×350).
+      const frontOffX =  scaled(pose.yaw,   180, 350);
+      const frontOffY = -scaled(pose.pitch, 180, 350);
       elements.front.setAttribute("transform", `translate(${frontOffX} ${frontOffY})`);
 
       // Depth ruler (unchanged)
@@ -719,6 +748,12 @@
 
       socket.onmessage = event => {
         const data = JSON.parse(event.data);
+        if (data.cmd_ack === "set_box") {
+          setBoxBtn.classList.add("ack");
+          setBoxBtn.textContent = "Box Set";
+          setTimeout(() => { setBoxBtn.classList.remove("ack"); setBoxBtn.textContent = "Set Box"; }, 1500);
+          return;
+        }
         if (data.error) {
           connection.textContent = data.error.replaceAll("_", " ");
           connection.className = "error";

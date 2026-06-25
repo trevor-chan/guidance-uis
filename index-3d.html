@@ -173,6 +173,23 @@
     }
     .ok { color: var(--success) !important; }
     .error { color: #f87171 !important; }
+    #set-box-btn {
+      position: fixed;
+      top: 14px;
+      right: 16px;
+      z-index: 20;
+      padding: 6px 11px;
+      border: 1px solid #444;
+      border-radius: 5px;
+      background: #2a2a2a;
+      color: #aaa;
+      font: 0.68rem "Courier New", monospace;
+      letter-spacing: 0.06em;
+      text-transform: uppercase;
+      cursor: pointer;
+    }
+    #set-box-btn:hover { background: #383838; }
+    #set-box-btn.ack { border-color: #4ade80; color: #4ade80; }
     @media (max-width: 760px) {
       body { padding: 12px; }
       .scoreboard { gap: 8px; }
@@ -263,6 +280,7 @@
   </script>
 </head>
 <body>
+  <button id="set-box-btn">Set Box</button>
   <main>
     <h1>3D POSE GUIDANCE</h1>
 
@@ -650,6 +668,9 @@
       }
     }
 
+    const setBoxBtn = document.getElementById("set-box-btn");
+    setBoxBtn.addEventListener("click", () => send({ cmd: "set_box" }));
+
     // ── Study renderer (3D) ──────────────────────────────────────────────────
     const _s3Phases = ["s3-cal", "s3-practice", "s3-trial", "s3-pref", "s3-done"];
     const _scoreboard3 = document.querySelector(".scoreboard").closest(".card");
@@ -754,6 +775,12 @@
 
       socket.onmessage = event => {
         const data = JSON.parse(event.data);
+        if (data.cmd_ack === "set_box") {
+          setBoxBtn.classList.add("ack");
+          setBoxBtn.textContent = "Box Set";
+          setTimeout(() => { setBoxBtn.classList.remove("ack"); setBoxBtn.textContent = "Set Box"; }, 1500);
+          return;
+        }
         if (data.error) {
           connection.textContent = data.error.replaceAll("_", " ");
           connection.className = "error";

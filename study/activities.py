@@ -175,9 +175,9 @@ class PreferenceActivity(Activity):
 class PracticeActivity(Activity):
     """Practice phase: live reticle with box-origin pose as target.
 
-    Ends when Trial's 60 s timeout fires OR when request_end() is called from
-    outside (e.g. the user presses Ready on the study UI).  Match is displayed
-    but does NOT end the phase — the user is encouraged to explore freely.
+    Ends ONLY when request_end() is called from outside (user presses Ready).
+    The 60 s trial timeout is NOT an end-condition for practice — only Ready
+    terminates this phase.  Match is displayed but does not end the phase.
     """
 
     def __init__(self, fetcher: LivePoseFetcher, target_pose: np.ndarray) -> None:
@@ -206,7 +206,7 @@ class PracticeActivity(Activity):
                 "timed_out": False, "elapsed": None,
             }
         state = self._trial.step()
-        if state["timed_out"] or self._end_requested:
+        if self._end_requested:
             self._done = True
         return {
             "done": self._done,
