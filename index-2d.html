@@ -355,7 +355,7 @@
             <!-- front blob: probe face, 3-lobe organic shape, offset by pitch/yaw -->
             <path id="target-front"
                   d="M 0,-108 C 17.1,-108 35.4,-57 51,-30 C 66.6,-3 101.4,39 93,54 C 84.6,69 30.9,60 0,60 C -30.9,60 -84.6,69 -93,54 C -101.4,39 -66.6,-3 -51,-30 C -35.4,-57 -17.1,-108 0,-108 Z"
-                  fill="none" stroke="#3b82f6" stroke-width="2.5"/>
+                  fill="#3b82f6" stroke="#3b82f6" stroke-width="2.5"/>
           </g>
           <!-- LIVE: solid black -->
           <g id="live-group">
@@ -364,7 +364,7 @@
                   fill="none" stroke="#111" stroke-width="2.5"/>
             <path id="live-front"
                   d="M 0,-108 C 17.1,-108 35.4,-57 51,-30 C 66.6,-3 101.4,39 93,54 C 84.6,69 30.9,60 0,60 C -30.9,60 -84.6,69 -93,54 C -101.4,39 -66.6,-3 -51,-30 C -35.4,-57 -17.1,-108 0,-108 Z"
-                  fill="none" stroke="#111" stroke-width="2.5"/>
+                  fill="#111" stroke="#111" stroke-width="2.5"/>
           </g>
 
           <!-- depth ruler -->
@@ -431,8 +431,10 @@
     // Cross-section blob elements
     const liveGroup   = document.getElementById("live-group");
     const liveFront   = document.getElementById("live-front");
+    const liveBack    = document.getElementById("live-back");
     const targetGroup = document.getElementById("target-group");
     const targetFront = document.getElementById("target-front");
+    const targetBack  = document.getElementById("target-back");
 
     // Depth bar refs (unchanged)
     const currentDepth = document.getElementById("current-depth");
@@ -512,6 +514,11 @@
       }
       elements.front.setAttribute("transform", `translate(${frontOffX} ${frontOffY})`);
 
+      // Reorder front/back within group each frame: nearer shape drawn last (on top).
+      if (pose.frontIsNearer != null) {
+        elements.group.appendChild(pose.frontIsNearer ? elements.front : elements.back);
+      }
+
       // Depth ruler (unchanged)
       const depthY = CENTER_Y - scaled(pose.x, TRANSLATION_RANGE_M, 185);
       elements.depth.setAttribute("y1", depthY);
@@ -525,8 +532,8 @@
       }
 
       const extraRoll = (_studyFrame2 === "patient") ? 90 : 0;
-      setPoseVisual({ group: targetGroup, front: targetFront, depth: targetDepth  }, targetPose, extraRoll);
-      setPoseVisual({ group: liveGroup,   front: liveFront,   depth: currentDepth }, livePose, extraRoll);
+      setPoseVisual({ group: targetGroup, front: targetFront, back: targetBack, depth: targetDepth  }, targetPose, extraRoll);
+      setPoseVisual({ group: liveGroup,   front: liveFront,   back: liveBack,   depth: currentDepth }, livePose, extraRoll);
 
       let alignedCount = 0;
       for (const name of AXES) {
@@ -622,6 +629,7 @@
           roll:            wc.roll,
           frontDeltaRight: _dot(frontSep, right),
           frontDeltaUp:    _dot(frontSep, vUp),
+          frontDepthLook:  _dot(frontSep, look),  // +look = further from eye; negative = front nearer
         };
       }
 
@@ -629,16 +637,16 @@
         const lp = project(d.live_pose,   d.live_workspace_components);
         const tp = project(d.target_pose, d.target_workspace_components);
         return {
-          livePose:   { x: lp.x, y: -lp.y, z: -lp.z, roll: lp.roll, frontDeltaRight: -lp.frontDeltaRight, frontDeltaUp: -lp.frontDeltaUp },
-          targetPose: { x: tp.x, y: -tp.y, z: -tp.z, roll: tp.roll, frontDeltaRight: -tp.frontDeltaRight, frontDeltaUp: -tp.frontDeltaUp },
+          livePose:   { x: lp.x, y: -lp.y, z: -lp.z, roll: lp.roll, frontDeltaRight: -lp.frontDeltaRight, frontDeltaUp: -lp.frontDeltaUp, frontIsNearer: lp.frontDepthLook < 0 },
+          targetPose: { x: tp.x, y: -tp.y, z: -tp.z, roll: tp.roll, frontDeltaRight: -tp.frontDeltaRight, frontDeltaUp: -tp.frontDeltaUp, frontIsNearer: tp.frontDepthLook < 0 },
         };
       }
       // patient frame: depth inverted, vertical corrected, colors: target=blue live=black
       const lp = project(d.live_pose,   d.live_workspace_components);
       const tp = project(d.target_pose, d.target_workspace_components);
       return {
-        livePose:   { x: -lp.x, y: lp.y, z: lp.z, roll: lp.roll, frontDeltaRight: lp.frontDeltaRight, frontDeltaUp: lp.frontDeltaUp },
-        targetPose: { x: -tp.x, y: tp.y, z: tp.z, roll: tp.roll, frontDeltaRight: tp.frontDeltaRight, frontDeltaUp: tp.frontDeltaUp },
+        livePose:   { x: -lp.x, y: lp.y, z: lp.z, roll: lp.roll, frontDeltaRight: lp.frontDeltaRight, frontDeltaUp: lp.frontDeltaUp, frontIsNearer: lp.frontDepthLook < 0 },
+        targetPose: { x: -tp.x, y: tp.y, z: tp.z, roll: tp.roll, frontDeltaRight: tp.frontDeltaRight, frontDeltaUp: tp.frontDeltaUp, frontIsNearer: tp.frontDepthLook < 0 },
       };
     }
 
