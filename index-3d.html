@@ -545,7 +545,7 @@
     liveAxes.position.set(0.07, 0, 0);
     ghostAxes.position.set(0.07, 0, 0);
 
-    // Bounding box wireframe — shows the target spawn volume (±0.125 lateral/up, 0→0.10 depth).
+    // Bounding box wireframe — shows the target spawn volume (±0.125 lateral/up, +2cm→+12cm depth).
     const _boxWireGeo = new THREE.BoxGeometry(0.25, 0.25, 0.10);
     const _boxWireMesh = new THREE.LineSegments(
       new THREE.EdgesGeometry(_boxWireGeo),
@@ -570,6 +570,7 @@
       new THREE.MeshBasicMaterial({ map: _silPageTex, side: THREE.DoubleSide })
     );
     _silPageMesh.position.set(0, 0.09525, 0);
+    _silPageMesh.rotation.z = Math.PI; // 180° flip: head +Y (box) = +Y on page
 
     const patientSilhouettePage = new THREE.Group();
     patientSilhouettePage.matrixAutoUpdate = false;
@@ -780,7 +781,7 @@
       const bYd = new THREE.Vector3().setFromMatrixColumn(relBox, 2).negate(); // elevation/up
       const bZd = new THREE.Vector3().setFromMatrixColumn(relBox, 0).negate(); // depth/fwd
       const tipD = new THREE.Vector3().setFromMatrixPosition(relBox);
-      const centerD = tipD.clone().addScaledVector(bZd, 0.05); // geometric center of 0→0.10 depth
+      const centerD = tipD.clone().addScaledVector(bZd, 0.07); // geometric center of +2cm→+12cm depth
       const m = new THREE.Matrix4().makeBasis(bXd, bYd, bZd);
       m.setPosition(centerD);
       boxWireframeGroup.matrix.copy(m);
