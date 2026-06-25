@@ -355,7 +355,7 @@
             <!-- front blob: probe face, 3-lobe organic shape, offset by pitch/yaw -->
             <path id="target-front"
                   d="M 0,-108 C 17.1,-108 35.4,-57 51,-30 C 66.6,-3 101.4,39 93,54 C 84.6,69 30.9,60 0,60 C -30.9,60 -84.6,69 -93,54 C -101.4,39 -66.6,-3 -51,-30 C -35.4,-57 -17.1,-108 0,-108 Z"
-                  fill="#3b82f6" stroke="#3b82f6" stroke-width="2.5"/>
+                  fill="#3b82f6" fill-opacity="0.2" stroke="#3b82f6" stroke-width="2.5"/>
           </g>
           <!-- LIVE: solid black -->
           <g id="live-group">
@@ -364,7 +364,7 @@
                   fill="none" stroke="#111" stroke-width="2.5"/>
             <path id="live-front"
                   d="M 0,-108 C 17.1,-108 35.4,-57 51,-30 C 66.6,-3 101.4,39 93,54 C 84.6,69 30.9,60 0,60 C -30.9,60 -84.6,69 -93,54 C -101.4,39 -66.6,-3 -51,-30 C -35.4,-57 -17.1,-108 0,-108 Z"
-                  fill="#111" stroke="#111" stroke-width="2.5"/>
+                  fill="#111" fill-opacity="0.2" stroke="#111" stroke-width="2.5"/>
           </g>
 
           <!-- depth ruler -->
@@ -502,7 +502,7 @@
       // fallback for competition / transducer frames.
       let frontOffX, frontOffY;
       if (pose.frontDeltaRight != null) {
-        const PX_PER_M = 145 / TRANSLATION_RANGE_M;           // 580 px/m
+        const PX_PER_M = 3 * 145 / TRANSLATION_RANGE_M;        // 1740 px/m (3× separation scale)
         const dSVGx    =  pose.frontDeltaRight * PX_PER_M;
         const dSVGy    = -(pose.frontDeltaUp ?? 0) * PX_PER_M;
         const rollRad  = (pose.roll + 180 + extraRoll) * Math.PI / 180;
