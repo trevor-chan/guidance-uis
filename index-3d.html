@@ -1124,8 +1124,8 @@
 
       activeCamera.position.copy(eye);
       if (referenceFrame === 'patient') {
-        // Box +X at screen top (180° flip of previous -bX orientation).
-        activeCamera.up.copy(bX.clone());
+        // 90° CW from +bX: use -bY as up vector.
+        activeCamera.up.copy(bY.clone().negate());
       } else {
         // World up keeps the horizon level regardless of calibration roll.
         activeCamera.up.set(0, 0, 1);

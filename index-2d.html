@@ -612,7 +612,7 @@
       if (_studyFrame2 === "patient") {
         // Patient: 0.7 m above centroid along true world vertical (+Y in tracker space).
         eye = _vadd(centroid, [0, 0.7, 0]);
-        upHint = bX;  // box +X (180° flip)
+        upHint = _vscale(bY, -1);  // −bY: 90° CW from +bX
       } else {
         // User: calibrated probe pos, raised 0.4 m along world vertical (+Y in tracker space).
         // bY is the probe's own elevation axis — tilted with probe orientation, not world-vertical.
