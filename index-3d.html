@@ -781,17 +781,17 @@
       const bYd = new THREE.Vector3().setFromMatrixColumn(relBox, 2).negate(); // elevation/up
       const bZd = new THREE.Vector3().setFromMatrixColumn(relBox, 0).negate(); // depth/fwd
       const tipD = new THREE.Vector3().setFromMatrixPosition(relBox);
-      const centerD = tipD.clone().addScaledVector(bZd, 0.07); // geometric center of +2cm→+12cm depth
+      const centerD = tipD.clone(); // box center at tip; box spans ±5cm in bZd → +2cm–+12cm above silhouette
       const m = new THREE.Matrix4().makeBasis(bXd, bYd, bZd);
       m.setPosition(centerD);
       boxWireframeGroup.matrix.copy(m);
       boxWireframeGroup.matrixWorldNeedsUpdate = true;
       boxWireframeGroup.visible = true;
 
-      // Silhouette page flat in box X-Y plane at box origin (tipD).
+      // Silhouette page: lowered 7cm (−bZd) to true tip plane; shifted +7cm (+bYd) so X-mark aligns with tip.
       // Local +X→bXd (lateral), +Y→bYd (head/fwd = box +Y), +Z→bZd (up = box +Z).
       const silM = new THREE.Matrix4().makeBasis(bXd, bYd, bZd);
-      silM.setPosition(tipD);
+      silM.setPosition(tipD.clone().addScaledVector(bZd, -0.07).addScaledVector(bYd, 0.07));
       patientSilhouettePage.matrix.copy(silM);
       patientSilhouettePage.matrixWorldNeedsUpdate = true;
       patientSilhouettePage.visible = true;
