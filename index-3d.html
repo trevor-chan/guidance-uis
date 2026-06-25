@@ -788,10 +788,11 @@
       boxWireframeGroup.matrixWorldNeedsUpdate = true;
       boxWireframeGroup.visible = true;
 
-      // Silhouette page: lowered 7cm (−bZd) to true tip plane; shifted +7cm (+bYd) so X-mark aligns with tip.
+      // Silhouette page: lowered 7cm (−bZd) to true tip plane; shifted +0.09525m (+bYd) so X-mark (page 5.5,12.25in,
+      // which is 0.09525m toward foot from page center) aligns exactly with box_origin (tipD).
       // Local +X→bXd (lateral), +Y→bYd (head/fwd = box +Y), +Z→bZd (up = box +Z).
       const silM = new THREE.Matrix4().makeBasis(bXd, bYd, bZd);
-      silM.setPosition(tipD.clone().addScaledVector(bZd, -0.07).addScaledVector(bYd, 0.07));
+      silM.setPosition(tipD.clone().addScaledVector(bZd, -0.07).addScaledVector(bYd, 0.09525));
       patientSilhouettePage.matrix.copy(silM);
       patientSilhouettePage.matrixWorldNeedsUpdate = true;
       patientSilhouettePage.visible = true;
