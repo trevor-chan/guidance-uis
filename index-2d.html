@@ -497,34 +497,10 @@
       elements.group.setAttribute("transform",
         `translate(${centerX} ${centerY}) rotate(${pose.roll + 180 + extraRoll})`);
 
-      // Front blob offset in the group's pre-roll local SVG frame.
-      // Real geometry when available (user/patient study frames); euler-angle
-      // fallback for competition / transducer frames.
-      let frontOffX, frontOffY;
-      if (pose.frontDeltaRight != null) {
-        const PX_PER_M = 3 * 145 / TRANSLATION_RANGE_M;        // 1740 px/m (3× separation scale)
-        const dSVGx    =  pose.frontDeltaRight * PX_PER_M;
-        const dSVGy    = -(pose.frontDeltaUp ?? 0) * PX_PER_M;
-        const rollRad  = (pose.roll + 180 + extraRoll) * Math.PI / 180;
-        frontOffX =  dSVGx * Math.cos(rollRad) + dSVGy * Math.sin(rollRad);
-        frontOffY = -dSVGx * Math.sin(rollRad) + dSVGy * Math.cos(rollRad);
-      } else {
-        frontOffX =  scaled(pose.yaw,   180, 255);
-        frontOffY = -scaled(pose.pitch, 180, 255);
-      }
+      // Front blob offset in the group's pre-roll local SVG frame (euler pitch/yaw ×765).
+      const frontOffX =  scaled(pose.yaw,   180, 765);
+      const frontOffY = -scaled(pose.pitch, 180, 765);
       elements.front.setAttribute("transform", `translate(${frontOffX} ${frontOffY})`);
-
-      // Reorder front/back within group each frame: nearer shape drawn last (on top).
-      // Also fill the nearer shape (occluding) and clear the farther one.
-      if (pose.frontIsNearer != null) {
-        const nearerEl  = pose.frontIsNearer ? elements.front : elements.back;
-        const fartherEl = pose.frontIsNearer ? elements.back  : elements.front;
-        elements.group.appendChild(nearerEl);
-        nearerEl.setAttribute("fill", elements.color);
-        nearerEl.setAttribute("fill-opacity", "0.7");
-        fartherEl.setAttribute("fill", "none");
-        fartherEl.setAttribute("fill-opacity", "0");
-      }
 
       // Depth ruler (unchanged)
       const depthY = CENTER_Y - scaled(pose.x, TRANSLATION_RANGE_M, 185);
@@ -539,8 +515,8 @@
       }
 
       const extraRoll = (_studyFrame2 === "patient") ? 90 : 0;
-      setPoseVisual({ group: targetGroup, front: targetFront, back: targetBack, depth: targetDepth,  color: "#3b82f6" }, targetPose, extraRoll);
-      setPoseVisual({ group: liveGroup,   front: liveFront,   back: liveBack,   depth: currentDepth, color: "#111"    }, livePose, extraRoll);
+      setPoseVisual({ group: targetGroup, front: targetFront, back: targetBack, depth: targetDepth  }, targetPose, extraRoll);
+      setPoseVisual({ group: liveGroup,   front: liveFront,   back: liveBack,   depth: currentDepth }, livePose, extraRoll);
 
       let alignedCount = 0;
       for (const name of AXES) {
