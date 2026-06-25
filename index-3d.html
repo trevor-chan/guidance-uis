@@ -561,7 +561,7 @@
     // Flat plane 11 in × 17 in (0.2794 m × 0.4318 m), textured with the full
     // page image (white background + pink silhouette). Unlit MeshBasicMaterial.
     // Lies in group local X-Y plane (Z=0 = table surface).
-    // Local +X→bXd (lateral), +Y→bZd (head/fwd = box +Y), +Z→bYd (elevation).
+    // Local +X→bXd (lateral), +Y→bYd (head/fwd = box +Y), +Z→bZd (up = box +Z).
     // X-mark at image (5.5 in, 12.25 in) from top-left → box origin (0,0,0).
     // Page center is 3.75 in (0.09525 m) above X-mark → plane offset +Y by 0.09525 m.
     const _silPageTex = new THREE.TextureLoader().load("assets/patient_silhouette_page.png");
@@ -788,8 +788,8 @@
       boxWireframeGroup.visible = true;
 
       // Silhouette page flat in box X-Y plane at box origin (tipD).
-      // Local +X→bXd (lateral), +Y→bZd (head/fwd = box +Y), +Z→bYd (elevation).
-      const silM = new THREE.Matrix4().makeBasis(bXd, bZd, bYd);
+      // Local +X→bXd (lateral), +Y→bYd (head/fwd = box +Y), +Z→bZd (up = box +Z).
+      const silM = new THREE.Matrix4().makeBasis(bXd, bYd, bZd);
       silM.setPosition(tipD);
       patientSilhouettePage.matrix.copy(silM);
       patientSilhouettePage.matrixWorldNeedsUpdate = true;
