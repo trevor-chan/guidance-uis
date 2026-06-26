@@ -115,6 +115,14 @@
       width: 100%;
       height: auto;
       aspect-ratio: 760 / 520;
+      position: relative;
+      z-index: 1;
+    }
+    #sil-canvas {
+      position: absolute;
+      top: 0; left: 0; width: 100%; height: 100%;
+      pointer-events: none;
+      z-index: 0;
     }
     .target-line {
       fill: none;
@@ -263,6 +271,13 @@
     #calib-img { max-width: 100%; border-radius: 4px; background: #2a2a2a;
                  display: block; margin: 0 auto 14px; }
   </style>
+  <script type="importmap">
+    {
+      "imports": {
+        "three": "./vendor/three.module.js"
+      }
+    }
+  </script>
 </head>
 <body>
   <button id="set-box-btn">Set Box</button>
@@ -337,21 +352,11 @@
 
       <div class="reticle-shell">
         <div id="hold-progress"></div>
+        <canvas id="sil-canvas"></canvas>
         <svg id="reticle" viewBox="0 0 760 520" role="img"
              aria-label="Six degree of freedom pose alignment reticle">
           <rect x="4" y="4" width="752" height="512" rx="4"
                 fill="#f8fafc" stroke="#111" stroke-width="8"/>
-
-          <!-- Patient silhouette page: projected world-space quad, behind all reticle shapes -->
-          <polygon id="silhouette-border"
-                   fill="rgba(255,255,255,0.5)" stroke="#888" stroke-width="2"
-                   points="0,0 1,0 1,1 0,1"
-                   visibility="hidden"/>
-          <image id="silhouette-img" href="assets/patient_silhouette_page.png"
-                 x="0" y="0" width="1" height="1"
-                 preserveAspectRatio="none"
-                 transform="matrix(1,0,0,1,0,0)"
-                 visibility="hidden"/>
 
           <!-- OLD reticle shapes — kept for restoration
           <g id="target-cross">
@@ -446,7 +451,9 @@
     <div id="connection">connecting...</div>
   </main>
 
-  <script>
+  <script type="module">
+    import * as THREE from "three";
+
     const WS_URL = "ws://localhost:8765";
     const TRIGGER_KEYS = new Set("123456qwerty".split(""));
     const AXES = ["x", "y", "z", "roll", "pitch", "yaw"];
@@ -582,6 +589,149 @@
       }
     }
 
+    // ── Three.js silhouette canvas ───────────────────────────────────────────────
+    // Transparent WebGL canvas sits behind the SVG reticle and renders ONLY the
+    // patient silhouette page using the identical pipeline as index-3d.html.
+    const SIL_X_ROT = -Math.PI / 2;   // DISPLAY_FRAME_X_ROTATION
+    const SIL_Z_ROT =  Math.PI / 2;   // DISPLAY_FRAME_Z_ROTATION
+
+    const silCanvas   = document.getElementById("sil-canvas");
+    const silScene    = new THREE.Scene();
+    const silCamera   = new THREE.PerspectiveCamera(42, 760 / 520, 0.01, 10);
+    silCamera.position.set(0.72, 0.42, 0.72);
+    silCamera.up.set(0, 1, 0);
+
+    const silRenderer = new THREE.WebGLRenderer({ canvas: silCanvas, antialias: true, alpha: true });
+    silRenderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+    silRenderer.setClearColor(0x000000, 0);
+
+    // Scene graph: txWorldGroup → displayFrame → silPageGroup → _silPageMesh
+    // Mirrors 3D exactly: txWorldGroup gets probe⁻¹ in transducer, identity in user/patient.
+    const silDisplayFrame = new THREE.Group();
+    silDisplayFrame.rotation.x = SIL_X_ROT;
+    silDisplayFrame.rotation.z = SIL_Z_ROT;
+
+    const silTxWorldGroup = new THREE.Group();
+    silTxWorldGroup.matrixAutoUpdate = false;
+    silScene.add(silTxWorldGroup);
+    silTxWorldGroup.add(silDisplayFrame);
+    silDisplayFrame.updateMatrix();
+    const SIL_DFM = silDisplayFrame.matrix.clone(); // static display-frame matrix
+
+    const _silPageMesh = new THREE.Mesh(
+      new THREE.PlaneGeometry(0.2794, 0.4318),
+      new THREE.MeshBasicMaterial({
+        map: new THREE.TextureLoader().load("assets/patient_silhouette_page.png"),
+        side: THREE.DoubleSide
+      })
+    );
+    _silPageMesh.rotation.z = Math.PI; // 180° flip: head +Y (box) = +Y on page
+
+    const silPageGroup = new THREE.Group();
+    silPageGroup.matrixAutoUpdate = false;
+    silPageGroup.visible = false;
+    silPageGroup.add(_silPageMesh);
+    silDisplayFrame.add(silPageGroup);
+
+    // Retained last-valid live matrix (SIL_DFM × refPose⁻¹ × livePose) for transducer inversion.
+    const _silLiveMat  = new THREE.Matrix4();
+    let   _silFrameInit = true; // set transducer camera once on first render
+
+    function matrixFromRows(rows) {
+      if (!rows) return null;
+      return new THREE.Matrix4().set(...rows.flat());
+    }
+
+    // Set silPageGroup.matrix — identical to 3D's updateBoxWireframe silM computation.
+    function _updateSilPageMatrix(data) {
+      const refMat = matrixFromRows(data.reference_pose);
+      const boxMat = matrixFromRows(data.box_origin);
+      if (!refMat || !boxMat) { silPageGroup.visible = false; return; }
+      const relBox = refMat.clone().invert().multiply(boxMat);
+      const bXd = new THREE.Vector3().setFromMatrixColumn(relBox, 1);
+      const bYd = new THREE.Vector3().setFromMatrixColumn(relBox, 2).negate();
+      const bZd = new THREE.Vector3().setFromMatrixColumn(relBox, 0).negate();
+      const tipD = new THREE.Vector3().setFromMatrixPosition(relBox);
+      const silM = new THREE.Matrix4().makeBasis(bXd, bYd, bZd);
+      silM.setPosition(tipD.clone().addScaledVector(bZd, -0.07).addScaledVector(bYd, -0.09525));
+      silPageGroup.matrix.copy(silM);
+      silPageGroup.matrixWorldNeedsUpdate = true;
+      silPageGroup.visible = true;
+    }
+
+    // Place silCamera for user/patient frames — identical to 3D's initStudyCamera.
+    function _initSilCamera(data) {
+      const boxMat = matrixFromRows(data.box_origin);
+      const refMat = matrixFromRows(data.reference_pose);
+      if (!boxMat || !refMat) return;
+      const boxScene = SIL_DFM.clone().multiply(refMat.clone().invert().multiply(boxMat));
+      const bX = new THREE.Vector3().setFromMatrixColumn(boxScene, 1);
+      const bY = new THREE.Vector3().setFromMatrixColumn(boxScene, 2).negate();
+      const bZ = new THREE.Vector3().setFromMatrixColumn(boxScene, 0).negate();
+      const tip      = new THREE.Vector3().setFromMatrixPosition(boxScene);
+      const centroid = tip.clone().addScaledVector(bZ, 0.07);
+      let eye;
+      if (_studyFrame2 === 'patient') {
+        eye = centroid.clone().addScaledVector(new THREE.Vector3(0, 0, 1), 0.7);
+        silCamera.up.copy(bY.clone().negate()); // 90° CW from +bX
+      } else {
+        if (!data.calibration_origin) return;
+        const calibMat = matrixFromRows(data.calibration_origin);
+        if (!calibMat) return;
+        const calibScene = SIL_DFM.clone().multiply(refMat.clone().invert().multiply(calibMat));
+        eye = new THREE.Vector3().setFromMatrixPosition(calibScene)
+              .addScaledVector(new THREE.Vector3(0, 0, 1), 0.3);
+        silCamera.up.set(0, 0, 1);
+      }
+      silCamera.position.copy(eye);
+      silCamera.lookAt(centroid);
+    }
+
+    // Called each study message — drives silhouette visibility, placement, camera, and render.
+    function renderSilhouette(data) {
+      if (!data.box_origin || !data.reference_pose) {
+        silPageGroup.visible = false;
+        silRenderer.render(silScene, silCamera);
+        return;
+      }
+      _updateSilPageMatrix(data);
+
+      if (_studyFrame2 === 'transducer') {
+        // Transducer: probe pinned at scene origin; world counter-rotates via live-pose inverse.
+        const livePose = matrixFromRows(data.live_pose);
+        const refPose  = matrixFromRows(data.reference_pose);
+        if (livePose && refPose) {
+          _silLiveMat.copy(SIL_DFM).multiply(refPose.clone().invert().multiply(livePose));
+        }
+        silTxWorldGroup.matrix.copy(_silLiveMat).invert();
+        silTxWorldGroup.matrixWorldNeedsUpdate = true;
+        if (_silFrameInit) {
+          // Over-the-shoulder view: 0.40 m behind (−X), 0.10 m above (+Z), looking at probe.
+          silCamera.position.set(-0.40, 0, 0.10);
+          silCamera.up.set(0, 0, 1);
+          silCamera.lookAt(0, 0, 0);
+          _silFrameInit = false;
+        }
+      } else {
+        // User / patient: world is fixed; camera is placed from box + calibration geometry.
+        silTxWorldGroup.matrix.identity();
+        silTxWorldGroup.matrixWorldNeedsUpdate = true;
+        _initSilCamera(data);
+      }
+      silRenderer.render(silScene, silCamera);
+    }
+
+    function resizeSilCanvas() {
+      const w = silCanvas.clientWidth;
+      const h = silCanvas.clientHeight;
+      if (!w || !h) return;
+      silRenderer.setSize(w, h, false); // false: don't override CSS size
+      silCamera.aspect = w / h;
+      silCamera.updateProjectionMatrix();
+    }
+    window.addEventListener("resize", resizeSilCanvas);
+    setTimeout(resizeSilCanvas, 0);
+
     // ── Study projection helpers (analytic 2D view math, no Three.js) ──────────
     // Matrices arrive as nested row-major lists from numpy .tolist().
     function _vcol(m, j) { return [m[0][j], m[1][j], m[2][j]]; }
@@ -676,111 +826,6 @@
       };
     }
 
-    // ── Patient silhouette page projection ───────────────────────────────────
-    // Page is 11×17 in (0.2794 m × 0.4318 m). Placement matches 3D updateBoxWireframe exactly:
-    // group origin = tip − 0.07·bZ − 0.09525·bY; after rotation.z=π, X-mark hits box_origin.
-    const PAGE_HALF_W = (11 * 0.0254) / 2;  // 5.5 in = 0.1397 m
-    const PAGE_HALF_H = (17 * 0.0254) / 2;  // 8.5 in = 0.2159 m
-    const silhouetteImg    = document.getElementById("silhouette-img");
-    const silhouetteBorder = document.getElementById("silhouette-border");
-
-    function updateSilhouettePage(d) {
-      if (!d.box_origin) {
-        silhouetteImg.setAttribute("visibility", "hidden");
-        silhouetteBorder.setAttribute("visibility", "hidden");
-        return;
-      }
-
-      const m  = d.box_origin;
-      const bX = _vcol(m, 1);
-      const bY = _vscale(_vcol(m, 2), -1);
-      const bZ = _vscale(_vcol(m, 0), -1);
-      const tip      = _vtrans(m);
-      const centroid = _vadd(tip, _vscale(bZ, 0.07));
-
-      // Group origin: tip −0.07·bZ −0.09525·bY (identical to 3D silM.setPosition)
-      const silOrigin = _vsub(_vsub(tip, _vscale(bZ, 0.07)), _vscale(bY, 0.09525));
-
-      // Page corners in world space — post rotation.z=π mapping (3D PlaneGeometry + rot):
-      //   Image TL → group (+halfW, −halfH)   Image TR → group (−halfW, −halfH)
-      //   Image BL → group (+halfW, +halfH)   Image BR → group (−halfW, +halfH)
-      const wTL = _vadd(silOrigin, _vadd(_vscale(bX,  PAGE_HALF_W), _vscale(bY, -PAGE_HALF_H)));
-      const wTR = _vadd(silOrigin, _vadd(_vscale(bX, -PAGE_HALF_W), _vscale(bY, -PAGE_HALF_H)));
-      const wBL = _vadd(silOrigin, _vadd(_vscale(bX,  PAGE_HALF_W), _vscale(bY,  PAGE_HALF_H)));
-      const wBR = _vadd(silOrigin, _vadd(_vscale(bX, -PAGE_HALF_W), _vscale(bY,  PAGE_HALF_H)));
-
-      // Per-frame view basis, reference point, and sign conventions.
-      // xSign/ySign flip to match how computeStudyProjection feeds setPoseVisual for each frame:
-      //   patient: pose.y=+dot(Δ,right), pose.z=+dot(Δ,vUp) → groupX=CENTER_X+r, groupY=CENTER_Y-u
-      //   user:    pose.y=−dot(Δ,right), pose.z=−dot(Δ,vUp) → groupX=CENTER_X-r, groupY=CENTER_Y+u
-      //   transducer: workspace_y=+dot(Δ,bX), workspace_z=+dot(Δ,bY) relative to live probe
-      let right, vUp, projRef, xSign = 1, ySign = 1;
-
-      if (_studyFrame2 === "patient") {
-        const eye    = _vadd(centroid, [0, 0.7, 0]);
-        const upHint = _vscale(bY, -1);
-        const look   = _vnorm(_vsub(centroid, eye));
-        const upRef  = Math.abs(_dot(look, upHint)) < 0.99 ? upHint : bY;
-        right   = _vnorm(_cross(look, upRef));
-        vUp     = _cross(right, look);
-        projRef = centroid;
-      } else if (_studyFrame2 === "user") {
-        if (!d.calibration_origin) {
-          silhouetteImg.setAttribute("visibility", "hidden");
-          silhouetteBorder.setAttribute("visibility", "hidden");
-          return;
-        }
-        const cpos   = _vtrans(d.calibration_origin);
-        const eye    = _vadd(cpos, [0, 0.3, 0]);
-        const upHint = [0, -1, 0];
-        const look   = _vnorm(_vsub(centroid, eye));
-        const upRef  = Math.abs(_dot(look, upHint)) < 0.99 ? upHint : bY;
-        right   = _vnorm(_cross(look, upRef));
-        vUp     = _cross(right, look);
-        projRef = centroid;
-        xSign   = -1; ySign = -1;
-      } else {
-        // Transducer: live probe is at SVG center; project corners relative to live probe pos.
-        // right=bX, up=bY matches workspace_y/z axes used by the reticle shapes.
-        if (!d.live_pose) {
-          silhouetteImg.setAttribute("visibility", "hidden");
-          silhouetteBorder.setAttribute("visibility", "hidden");
-          return;
-        }
-        right   = bX;
-        vUp     = bY;
-        projRef = _vtrans(d.live_pose);
-      }
-
-      function projToSVG(p) {
-        const delta = _vsub(p, projRef);
-        const r = _dot(delta, right);
-        const u = _dot(delta, vUp);
-        return {
-          x: CENTER_X + xSign * scaled(r, TRANSLATION_RANGE_M, 145),
-          y: CENTER_Y - ySign * scaled(u, TRANSLATION_RANGE_M, 145)
-        };
-      }
-
-      const sTL = projToSVG(wTL);
-      const sTR = projToSVG(wTR);
-      const sBL = projToSVG(wBL);
-      const sBR = projToSVG(wBR);
-
-      // Page border: visible grey outline so the white sheet shows on white canvas
-      silhouetteBorder.setAttribute("points",
-        `${sTL.x},${sTL.y} ${sTR.x},${sTR.y} ${sBR.x},${sBR.y} ${sBL.x},${sBL.y}`);
-      silhouetteBorder.setAttribute("visibility", "visible");
-
-      // Affine matrix mapping unit image square (0,0)→(1,0)→(0,1) to projected parallelogram.
-      // SVG matrix(a,b,c,d,e,f): x'=a·u+c·v+e, y'=b·u+d·v+f
-      const ma = sTR.x - sTL.x,  mb = sTR.y - sTL.y;
-      const mc = sBL.x - sTL.x,  md = sBL.y - sTL.y;
-      silhouetteImg.setAttribute("transform",
-        `matrix(${ma},${mb},${mc},${md},${sTL.x},${sTL.y})`);
-      silhouetteImg.setAttribute("visibility", "visible");
-    }
-
     // ── Study renderer ──────────────────────────────────────────────────────────
     const _s2Phases = ["s2-cal", "s2-practice", "s2-trial", "s2-pref", "s2-done"];
     const _scoreboard = document.querySelector(".scoreboard").closest(".card");
@@ -839,7 +884,7 @@
           yaw:   d.workspace_component_errors?.yaw   ?? 0,
         }
       );
-      updateSilhouettePage(d);
+      renderSilhouette(d);
       holdProgress.style.width = `${(d.hold_progress ?? 0) * 100}%`;
 
       if (d.source_mode) {
