@@ -627,9 +627,18 @@
     );
     _silPageMesh.rotation.z = Math.PI; // 180° flip: head +Y (box) = +Y on page
 
+    // Thin black border: slightly larger plane placed 1 mm behind the page.
+    const _silBorderMesh = new THREE.Mesh(
+      new THREE.PlaneGeometry(0.2874, 0.4398), // +4 mm each side
+      new THREE.MeshBasicMaterial({ color: 0x000000, side: THREE.DoubleSide })
+    );
+    _silBorderMesh.rotation.z = Math.PI;
+    _silBorderMesh.position.z = -0.001; // behind page; page occludes interior via depth test
+
     const silPageGroup = new THREE.Group();
     silPageGroup.matrixAutoUpdate = false;
     silPageGroup.visible = false;
+    silPageGroup.add(_silBorderMesh); // drawn first; page on top via depth test
     silPageGroup.add(_silPageMesh);
     silDisplayFrame.add(silPageGroup);
 
@@ -652,8 +661,10 @@
       const bYd = new THREE.Vector3().setFromMatrixColumn(relBox, 2).negate();
       const bZd = new THREE.Vector3().setFromMatrixColumn(relBox, 0).negate();
       const tipD = new THREE.Vector3().setFromMatrixPosition(relBox);
+      const SIL_TIP_OFFSET = -0.07;     // along bZd, drops page to tip plane
+      const SIL_XMARK_OFFSET = -0.09525; // along bYd, aligns X-mark to box origin
       const silM = new THREE.Matrix4().makeBasis(bXd, bYd, bZd);
-      silM.setPosition(tipD.clone().addScaledVector(bZd, -0.07).addScaledVector(bYd, -0.09525));
+      silM.setPosition(tipD.clone().addScaledVector(bZd, SIL_TIP_OFFSET).addScaledVector(bYd, SIL_XMARK_OFFSET));
       silPageGroup.matrix.copy(silM);
       silPageGroup.matrixWorldNeedsUpdate = true;
       silPageGroup.visible = true;
