@@ -343,6 +343,10 @@
                 fill="#f8fafc" stroke="#111" stroke-width="8"/>
 
           <!-- Patient silhouette page: projected world-space quad, behind all reticle shapes -->
+          <polygon id="silhouette-border"
+                   fill="rgba(255,255,255,0.5)" stroke="#888" stroke-width="2"
+                   points="0,0 1,0 1,1 0,1"
+                   visibility="hidden"/>
           <image id="silhouette-img" href="assets/patient_silhouette_page.png"
                  x="0" y="0" width="1" height="1"
                  preserveAspectRatio="none"
@@ -677,10 +681,15 @@
     // group origin = tip − 0.07·bZ − 0.09525·bY; after rotation.z=π, X-mark hits box_origin.
     const PAGE_HALF_W = (11 * 0.0254) / 2;  // 5.5 in = 0.1397 m
     const PAGE_HALF_H = (17 * 0.0254) / 2;  // 8.5 in = 0.2159 m
-    const silhouetteImg = document.getElementById("silhouette-img");
+    const silhouetteImg    = document.getElementById("silhouette-img");
+    const silhouetteBorder = document.getElementById("silhouette-border");
 
     function updateSilhouettePage(d) {
-      if (!d.box_origin) { silhouetteImg.setAttribute("visibility", "hidden"); return; }
+      if (!d.box_origin) {
+        silhouetteImg.setAttribute("visibility", "hidden");
+        silhouetteBorder.setAttribute("visibility", "hidden");
+        return;
+      }
 
       const m  = d.box_origin;
       const bX = _vcol(m, 1);
@@ -698,46 +707,70 @@
       const wTL = _vadd(silOrigin, _vadd(_vscale(bX,  PAGE_HALF_W), _vscale(bY, -PAGE_HALF_H)));
       const wTR = _vadd(silOrigin, _vadd(_vscale(bX, -PAGE_HALF_W), _vscale(bY, -PAGE_HALF_H)));
       const wBL = _vadd(silOrigin, _vadd(_vscale(bX,  PAGE_HALF_W), _vscale(bY,  PAGE_HALF_H)));
+      const wBR = _vadd(silOrigin, _vadd(_vscale(bX, -PAGE_HALF_W), _vscale(bY,  PAGE_HALF_H)));
 
-      // Per-frame view basis — mirrors computeStudyProjection exactly for user/patient;
-      // transducer uses box-frame orthographic (right=bX, up=bY).
-      let right, vUp;
+      // Per-frame view basis, reference point, and sign conventions.
+      // xSign/ySign flip to match how computeStudyProjection feeds setPoseVisual for each frame:
+      //   patient: pose.y=+dot(Δ,right), pose.z=+dot(Δ,vUp) → groupX=CENTER_X+r, groupY=CENTER_Y-u
+      //   user:    pose.y=−dot(Δ,right), pose.z=−dot(Δ,vUp) → groupX=CENTER_X-r, groupY=CENTER_Y+u
+      //   transducer: workspace_y=+dot(Δ,bX), workspace_z=+dot(Δ,bY) relative to live probe
+      let right, vUp, projRef, xSign = 1, ySign = 1;
+
       if (_studyFrame2 === "patient") {
         const eye    = _vadd(centroid, [0, 0.7, 0]);
         const upHint = _vscale(bY, -1);
         const look   = _vnorm(_vsub(centroid, eye));
         const upRef  = Math.abs(_dot(look, upHint)) < 0.99 ? upHint : bY;
-        right = _vnorm(_cross(look, upRef));
-        vUp   = _cross(right, look);
+        right   = _vnorm(_cross(look, upRef));
+        vUp     = _cross(right, look);
+        projRef = centroid;
       } else if (_studyFrame2 === "user") {
-        if (!d.calibration_origin) { silhouetteImg.setAttribute("visibility", "hidden"); return; }
+        if (!d.calibration_origin) {
+          silhouetteImg.setAttribute("visibility", "hidden");
+          silhouetteBorder.setAttribute("visibility", "hidden");
+          return;
+        }
         const cpos   = _vtrans(d.calibration_origin);
         const eye    = _vadd(cpos, [0, 0.3, 0]);
         const upHint = [0, -1, 0];
         const look   = _vnorm(_vsub(centroid, eye));
         const upRef  = Math.abs(_dot(look, upHint)) < 0.99 ? upHint : bY;
-        right = _vnorm(_cross(look, upRef));
-        vUp   = _cross(right, look);
+        right   = _vnorm(_cross(look, upRef));
+        vUp     = _cross(right, look);
+        projRef = centroid;
+        xSign   = -1; ySign = -1;
       } else {
-        // Transducer frame: orthographic top-down from box-depth direction (right=bX, up=bY)
-        right = bX;
-        vUp   = bY;
+        // Transducer: live probe is at SVG center; project corners relative to live probe pos.
+        // right=bX, up=bY matches workspace_y/z axes used by the reticle shapes.
+        if (!d.live_pose) {
+          silhouetteImg.setAttribute("visibility", "hidden");
+          silhouetteBorder.setAttribute("visibility", "hidden");
+          return;
+        }
+        right   = bX;
+        vUp     = bY;
+        projRef = _vtrans(d.live_pose);
       }
 
-      // Project world point → SVG screen coords, using same right/vUp basis as reticle shapes
       function projToSVG(p) {
-        const delta = _vsub(p, centroid);
+        const delta = _vsub(p, projRef);
         const r = _dot(delta, right);
         const u = _dot(delta, vUp);
         return {
-          x: CENTER_X + scaled(r, TRANSLATION_RANGE_M, 145),
-          y: CENTER_Y - scaled(u, TRANSLATION_RANGE_M, 145)
+          x: CENTER_X + xSign * scaled(r, TRANSLATION_RANGE_M, 145),
+          y: CENTER_Y - ySign * scaled(u, TRANSLATION_RANGE_M, 145)
         };
       }
 
       const sTL = projToSVG(wTL);
       const sTR = projToSVG(wTR);
       const sBL = projToSVG(wBL);
+      const sBR = projToSVG(wBR);
+
+      // Page border: visible grey outline so the white sheet shows on white canvas
+      silhouetteBorder.setAttribute("points",
+        `${sTL.x},${sTL.y} ${sTR.x},${sTR.y} ${sBR.x},${sBR.y} ${sBL.x},${sBL.y}`);
+      silhouetteBorder.setAttribute("visibility", "visible");
 
       // Affine matrix mapping unit image square (0,0)→(1,0)→(0,1) to projected parallelogram.
       // SVG matrix(a,b,c,d,e,f): x'=a·u+c·v+e, y'=b·u+d·v+f
