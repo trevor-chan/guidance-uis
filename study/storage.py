@@ -40,6 +40,15 @@ def _safe_name(value: str, fallback: str) -> str:
     return cleaned.strip("-._") or fallback
 
 
+def _participant_file_stem(
+    participant_id: str,
+    direct_identifier: str | None = None,
+) -> str:
+    participant = _safe_name(participant_id, "participant")
+    direct = _safe_name(direct_identifier or "", "")
+    return f"{direct}_{participant}" if direct else participant
+
+
 def _jsonable(value: Any) -> Any:
     if isinstance(value, np.ndarray):
         return value.tolist()
@@ -92,7 +101,12 @@ class StorageConfig:
             / _safe_name(self.experiment_id, "experiment")
         )
 
-    def database_path(self, session_id: str, participant_id: str) -> Path:
+    def database_path(
+        self,
+        session_id: str,
+        participant_id: str,
+        direct_identifier: str | None = None,
+    ) -> Path:
         if self.layout == "session":
             return (
                 self.experiment_root
@@ -104,7 +118,7 @@ class StorageConfig:
             return (
                 self.experiment_root
                 / "participants"
-                / _safe_name(participant_id, "participant")
+                / _participant_file_stem(participant_id, direct_identifier)
                 / "experiment.sqlite"
             )
         return self.experiment_root / "experiment.sqlite"
@@ -240,7 +254,7 @@ class PatientTrialsExporter(DataExporter):
         path = (
             exports_root
             / "by_patient"
-            / _safe_name(participant_id, "participant")
+            / _participant_file_stem(participant_id, session["participant_name"])
             / "completed_trials.csv"
         )
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -449,7 +463,11 @@ class SqliteExperimentRepository:
     def create_session(self, payload: dict) -> dict:
         session_id = str(payload["session_id"])
         participant_id = str(payload["participant_id"])
-        database_path = self.config.database_path(session_id, participant_id)
+        database_path = self.config.database_path(
+            session_id,
+            participant_id,
+            payload.get("participant_name"),
+        )
         database_path.parent.mkdir(parents=True, exist_ok=True)
         self._session_locations[session_id] = (participant_id, database_path)
         now = payload.get("started_at") or utc_now()
@@ -586,9 +604,12 @@ class SqliteExperimentRepository:
     def latest_session_for_participant(self, participant_id: str) -> dict | None:
         candidates: list[tuple[str, Path]] = []
         if self.config.layout == "participant":
-            path = self.config.database_path("unused", participant_id)
-            if path.exists():
-                candidates.append((participant_id, path))
+            candidates.extend(
+                (participant_id, path)
+                for path in self.config.experiment_root.glob(
+                    "participants/*/experiment.sqlite"
+                )
+            )
         elif self.config.layout == "experiment":
             path = self.config.database_path("unused", participant_id)
             if path.exists():

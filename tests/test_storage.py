@@ -67,6 +67,15 @@ class StorageLayoutTests(unittest.TestCase):
             root / "2026-06-24" / "study" / "participants" / "P1" / "experiment.sqlite",
         )
         self.assertEqual(
+            participant_config.database_path("abc", "P1", "Direct Identifier"),
+            root
+            / "2026-06-24"
+            / "study"
+            / "participants"
+            / "Direct-Identifier_P1"
+            / "experiment.sqlite",
+        )
+        self.assertEqual(
             experiment_config.database_path("abc", "P1"),
             root / "2026-06-24" / "study" / "experiment.sqlite",
         )
@@ -257,7 +266,7 @@ class RecordingAndExportTests(unittest.TestCase):
                 config.experiment_root
                 / "exports"
                 / "by_patient"
-                / "P2"
+                / "Test-Participant_P2"
                 / "completed_trials.csv"
             )
             self.assertTrue(patient_csv.exists())
