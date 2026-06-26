@@ -902,7 +902,7 @@
             x:     +(_e?.x ?? 0),
             y:     hRot,
             z:     vRot,
-            roll:  0,
+            roll:  -ROLL_DIR * (_e?.roll ?? 0),
             pitch: _e?.pitch ?? 0,
             yaw:   _e?.yaw   ?? 0,
           };
