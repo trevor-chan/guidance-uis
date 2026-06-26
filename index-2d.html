@@ -534,11 +534,15 @@
     //   elements.circle.setAttribute("cy", markerY);
     // }
 
-    function setPoseVisual(elements, pose, extraRoll = 0) {
-      const screenX = scaled(pose.y, TRANSLATION_RANGE_M, 145);
-      const screenY = -scaled(pose.z, TRANSLATION_RANGE_M, 145);
-      const centerX = CENTER_X + screenX;
-      const centerY = CENTER_Y + screenY;
+    function setPoseVisual(elements, pose, extraRoll = 0, pinCenter = false) {
+      let centerX, centerY;
+      if (pinCenter) {
+        centerX = CENTER_X;
+        centerY = CENTER_Y;
+      } else {
+        centerX = CENTER_X + scaled(pose.y, TRANSLATION_RANGE_M, 145);
+        centerY = CENTER_Y - scaled(pose.z, TRANSLATION_RANGE_M, 145);
+      }
 
       // Whole group: translate to screen position, then roll.
       // Back blob sits at origin inside the group; roll applies to both shapes.
@@ -563,7 +567,7 @@
       }
 
       const extraRoll = (_studyFrame2 === "patient") ? 0 : 0;
-      setPoseVisual({ group: targetGroup, front: targetFront, back: targetBack, depth: targetDepth  }, targetPose, extraRoll);
+      setPoseVisual({ group: targetGroup, front: targetFront, back: targetBack, depth: targetDepth  }, targetPose, extraRoll, true);
       setPoseVisual({ group: liveGroup,   front: liveFront,   back: liveBack,   depth: currentDepth }, livePose, extraRoll);
 
       let alignedCount = 0;
