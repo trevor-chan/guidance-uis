@@ -892,7 +892,7 @@
         },
         _proj ? _proj.targetPose : {
           x: d.workspace_component_errors?.x ?? 0,
-          y: (d.workspace_component_errors?.y ?? 0),
+          y: -(d.workspace_component_errors?.y ?? 0),
           z: +(d.workspace_component_errors?.z ?? 0),
           roll:  d.workspace_component_errors?.roll  ?? 0,
           pitch: d.workspace_component_errors?.pitch ?? 0,
