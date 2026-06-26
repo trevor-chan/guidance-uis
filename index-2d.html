@@ -622,7 +622,6 @@
       new THREE.PlaneGeometry(0.2794, 0.4318),
       new THREE.MeshBasicMaterial({
         map: new THREE.TextureLoader().load("assets/patient_silhouette_page.png"),
-        color: 0xff0000, /* TEMP diagnostic */
         side: THREE.DoubleSide
       })
     );
@@ -637,7 +636,6 @@
     // Retained last-valid live matrix (SIL_DFM × refPose⁻¹ × livePose) for transducer inversion.
     const _silLiveMat  = new THREE.Matrix4();
     let   _silFrameInit = true; // set transducer camera once on first render
-    let   _silForcedTestDone = false; // one-time pipeline sanity render
 
     function matrixFromRows(rows) {
       if (!rows) return null;
@@ -691,13 +689,8 @@
 
     // Called each study message — drives silhouette visibility, placement, camera, and render.
     function renderSilhouette(data) {
-      console.log("[renderSil] called frame:", data.frame,
-                  "box_origin?", !!data.box_origin, "reference_pose?", !!data.reference_pose,
-                  "canvas:", silCanvas.clientWidth, "x", silCanvas.clientHeight);
       if (!data.box_origin || !data.reference_pose) {
-        console.log("[renderSil] early-return: missing box_origin or reference_pose");
         silPageGroup.visible = false;
-        console.log("[renderSil] mesh.visible:", _silPageMesh.visible, "(early-return render)");
         silRenderer.render(silScene, silCamera);
         return;
       }
@@ -724,103 +717,9 @@
         silTxWorldGroup.matrix.identity();
         silTxWorldGroup.matrixWorldNeedsUpdate = true;
         _initSilCamera(data);
-
-        if (_studyFrame2 === 'user') {
-          silScene.updateMatrixWorld(true);
-          _silPageMesh.updateWorldMatrix(true, false);
-          silCamera.updateMatrixWorld(true);
-
-          // 1. Mesh world position
-          const _mwp = new THREE.Vector3().setFromMatrixPosition(_silPageMesh.matrixWorld);
-          console.log("[sil-diag] 1. mesh world pos:",
-                      _mwp.x.toFixed(4), _mwp.y.toFixed(4), _mwp.z.toFixed(4));
-
-          // 2. Camera position and forward direction (camera looks along local -Z)
-          const _camFwd = new THREE.Vector3(0, 0, -1).applyQuaternion(silCamera.quaternion);
-          console.log("[sil-diag] 2. cam pos:",
-                      silCamera.position.x.toFixed(4), silCamera.position.y.toFixed(4), silCamera.position.z.toFixed(4),
-                      "| fwd:", _camFwd.x.toFixed(4), _camFwd.y.toFixed(4), _camFwd.z.toFixed(4));
-
-          // 3. Camera-to-mesh vector; negative dot = mesh is BEHIND camera
-          const _c2m    = _mwp.clone().sub(silCamera.position);
-          const _c2mLen = _c2m.length();
-          const _c2mN   = _c2mLen > 1e-6 ? _c2m.clone().divideScalar(_c2mLen) : new THREE.Vector3(0, 0, 1);
-          const _fwdDot = _c2mN.dot(_camFwd);
-          console.log("[sil-diag] 3. cam→mesh vec:",
-                      _c2m.x.toFixed(4), _c2m.y.toFixed(4), _c2m.z.toFixed(4),
-                      "| dot(fwd):", _fwdDot.toFixed(4), _fwdDot < 0 ? "*** BEHIND CAM ***" : "in front");
-
-          // 4. Mesh plane normal; |dot| near 0 = edge-on
-          const _meshQ    = new THREE.Quaternion().setFromRotationMatrix(_silPageMesh.matrixWorld);
-          const _meshNorm = new THREE.Vector3(0, 0, 1).applyQuaternion(_meshQ);
-          const _edgeDot  = Math.abs(_c2mN.dot(_meshNorm));
-          console.log("[sil-diag] 4. mesh normal:",
-                      _meshNorm.x.toFixed(4), _meshNorm.y.toFixed(4), _meshNorm.z.toFixed(4),
-                      "| edge-on |dot|:", _edgeDot.toFixed(4), _edgeDot < 0.05 ? "*** EDGE-ON ***" : "ok");
-
-          // 5. NDC; z outside [0,1] or xy outside [-1,1] = outside frustum
-          const _ndc     = _mwp.clone().project(silCamera);
-          const _outside = Math.abs(_ndc.x) > 1 || Math.abs(_ndc.y) > 1 || _ndc.z < 0 || _ndc.z > 1;
-          console.log("[sil-diag] 5. NDC:",
-                      _ndc.x.toFixed(4), _ndc.y.toFixed(4), _ndc.z.toFixed(4),
-                      _outside ? "*** OUTSIDE FRUSTUM ***" : "in frustum");
-        }
       }
 
-      // One-time forced-position test: known-good camera + mesh placement isolates
-      // pipeline health from any placement / transform bug.
-      if (!_silForcedTestDone && _studyFrame2 === 'user') {
-        _silForcedTestDone = true;
-        console.log("[forced-test] START: cam(0,0,2)→origin | mesh@scene-root origin identity | no texture");
-        const _svCamPos  = silCamera.position.clone();
-        const _svCamUp   = silCamera.up.clone();
-        const _svCamQuat = silCamera.quaternion.clone();
-        const _svMeshPos = _silPageMesh.position.clone();
-        const _svMeshRot = _silPageMesh.rotation.clone();
-        const _svGrpVis  = silPageGroup.visible;
-        const _svMapRef  = _silPageMesh.material.map;
-
-        // Bypass scene-graph: attach mesh directly to root at world origin
-        silScene.add(_silPageMesh);
-        _silPageMesh.position.set(0, 0, 0);
-        _silPageMesh.rotation.set(0, 0, 0);
-        _silPageMesh.visible = true;
-        _silPageMesh.material.map = null;       // solid red, no texture alpha complication
-        _silPageMesh.material.needsUpdate = true;
-        silPageGroup.visible = false;
-
-        silCamera.position.set(0, 0, 2);
-        silCamera.up.set(0, 1, 0);
-        silCamera.lookAt(0, 0, 0);
-
-        silScene.updateMatrixWorld(true);
-        silRenderer.render(silScene, silCamera);
-
-        const _gl    = silRenderer.getContext();
-        const _pxBuf = new Uint8Array(4);
-        const _pcx   = Math.floor(silRenderer.domElement.width  / 2);
-        const _pcy   = Math.floor(silRenderer.domElement.height / 2);
-        _gl.readPixels(_pcx, _pcy, 1, 1, _gl.RGBA, _gl.UNSIGNED_BYTE, _pxBuf);
-        console.log("[forced-test] center pixel RGBA:", _pxBuf[0], _pxBuf[1], _pxBuf[2], _pxBuf[3],
-                    _pxBuf[3] > 0 ? "HAS CONTENT — pipeline OK" : "TRANSPARENT — pipeline broken");
-
-        // Restore mesh to original parent (silPageGroup) and all saved state
-        silPageGroup.add(_silPageMesh);
-        _silPageMesh.position.copy(_svMeshPos);
-        _silPageMesh.rotation.copy(_svMeshRot);
-        _silPageMesh.material.map = _svMapRef;
-        _silPageMesh.material.needsUpdate = true;
-        silCamera.position.copy(_svCamPos);
-        silCamera.up.copy(_svCamUp);
-        silCamera.quaternion.copy(_svCamQuat);
-        silPageGroup.visible = _svGrpVis;
-        console.log("[forced-test] DONE — state restored");
-      }
-
-      console.log("[renderSil] mesh.visible:", _silPageMesh.visible, "(normal render)");
       silRenderer.render(silScene, silCamera);
-      console.log("[renderSil] rendered; drawingBuffer:",
-                  silRenderer.domElement.width, "x", silRenderer.domElement.height);
     }
 
     function resizeSilCanvas() {
