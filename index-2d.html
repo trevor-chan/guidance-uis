@@ -890,14 +890,23 @@
           x: 0, y: 0, z: 0,
           roll: 0, pitch: 0, yaw: 0,
         },
-        _proj ? _proj.targetPose : {
-          x: +(d.workspace_component_errors?.x ?? 0),
-          y: +(d.workspace_component_errors?.y ?? 0),
-          z: -(d.workspace_component_errors?.z ?? 0),
-          roll: -(d.workspace_component_errors?.roll  ?? 0),
-          pitch: d.workspace_component_errors?.pitch ?? 0,
-          yaw:   d.workspace_component_errors?.yaw   ?? 0,
-        }
+        _proj ? _proj.targetPose : (() => {
+          const _e = d.workspace_component_errors;
+          const h = +(_e?.y ?? 0);
+          const v = -(_e?.z ?? 0);
+          const ROLL_DIR = +1;  // flip to -1 if rotation appears mirrored on the rig
+          const theta = ROLL_DIR * (_e?.roll ?? 0) * Math.PI / 180;
+          const hRot = h * Math.cos(theta) - v * Math.sin(theta);
+          const vRot = h * Math.sin(theta) + v * Math.cos(theta);
+          return {
+            x:     +(_e?.x ?? 0),
+            y:     hRot,
+            z:     vRot,
+            roll:  0,
+            pitch: _e?.pitch ?? 0,
+            yaw:   _e?.yaw   ?? 0,
+          };
+        })()
       );
       renderSilhouette(d);
       holdProgress.style.width = `${(d.hold_progress ?? 0) * 100}%`;
