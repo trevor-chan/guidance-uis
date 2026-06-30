@@ -905,8 +905,8 @@
           const HORIZ_DIR  = -1;  // flip to -1 if horizontal reversed on rig
           const VERT_DIR   = +1;  // flip to -1 if vertical reversed on rig
           const ROLL_DIR   = +1;  // flip to -1 if mesh rotates opposite on rig
-          const PITCH_DIR  = +1;  // flip to -1 if front-triangle vertical reversed on rig
-          const YAW_DIR    = +1;  // flip to -1 if front-triangle horizontal reversed on rig
+          const PITCH_DIR  = -1;  // flip to -1 if front-triangle vertical reversed on rig
+          const YAW_DIR    = -1;  // flip to -1 if front-triangle horizontal reversed on rig
 
           const _lp = d.live_pose;
           const _tp = d.target_pose;
