@@ -271,7 +271,13 @@
     #calib-img { max-width: 100%; border-radius: 4px; background: #2a2a2a;
                  display: block; margin: 0 auto 14px; }
   </style>
-
+  <script type="importmap">
+    {
+      "imports": {
+        "three": "./vendor/three.module.js"
+      }
+    }
+  </script>
 </head>
 <body>
   <button id="set-box-btn">Set Box</button>
@@ -446,6 +452,8 @@
   </main>
 
   <script type="module">
+    import * as THREE from "three";
+
     const WS_URL = "ws://localhost:8765";
     const TRIGGER_KEYS = new Set("123456qwerty".split(""));
     const AXES = ["x", "y", "z", "roll", "pitch", "yaw"];
@@ -581,54 +589,158 @@
       }
     }
 
-    // ── 2D silhouette canvas ─────────────────────────────────────────────────────
-    // Static flat image: patient_silhouette_page.png drawn with drawImage so its
-    // X-mark (page fractions SIL_X_FRAC=0.5 horiz, SIL_Y_FRAC=0.7206 vert) lands
-    // exactly at canvas center.  Scale: fit image height to canvas height,
-    // preserving the 11:17 aspect ratio.  Same placement for all three frames.
-    const SIL_X_FRAC  = 0.5;      // X-mark horizontal fraction of page (0=left)
-    const SIL_Y_FRAC  = 0.7206;   // X-mark vertical fraction of page   (0=top)
-    const PAGE_ASPECT = 11 / 17;  // page width / height
+    // ── Three.js silhouette canvas ───────────────────────────────────────────────
+    // Transparent WebGL canvas sits behind the SVG reticle and renders ONLY the
+    // patient silhouette page using the identical pipeline as index-3d.html.
+    const SIL_X_ROT = -Math.PI / 2;   // DISPLAY_FRAME_X_ROTATION
+    const SIL_Z_ROT =  Math.PI / 2;   // DISPLAY_FRAME_Z_ROTATION
 
-    const silCanvas = document.getElementById("sil-canvas");
-    const silCtx    = silCanvas.getContext("2d");
+    const silCanvas   = document.getElementById("sil-canvas");
+    const silScene    = new THREE.Scene();
+    const silCamera   = new THREE.PerspectiveCamera(42, 760 / 520, 0.01, 10);
+    silCamera.position.set(0.72, 0.42, 0.72);
+    silCamera.up.set(0, 1, 0);
 
-    const _silImg = new Image();
-    _silImg.src   = "assets/patient_silhouette_page.png";
+    const silRenderer = new THREE.WebGLRenderer({ canvas: silCanvas, antialias: true, alpha: true });
+    silRenderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+    silRenderer.setClearColor(0x000000, 0);
 
-    function drawSilhouette() {
-      const cw = silCanvas.width;
-      const ch = silCanvas.height;
-      silCtx.clearRect(0, 0, cw, ch);
-      if (!_silImg.complete || !_silImg.naturalWidth) return;
+    // Scene graph: txWorldGroup → displayFrame → silPageGroup → _silPageMesh
+    // Mirrors 3D exactly: txWorldGroup gets probe⁻¹ in transducer, identity in user/patient.
+    const silDisplayFrame = new THREE.Group();
+    silDisplayFrame.rotation.x = SIL_X_ROT;
+    silDisplayFrame.rotation.z = SIL_Z_ROT;
 
-      // Scale: fit image height to canvas height; width from 11:17 aspect ratio.
-      const imgH = ch;
-      const imgW = ch * PAGE_ASPECT;
+    const silTxWorldGroup = new THREE.Group();
+    silTxWorldGroup.matrixAutoUpdate = false;
+    silScene.add(silTxWorldGroup);
+    silTxWorldGroup.add(silDisplayFrame);
+    silDisplayFrame.updateMatrix();
+    const SIL_DFM = silDisplayFrame.matrix.clone(); // static display-frame matrix
 
-      // Pin X-mark (SIL_X_FRAC, SIL_Y_FRAC) to canvas center (cw/2, ch/2).
-      // left = centerX - SIL_X_FRAC * imgW  →  0.5*cw - 0.5*imgW
-      // top  = centerY - SIL_Y_FRAC * imgH  →  0.5*ch - 0.7206*imgH
-      const left = cw * 0.5 - SIL_X_FRAC * imgW;
-      const top  = ch * 0.5 - SIL_Y_FRAC * imgH;
+    const _silPageMesh = new THREE.Mesh(
+      new THREE.PlaneGeometry(0.2794, 0.4318),
+      new THREE.MeshBasicMaterial({
+        map: new THREE.TextureLoader().load("assets/patient_silhouette_page.png"),
+        side: THREE.DoubleSide
+      })
+    );
+    _silPageMesh.rotation.z = Math.PI; // 180° flip: head +Y (box) = +Y on page
 
-      // Thin black border, 2 px outset.
-      silCtx.fillStyle = "#000000";
-      silCtx.fillRect(left - 2, top - 2, imgW + 4, imgH + 4);
-      silCtx.drawImage(_silImg, left, top, imgW, imgH);
+    // Thin black border: slightly larger plane placed 1 mm behind the page.
+    const _silBorderMesh = new THREE.Mesh(
+      new THREE.PlaneGeometry(0.2874, 0.4398), // +4 mm each side
+      new THREE.MeshBasicMaterial({ color: 0x000000, side: THREE.DoubleSide })
+    );
+    _silBorderMesh.rotation.z = Math.PI;
+    _silBorderMesh.position.z = -0.001; // behind page; page occludes interior via depth test
+
+    const silPageGroup = new THREE.Group();
+    silPageGroup.matrixAutoUpdate = false;
+    silPageGroup.visible = false;
+    silPageGroup.add(_silBorderMesh); // drawn first; page on top via depth test
+    silPageGroup.add(_silPageMesh);
+    silDisplayFrame.add(silPageGroup);
+
+    // Retained last-valid live matrix (SIL_DFM × refPose⁻¹ × livePose) for transducer inversion.
+    const _silLiveMat  = new THREE.Matrix4();
+    let   _silFrameInit = true; // set transducer camera once on first render
+
+    function matrixFromRows(rows) {
+      if (!rows) return null;
+      return new THREE.Matrix4().set(...rows.flat());
+    }
+
+    // Set silPageGroup.matrix — identical to 3D's updateBoxWireframe silM computation.
+    function _updateSilPageMatrix(data) {
+      const refMat = matrixFromRows(data.reference_pose);
+      const boxMat = matrixFromRows(data.box_origin);
+      if (!refMat || !boxMat) { silPageGroup.visible = false; return; }
+      const relBox = refMat.clone().invert().multiply(boxMat);
+      const bXd = new THREE.Vector3().setFromMatrixColumn(relBox, 1);
+      const bYd = new THREE.Vector3().setFromMatrixColumn(relBox, 2).negate();
+      const bZd = new THREE.Vector3().setFromMatrixColumn(relBox, 0).negate();
+      const tipD = new THREE.Vector3().setFromMatrixPosition(relBox);
+      const SIL_TIP_OFFSET = 0;          // along bZd; 0 keeps X-mark at box tip
+      const SIL_XMARK_OFFSET = -0.09525; // along bYd, aligns X-mark to box origin
+      const silM = new THREE.Matrix4().makeBasis(bXd, bYd, bZd);
+      silM.setPosition(tipD.clone().addScaledVector(bZd, SIL_TIP_OFFSET).addScaledVector(bYd, SIL_XMARK_OFFSET));
+      silPageGroup.matrix.copy(silM);
+      silPageGroup.matrixWorldNeedsUpdate = true;
+      silPageGroup.visible = true;
+    }
+
+    // Place silCamera for user/patient frames — identical to 3D's initStudyCamera.
+    function _initSilCamera(data) {
+      const boxMat = matrixFromRows(data.box_origin);
+      const refMat = matrixFromRows(data.reference_pose);
+      if (!boxMat || !refMat) return;
+      const boxScene = SIL_DFM.clone().multiply(refMat.clone().invert().multiply(boxMat));
+      const bX = new THREE.Vector3().setFromMatrixColumn(boxScene, 1);
+      const bY = new THREE.Vector3().setFromMatrixColumn(boxScene, 2).negate();
+      const bZ = new THREE.Vector3().setFromMatrixColumn(boxScene, 0).negate();
+      const tip      = new THREE.Vector3().setFromMatrixPosition(boxScene);
+      const centroid = tip.clone().addScaledVector(bZ, 0.07);
+      let eye;
+      if (_studyFrame2 === 'patient') {
+        eye = centroid.clone().addScaledVector(new THREE.Vector3(0, 0, 1), 0.7);
+        silCamera.up.copy(bY.clone().negate()); // 90° CW from +bX
+      } else {
+        if (!data.calibration_origin) return;
+        const calibMat = matrixFromRows(data.calibration_origin);
+        if (!calibMat) return;
+        const calibScene = SIL_DFM.clone().multiply(refMat.clone().invert().multiply(calibMat));
+        eye = new THREE.Vector3().setFromMatrixPosition(calibScene)
+              .addScaledVector(new THREE.Vector3(0, 0, 1), 0.3);
+        silCamera.up.set(0, 0, 1);
+      }
+      silCamera.position.copy(eye);
+      silCamera.lookAt(centroid);
+    }
+
+    // Called each study message — drives silhouette visibility, placement, camera, and render.
+    function renderSilhouette(data) {
+      if (!data.box_origin || !data.reference_pose) {
+        silPageGroup.visible = false;
+        silRenderer.render(silScene, silCamera);
+        return;
+      }
+      _updateSilPageMatrix(data);
+
+      if (_studyFrame2 === 'transducer') {
+        // Transducer: probe pinned at scene origin; world counter-rotates via live-pose inverse.
+        const livePose = matrixFromRows(data.live_pose);
+        const refPose  = matrixFromRows(data.reference_pose);
+        if (livePose && refPose) {
+          _silLiveMat.copy(SIL_DFM).multiply(refPose.clone().invert().multiply(livePose));
+        }
+        silTxWorldGroup.matrix.copy(_silLiveMat).invert();
+        silTxWorldGroup.matrixWorldNeedsUpdate = true;
+        if (_silFrameInit) {
+          // Over-the-shoulder view: 0.40 m behind (−X), 0.10 m above (+Z), looking at probe.
+          silCamera.position.set(-0.40, 0, 0.10);
+          silCamera.up.set(0, 0, 1);
+          silCamera.lookAt(0, 0, 0);
+          _silFrameInit = false;
+        }
+      } else {
+        // User / patient: world is fixed; camera is placed from box + calibration geometry.
+        silTxWorldGroup.matrix.identity();
+        silTxWorldGroup.matrixWorldNeedsUpdate = true;
+        _initSilCamera(data);
+      }
+
+      silRenderer.render(silScene, silCamera);
     }
 
     function resizeSilCanvas() {
       const w = silCanvas.clientWidth;
       const h = silCanvas.clientHeight;
       if (!w || !h) return;
-      const dpr = Math.min(window.devicePixelRatio, 2);
-      silCanvas.width  = Math.round(w * dpr);
-      silCanvas.height = Math.round(h * dpr);
-      drawSilhouette();
+      silRenderer.setSize(w, h, false); // false: don't override CSS size
+      silCamera.aspect = w / h;
+      silCamera.updateProjectionMatrix();
     }
-
-    _silImg.addEventListener("load", drawSilhouette);
     window.addEventListener("resize", resizeSilCanvas);
     setTimeout(resizeSilCanvas, 0);
 
@@ -833,7 +945,7 @@
           };
         })()
       );
-      drawSilhouette();
+      renderSilhouette(d);
       holdProgress.style.width = `${(d.hold_progress ?? 0) * 100}%`;
 
       if (d.source_mode) {
