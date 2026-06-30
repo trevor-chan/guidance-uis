@@ -115,6 +115,17 @@
       width: 100%;
       height: auto;
       aspect-ratio: 760 / 520;
+      position: relative;
+      z-index: 1;
+    }
+    #sil-canvas {
+      position: absolute;
+      top: 0;
+      left: 0;
+      width: 100%;
+      height: 100%;
+      pointer-events: none;
+      z-index: 0;
     }
     .target-line {
       fill: none;
@@ -251,6 +262,13 @@
       border-bottom: 1px solid #333;
     }
   </style>
+  <script type="importmap">
+    {
+      "imports": {
+        "three": "./vendor/three.module.js"
+      }
+    }
+  </script>
 </head>
 <body>
   <main>
@@ -325,10 +343,11 @@
 
       <div class="reticle-shell">
         <div id="hold-progress"></div>
+        <canvas id="sil-canvas"></canvas>
         <svg id="reticle" viewBox="0 0 760 520" role="img"
              aria-label="Six degree of freedom pose alignment reticle">
           <rect x="4" y="4" width="752" height="512" rx="4"
-                fill="#f8fafc" stroke="#111" stroke-width="8"/>
+                fill="none" stroke="#111" stroke-width="8"/>
 
           <!-- OLD reticle shapes — kept for restoration
           <g id="target-cross">
@@ -424,11 +443,13 @@
   </main>
 
   <script src="experiment-session.js"></script>
-  <script>
+  <script type="module">
+    import * as THREE from "three";
+
     const WS_URL = "ws://localhost:8765";
     const TRIGGER_KEYS = new Set("adwsqeuokijl".split(""));
     const AXES = ["x", "y", "z", "roll", "pitch", "yaw"];
-    const CENTER_X = 355;
+    const CENTER_X = 380;
     const CENTER_Y = 260;
     const TRANSLATION_RANGE_M = 0.25;
 
@@ -563,6 +584,167 @@
         socket.send(JSON.stringify(message));
       }
     }
+
+    // Transparent WebGL canvas behind the SVG reticle for the patient silhouette page.
+    const SIL_X_ROT = -Math.PI / 2;
+    const SIL_Z_ROT =  Math.PI / 2;
+
+    const silCanvas = document.getElementById("sil-canvas");
+    const silScene = new THREE.Scene();
+    const silCamera = new THREE.PerspectiveCamera(42, 760 / 520, 0.01, 10);
+    silCamera.position.set(0.72, 0.42, 0.72);
+    silCamera.up.set(0, 1, 0);
+
+    const silRenderer = new THREE.WebGLRenderer({
+      canvas: silCanvas,
+      antialias: true,
+      alpha: true,
+    });
+    silRenderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+    silRenderer.setClearColor(0x000000, 0);
+
+    const silDisplayFrame = new THREE.Group();
+    silDisplayFrame.rotation.x = SIL_X_ROT;
+    silDisplayFrame.rotation.z = SIL_Z_ROT;
+
+    const silTxWorldGroup = new THREE.Group();
+    silTxWorldGroup.matrixAutoUpdate = false;
+    silScene.add(silTxWorldGroup);
+    silTxWorldGroup.add(silDisplayFrame);
+    silDisplayFrame.updateMatrix();
+    const SIL_DFM = silDisplayFrame.matrix.clone();
+
+    const _silPageMesh = new THREE.Mesh(
+      new THREE.PlaneGeometry(0.2794, 0.4318),
+      new THREE.MeshBasicMaterial({
+        map: new THREE.TextureLoader().load("assets/patient_silhouette_page.png"),
+        side: THREE.DoubleSide,
+      })
+    );
+    _silPageMesh.rotation.z = Math.PI;
+
+    const _silBorderMesh = new THREE.Mesh(
+      new THREE.PlaneGeometry(0.2874, 0.4398),
+      new THREE.MeshBasicMaterial({ color: 0x000000, side: THREE.DoubleSide })
+    );
+    _silBorderMesh.rotation.z = Math.PI;
+    _silBorderMesh.position.z = -0.001;
+
+    const silPageGroup = new THREE.Group();
+    silPageGroup.matrixAutoUpdate = false;
+    silPageGroup.visible = false;
+    silPageGroup.add(_silBorderMesh);
+    silPageGroup.add(_silPageMesh);
+    silDisplayFrame.add(silPageGroup);
+
+    const _silLiveMat = new THREE.Matrix4();
+    let _silFrameInit = true;
+
+    function matrixFromRows(rows) {
+      if (!rows) return null;
+      return new THREE.Matrix4().set(...rows.flat());
+    }
+
+    function _updateSilPageMatrix(data) {
+      const refMat = matrixFromRows(data.reference_pose);
+      const boxMat = matrixFromRows(data.box_origin);
+      if (!refMat || !boxMat) {
+        silPageGroup.visible = false;
+        return;
+      }
+
+      const relBox = refMat.clone().invert().multiply(boxMat);
+      const bXd = new THREE.Vector3().setFromMatrixColumn(relBox, 1);
+      const bYd = new THREE.Vector3().setFromMatrixColumn(relBox, 2).negate();
+      const bZd = new THREE.Vector3().setFromMatrixColumn(relBox, 0).negate();
+      const tipD = new THREE.Vector3().setFromMatrixPosition(relBox);
+      const SIL_TIP_OFFSET = 0;
+      const SIL_XMARK_OFFSET = -0.09525;
+      const silM = new THREE.Matrix4().makeBasis(bXd, bYd, bZd);
+      silM.setPosition(
+        tipD
+          .clone()
+          .addScaledVector(bZd, SIL_TIP_OFFSET)
+          .addScaledVector(bYd, SIL_XMARK_OFFSET)
+      );
+      silPageGroup.matrix.copy(silM);
+      silPageGroup.matrixWorldNeedsUpdate = true;
+      silPageGroup.visible = true;
+    }
+
+    function _initSilCamera(data) {
+      const boxMat = matrixFromRows(data.box_origin);
+      const refMat = matrixFromRows(data.reference_pose);
+      if (!boxMat || !refMat) return;
+
+      const boxScene = SIL_DFM.clone().multiply(refMat.clone().invert().multiply(boxMat));
+      const bY = new THREE.Vector3().setFromMatrixColumn(boxScene, 2).negate();
+      const bZ = new THREE.Vector3().setFromMatrixColumn(boxScene, 0).negate();
+      const tip = new THREE.Vector3().setFromMatrixPosition(boxScene);
+      const centroid = tip.clone().addScaledVector(bZ, 0.07);
+      let eye;
+
+      if (_studyFrame2 === "patient") {
+        eye = centroid.clone().addScaledVector(new THREE.Vector3(0, 0, 1), 0.7);
+        silCamera.up.copy(bY.clone().negate());
+      } else {
+        if (!data.calibration_origin) return;
+        const calibMat = matrixFromRows(data.calibration_origin);
+        if (!calibMat) return;
+        const calibScene = SIL_DFM.clone().multiply(refMat.clone().invert().multiply(calibMat));
+        eye = new THREE.Vector3()
+          .setFromMatrixPosition(calibScene)
+          .addScaledVector(new THREE.Vector3(0, 0, 1), 0.3);
+        silCamera.up.set(0, 0, 1);
+      }
+
+      silCamera.position.copy(eye);
+      silCamera.lookAt(centroid);
+    }
+
+    function renderSilhouette(data) {
+      if (!data.box_origin || !data.reference_pose) {
+        silPageGroup.visible = false;
+        silRenderer.render(silScene, silCamera);
+        return;
+      }
+
+      _updateSilPageMatrix(data);
+
+      if (_studyFrame2 === "transducer") {
+        const livePose = matrixFromRows(data.live_pose);
+        const refPose = matrixFromRows(data.reference_pose);
+        if (livePose && refPose) {
+          _silLiveMat.copy(SIL_DFM).multiply(refPose.clone().invert().multiply(livePose));
+        }
+        silTxWorldGroup.matrix.copy(_silLiveMat).invert();
+        silTxWorldGroup.matrixWorldNeedsUpdate = true;
+
+        if (_silFrameInit) {
+          silCamera.position.set(-0.40, 0, 0.10);
+          silCamera.up.set(0, 0, 1);
+          silCamera.lookAt(0, 0, 0);
+          _silFrameInit = false;
+        }
+      } else {
+        silTxWorldGroup.matrix.identity();
+        silTxWorldGroup.matrixWorldNeedsUpdate = true;
+        _initSilCamera(data);
+      }
+
+      silRenderer.render(silScene, silCamera);
+    }
+
+    function resizeSilCanvas() {
+      const w = silCanvas.clientWidth;
+      const h = silCanvas.clientHeight;
+      if (!w || !h) return;
+      silRenderer.setSize(w, h, false);
+      silCamera.aspect = w / h;
+      silCamera.updateProjectionMatrix();
+    }
+    window.addEventListener("resize", resizeSilCanvas);
+    setTimeout(resizeSilCanvas, 0);
 
     // ── Study projection helpers (analytic 2D view math, no Three.js) ──────────
     // Matrices arrive as nested row-major lists from numpy .tolist().
@@ -707,15 +889,57 @@
           x: 0, y: 0, z: 0,
           roll: 0, pitch: 0, yaw: 0,
         },
-        _proj ? _proj.targetPose : {
-          x: d.workspace_component_errors?.x ?? 0,
-          y: (d.workspace_component_errors?.y ?? 0),
-          z: -(d.workspace_component_errors?.z ?? 0),
-          roll:  d.workspace_component_errors?.roll  ?? 0,
-          pitch: d.workspace_component_errors?.pitch ?? 0,
-          yaw:   d.workspace_component_errors?.yaw   ?? 0,
-        }
+        _proj ? _proj.targetPose : (() => {
+          const AXIS_DEPTH = 0;
+          const AXIS_HORIZ = 1;
+          const AXIS_VERT = 2;
+          const DEPTH_DIR = +1;
+          const HORIZ_DIR = -1;
+          const VERT_DIR = +1;
+          const ROLL_DIR = +1;
+          const PITCH_DIR = -1;
+          const YAW_DIR = -1;
+
+          const livePose = d.live_pose;
+          const targetPose = d.target_pose;
+          if (!livePose || !targetPose) {
+            return { x: 0, y: 0, z: 0, roll: 0, pitch: 0, yaw: 0 };
+          }
+
+          const ox = targetPose[0][3] - livePose[0][3];
+          const oy = targetPose[1][3] - livePose[1][3];
+          const oz = targetPose[2][3] - livePose[2][3];
+          const local = [
+            livePose[0][0] * ox + livePose[1][0] * oy + livePose[2][0] * oz,
+            livePose[0][1] * ox + livePose[1][1] * oy + livePose[2][1] * oz,
+            livePose[0][2] * ox + livePose[1][2] * oy + livePose[2][2] * oz,
+          ];
+
+          const Rr = [[0, 0, 0], [0, 0, 0], [0, 0, 0]];
+          for (let i = 0; i < 3; i++) {
+            for (let j = 0; j < 3; j++) {
+              for (let k = 0; k < 3; k++) {
+                Rr[i][j] += livePose[k][i] * targetPose[k][j];
+              }
+            }
+          }
+
+          const R2D = 180 / Math.PI;
+          const pitch = Math.asin(Math.max(-1, Math.min(1, Rr[0][2]))) * R2D;
+          const roll = Math.atan2(-Rr[1][2], Rr[2][2]) * R2D;
+          const yaw = Math.atan2(-Rr[0][1], Rr[0][0]) * R2D;
+
+          return {
+            x: DEPTH_DIR * local[AXIS_DEPTH],
+            y: HORIZ_DIR * local[AXIS_HORIZ],
+            z: VERT_DIR * local[AXIS_VERT],
+            roll: ROLL_DIR * roll,
+            pitch: PITCH_DIR * pitch,
+            yaw: YAW_DIR * yaw,
+          };
+        })()
       );
+      renderSilhouette(d);
       holdProgress.style.width = `${(d.hold_progress ?? 0) * 100}%`;
 
       if (d.source_mode) {

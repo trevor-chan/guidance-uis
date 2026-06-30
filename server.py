@@ -444,6 +444,10 @@ async def _new_study_handler(
                     state["tracker_visible"] = True
                     state["source_mode"]     = fetcher.source_mode
                     state["source_label"]    = fetcher.source_label
+                    if modality in ("2d", "3d"):
+                        state["reference_pose"] = live_arr.tolist()
+                if modality in ("2d", "3d") and BOX_ORIGIN is not None:
+                    state["box_origin"] = BOX_ORIGIN.tolist()
                 await websocket.send(json.dumps(state))
                 await asyncio.sleep(STEP_INTERVAL)
                 continue
