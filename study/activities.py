@@ -82,6 +82,7 @@ class TrialActivity(Activity):
         linear_tol: float = LINEAR_TOLERANCE,
         angular_tol: float = 5.0,
         hold_duration: float = HOLD_DURATION,
+        label: str | None = None,
     ) -> None:
         # angular_tol defaults to 5° — matches trial.ANGULAR_TOLERANCE.
         self._trial = Trial(fetcher, target_pose, linear_tol=linear_tol, angular_tol=angular_tol)
@@ -89,6 +90,7 @@ class TrialActivity(Activity):
         self._hold_start: float | None = None
         self._achieved = False
         self._done = False
+        self.label = label  # e.g. "T5" for fixed study targets; None otherwise
 
     @property
     def target_pose(self) -> np.ndarray:

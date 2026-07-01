@@ -710,8 +710,9 @@
       } else if (act === "trial") {
         document.getElementById("s3-trial").style.display = "block";
         const total = d.n_trials ?? 3;
+        const label = d.target_label ? ` (${d.target_label})` : "";
         document.getElementById("study-trial-label-3d").textContent =
-          `Trial ${(d.trial_index ?? 0) + 1} of ${total}`;
+          `Trial ${(d.trial_index ?? 0) + 1} of ${total}${label}`;
       } else if (act === "preference") {
         document.getElementById("s3-pref").style.display = "block";
         document.querySelectorAll("#rating-row-3d button").forEach(b => b.disabled = false);

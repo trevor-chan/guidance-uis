@@ -570,8 +570,9 @@
           document.getElementById("study-trial-phase").style.display  = "block";
           if (d.trial_index !== null && d.trial_index !== undefined) {
             const total = d.n_trials ?? d.trial_count ?? "?";
+            const label = d.target_label ? ` (${d.target_label})` : "";
             document.getElementById("trial-progress-label").textContent =
-                `Trial ${d.trial_index + 1} of ${total}`;
+                `Trial ${d.trial_index + 1} of ${total}${label}`;
           }
         } else if (act === "preference") {
           document.getElementById("study-pref-phase").style.display   = "block";

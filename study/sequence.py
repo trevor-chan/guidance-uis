@@ -9,12 +9,13 @@ from typing import Optional
 import numpy as np
 
 from pose_fetcher import LivePoseFetcher
-from core import random_study_target
+from core import random_study_target, fixed_study_target
 
 from .activities import CalibrationActivity, TrialActivity, PreferenceActivity, PracticeActivity
 from .block import Block
 from .archiver import DataArchiver
 from .reference_frame import ReferenceFrame
+from .targets import TARGET_SETS
 
 
 # ── SequenceGenerator ─────────────────────────────────────────────────────────
@@ -60,12 +61,18 @@ class SequenceGenerator:
         frame: str,
         origin: np.ndarray,
         n_trials: int = 3,
+        target_set: str | None = None,
     ) -> Block:
         """Build a single study block seeded with a pre-set box origin.
 
         Calibration is included only for user frames, where the camera
         reference pose must be captured from the live tracker. Patient,
         transducer, and 1D blocks use the pre-set box origin directly.
+
+        target_set (e.g. "S1"-"S7") selects the block's 3 trial targets from
+        the committed T1-T21 pool via study.targets.TARGET_SETS, in fixed
+        ascending order, so every participant sees identical targets. Falls
+        back to random_study_target when target_set is unset (e.g. legacy 1D).
         """
         needs_calibration = frame == "user"
         calibration = CalibrationActivity(self._fetcher) if needs_calibration else None
@@ -73,9 +80,15 @@ class SequenceGenerator:
         preference  = PreferenceActivity()
         n       = n_trials
         fetcher = self._fetcher
+        target_ids = TARGET_SETS.get(target_set) if target_set else None
 
         def trial_factory(_effective_origin: np.ndarray) -> list[TrialActivity]:
             # Always sample from the set-box pose; calibration sets camera only.
+            if target_ids:
+                return [
+                    TrialActivity(fetcher, fixed_study_target(origin, target_id), label=target_id)
+                    for target_id in target_ids[:n]
+                ]
             return [
                 TrialActivity(fetcher, random_study_target(origin))
                 for _ in range(n)

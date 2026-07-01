@@ -866,8 +866,9 @@
       } else if (act === "trial") {
         document.getElementById("s2-trial").style.display = "block";
         const total = d.n_trials ?? 3;
+        const label = d.target_label ? ` (${d.target_label})` : "";
         document.getElementById("study-trial-label").textContent =
-          `Trial ${(d.trial_index ?? 0) + 1} of ${total}`;
+          `Trial ${(d.trial_index ?? 0) + 1} of ${total}${label}`;
       } else if (act === "preference") {
         document.getElementById("s2-pref").style.display = "block";
         document.querySelectorAll("#rating-row-2d button").forEach(b => b.disabled = false);

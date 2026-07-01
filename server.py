@@ -360,6 +360,7 @@ def _study_blank(activity_type, frame, modality, n_trials, trial_index=None):
         "elapsed":                     0.0,
         "trial_index":                 trial_index,
         "n_trials":                    n_trials,
+        "target_label":                None,
         "comp_calibrated":             False,
         "live_pose":                   None,
         "target_pose":                 None,
@@ -498,6 +499,8 @@ async def _new_study_handler(
                         if hasattr(cur_act, "target_pose")
                         else origin
                     )
+                    if act_type == "trial":
+                        state["target_label"] = getattr(cur_act, "label", None)
                     state["source_mode"]    = fetcher.source_mode
                     state["source_label"]   = fetcher.source_label
                     state["tracker_visible"] = live_arr is not None
@@ -668,7 +671,10 @@ async def _new_study_handler(
                         continue
 
                     gen   = SequenceGenerator(fetcher)
-                    blk   = gen.make_block(modality_req, frame_req, BOX_ORIGIN, n_trials)
+                    blk   = gen.make_block(
+                        modality_req, frame_req, BOX_ORIGIN, n_trials,
+                        target_set=session["target_set"],
+                    )
                     blk.start()
                     session["block"] = blk
                     session["recorder"] = ConditionRecorder.start(
