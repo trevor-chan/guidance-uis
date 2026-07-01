@@ -74,11 +74,9 @@
 
     .status-row {
       display: flex;
-      justify-content: space-between;
+      justify-content: center;
       align-items: center;
     }
-    #elapsed { font-size: 1.1rem; }
-
     .badge {
       padding: 4px 12px;
       border-radius: 4px;
@@ -322,13 +320,13 @@
     <!-- Preference rating -->
     <div class="study-phase" id="study-pref-phase">
       <div class="study-heading">Study Mode</div>
-      <p class="study-prompt">This modality was intuitive</p>
+      <p class="study-prompt">What was your impression?</p>
       <div class="rating-buttons">
-        <button class="rating-btn" data-rating="1">1<br><small>Strongly<br>disagree</small></button>
-        <button class="rating-btn" data-rating="2">2<br><small>Disagree</small></button>
-        <button class="rating-btn" data-rating="3">3<br><small>Undecided</small></button>
-        <button class="rating-btn" data-rating="4">4<br><small>Agree</small></button>
-        <button class="rating-btn" data-rating="5">5<br><small>Strongly<br>agree</small></button>
+        <button class="rating-btn" data-rating="1">1<br><small>Negative</small></button>
+        <button class="rating-btn" data-rating="2">2<br><small>Slightly<br>negative</small></button>
+        <button class="rating-btn" data-rating="3">3<br><small>Neutral</small></button>
+        <button class="rating-btn" data-rating="4">4<br><small>Slightly<br>positive</small></button>
+        <button class="rating-btn" data-rating="5">5<br><small>Positive</small></button>
       </div>
     </div>
 
@@ -379,7 +377,6 @@
 
   <!-- Trial status -->
   <div class="card status-row" id="status-card">
-    <span id="elapsed">—</span>
     <span class="badge badge-running" id="trial-state">WAITING</span>
   </div>
 
@@ -478,7 +475,6 @@
       const ws = new WebSocket(WS_URL);
 
       const statusEl       = document.getElementById("ws-status");
-      const elapsedEl      = document.getElementById("elapsed");
       const stateEl        = document.getElementById("trial-state");
       const nullNotice     = document.getElementById("null-notice");
       const compTimeEl     = document.getElementById("comp-time-val");
@@ -502,7 +498,6 @@
                   v => `${v.toFixed(4)} m`);
         updateBar("angular-bar", "angular-value", d.angular, MAX_ANGULAR,
                   v => `${v.toFixed(2)}°`);
-        elapsedEl.textContent = `${(d.elapsed ?? 0).toFixed(1)} s`;
         if (d.matched) {
           stateEl.textContent = "MATCHED";
           stateEl.className   = "badge badge-matched";
