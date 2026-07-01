@@ -34,7 +34,7 @@
       label: "2D - Patient reference frame",
       shortLabel: "2D / Patient",
       page: "index-2d.html",
-      needsCalibration: true,
+      needsCalibration: false,
     }),
     M4: Object.freeze({
       id: "M4",
@@ -61,7 +61,7 @@
       label: "3D - Patient reference frame",
       shortLabel: "3D / Patient",
       page: "index-3d.html",
-      needsCalibration: true,
+      needsCalibration: false,
     }),
     M7: Object.freeze({
       id: "M7",

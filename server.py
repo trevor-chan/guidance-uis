@@ -38,12 +38,10 @@ ROT_STEP   = math.radians(2)  # 2° per keypress
 
 # (dof 0-2 = x/y/z translation, dof 3-5 = roll/pitch/yaw rotation)
 _KEY_MAP = {
-    'd': (0, +1), 'a': (0, -1),
-    'w': (1, +1), 's': (1, -1),
-    'q': (2, +1), 'e': (2, -1),
-    'u': (3, +1), 'o': (3, -1),
-    'i': (4, +1), 'k': (4, -1),
-    'j': (5, +1), 'l': (5, -1),
+    '1': (0, +1), '2': (1, +1), '3': (2, +1),
+    '4': (3, +1), '5': (4, +1), '6': (5, +1),
+    'q': (0, -1), 'w': (1, -1), 'e': (2, -1),
+    'r': (3, -1), 't': (4, -1), 'y': (5, -1),
 }
 
 GAME_DURATION      = 180.0   # 3 minutes
@@ -57,8 +55,8 @@ BOX_ORIGIN: np.ndarray | None = None
 class FakePoseFetcher(LivePoseFetcher):
     """Keyboard-driven pose: starts offset from TARGET_POSE so the bars are away from matched.
 
-    D/A, W/S, and Q/E translate along local X/Y/Z.
-    U/O, I/K, and J/L rotate roll/pitch/yaw.
+    Keys 1/2/3 translate along local X/Y/Z; 4/5/6 rotate roll/pitch/yaw.
+    q/w/e and r/t/y are the negative counterparts respectively.
     Nudges use the active target frame so each key changes one displayed component.
     """
 
@@ -227,7 +225,7 @@ async def _competition_handler(websocket, fetcher, modality="1d", frame="transdu
             state["comp_time_remaining"] = tr
             state["mode"]                = "competition"
 
-            if modality in ("2d", "3d"):
+            if modality in ("1d", "2d", "3d"):
                 # trial.step() does not include live_pose; fetch it directly so
                 # the 3D renderer has the matrix and tracker_visible is correct.
                 live_pose_arr = fetcher.get_pose()
@@ -491,7 +489,7 @@ async def _new_study_handler(
                 state["timed_out"]       = act_data.get("timed_out", False)
                 state["comp_calibrated"] = act_type in ("practice", "trial")
 
-                if modality in ("2d", "3d"):
+                if modality in ("1d", "2d", "3d"):
                     live_arr = fetcher.get_pose()
                     origin   = block.origin
                     cur_act  = block.current_activity

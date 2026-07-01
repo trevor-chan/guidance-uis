@@ -7,8 +7,8 @@
     :root {
       --bg: #111;
       --surface: #1e1e1e;
-      --text: #ddd;
-      --dim: #555;
+      --text: #f0f0f0;
+      --dim: #999;
       --track: #2a2a2a;
     }
     * { box-sizing: border-box; margin: 0; padding: 0; }
@@ -239,6 +239,24 @@
       margin-bottom: 16px;
       border-bottom: 1px solid #333;
     }
+    .axis-stats {
+      display: grid;
+      grid-template-columns: repeat(6, 1fr);
+      gap: 8px;
+    }
+    .axis-stat {
+      padding: 8px 6px;
+      border: 1px solid #333;
+      border-radius: 5px;
+      color: #f87171;
+      font-size: 0.7rem;
+      line-height: 1.5;
+      text-align: center;
+    }
+    .axis-stat.aligned {
+      border-color: #166534;
+      color: #4ade80;
+    }
   </style>
 </head>
 <body>
@@ -289,7 +307,7 @@
     <!-- Practice in progress -->
     <div class="study-phase" id="study-practice-phase">
       <div class="study-heading">Study Mode</div>
-      <p class="study-prompt">Up to 1 minute of free practice. Move the probe freely.<br>Press Ready when comfortable.</p>
+      <p class="study-prompt">Practice phase. Move the probe freely.<br>Press Ready when comfortable.</p>
       <div class="comp-buttons">
         <button class="comp-btn" id="btn-practice-done">Ready</button>
       </div>
@@ -304,7 +322,7 @@
     <!-- Preference rating -->
     <div class="study-phase" id="study-pref-phase">
       <div class="study-heading">Study Mode</div>
-      <p class="study-prompt">On a scale of 1-5, how would you rate the effectiveness of this visual user interface?</p>
+      <p class="study-prompt">This modality was intuitive</p>
       <div class="rating-buttons">
         <button class="rating-btn" data-rating="1">1<br><small>Strongly<br>disagree</small></button>
         <button class="rating-btn" data-rating="2">2<br><small>Disagree</small></button>
@@ -320,6 +338,18 @@
       <p class="study-complete-msg">Study complete. Thank you.</p>
     </div>
 
+  </div>
+
+  <!-- Component readout -->
+  <div class="card" id="axis-card" style="padding: 12px 28px;">
+    <div class="axis-stats">
+      <div class="axis-stat" id="axis-x"><strong>X</strong><br><span>--</span></div>
+      <div class="axis-stat" id="axis-y"><strong>Y</strong><br><span>--</span></div>
+      <div class="axis-stat" id="axis-z"><strong>Z</strong><br><span>--</span></div>
+      <div class="axis-stat" id="axis-roll"><strong>ROLL</strong><br><span>--</span></div>
+      <div class="axis-stat" id="axis-pitch"><strong>PITCH</strong><br><span>--</span></div>
+      <div class="axis-stat" id="axis-yaw"><strong>YAW</strong><br><span>--</span></div>
+    </div>
   </div>
 
   <!-- Distance bars -->
@@ -360,7 +390,25 @@
     const WS_URL      = "ws://localhost:8765";
     const MAX_LINEAR  = 0.5;   // meters  — full cold at or beyond this
     const MAX_ANGULAR = 90;    // degrees — full cold at or beyond this
-    const TRIGGER_KEYS = new Set("adwsqeuokijl".split(""));
+    const TRIGGER_KEYS = new Set("123456qwerty".split(""));
+    const AXES = ["x", "y", "z", "roll", "pitch", "yaw"];
+
+    function updateAxisStats(components, aligned) {
+      for (const name of AXES) {
+        const el = document.getElementById(`axis-${name}`);
+        if (!el) continue;
+        const isAligned = Boolean(aligned?.[name]);
+        el.className = `axis-stat${isAligned ? " aligned" : ""}`;
+        if (components?.[name] != null) {
+          const isTranslation = name === "x" || name === "y" || name === "z";
+          const value = isTranslation ? components[name] * 100 : components[name];
+          el.querySelector("span").textContent =
+            `${value.toFixed(1)} ${isTranslation ? "cm" : "deg"}`;
+        } else {
+          el.querySelector("span").textContent = "--";
+        }
+      }
+    }
 
     // Interpolate between cold (#1e3a8a) and hot (#dc2626) by closeness [0,1]
     function barColor(closeness) {
@@ -580,6 +628,7 @@
         } else {
           renderCompetition(d);
         }
+        updateAxisStats(d.workspace_component_errors, d.workspace_component_aligned);
       };
 
       ws.onclose = () => {

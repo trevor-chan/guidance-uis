@@ -447,7 +447,7 @@
     import * as THREE from "three";
 
     const WS_URL = "ws://localhost:8765";
-    const TRIGGER_KEYS = new Set("adwsqeuokijl".split(""));
+    const TRIGGER_KEYS = new Set("123456qwerty".split(""));
     const AXES = ["x", "y", "z", "roll", "pitch", "yaw"];
     const CENTER_X = 380;
     const CENTER_Y = 260;
@@ -459,9 +459,9 @@
     if (_isStudy2) {
       window.ExperimentSession.renderContext(document.getElementById("study-context-2d"));
       document.getElementById("calibration-prompt-2d").textContent =
-        _studyFrame2 === "patient"
-          ? "Place the transducer in the indicated patient reference pose, then press Calibrate."
-          : "Place the transducer at the center of the chest, pointing forward and horizontal, then press Calibrate.";
+        _studyFrame2 === "user"
+          ? "Place the transducer at the center of the chest, pointing forward and horizontal, then press Calibrate."
+          : "Orient probe as shown. Press Calibrate when ready.";
     }
 
     // OLD element refs — kept for restoration

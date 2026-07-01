@@ -63,12 +63,11 @@ class SequenceGenerator:
     ) -> Block:
         """Build a single study block seeded with a pre-set box origin.
 
-        Calibration is included only for user/patient frames (where the
-        camera reference pose must be captured from the live tracker).
-        All other modes (1d, transducer) skip calibration and seed trials
-        directly from the supplied origin.
+        Calibration is included only for user frames, where the camera
+        reference pose must be captured from the live tracker. Patient,
+        transducer, and 1D blocks use the pre-set box origin directly.
         """
-        needs_calibration = frame in ("user", "patient")
+        needs_calibration = frame == "user"
         calibration = CalibrationActivity(self._fetcher) if needs_calibration else None
         practice    = PracticeActivity(self._fetcher, origin)
         preference  = PreferenceActivity()

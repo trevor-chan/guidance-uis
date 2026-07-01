@@ -717,7 +717,7 @@
       calibrationStep.classList.toggle("skipped", !details.modality.needsCalibration);
       calibrationCopy.textContent = details.modality.needsCalibration
         ? `Capture the ${details.modality.frame} reference pose before practice.`
-        : "No separate user/patient reference-frame calibration is required.";
+        : "No separate reference-frame calibration is required.";
 
       document.getElementById("start-condition-btn").onclick = () => {
         if (

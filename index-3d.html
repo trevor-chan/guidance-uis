@@ -391,15 +391,15 @@
     if (_isStudy3) {
       window.ExperimentSession.renderContext(document.getElementById("study-context-3d"));
       document.getElementById("calibration-prompt-3d").textContent =
-        _studyFrame3 === "patient"
-          ? "Place the transducer in the indicated patient reference pose, then press Calibrate."
-          : "Place the transducer at the center of the chest, pointing forward and horizontal, then press Calibrate.";
+        _studyFrame3 === "user"
+          ? "Place the transducer at the center of the chest, pointing forward and horizontal, then press Calibrate."
+          : "Orient probe as shown. Press Calibrate when ready.";
     }
     const MODEL_SCALE = 0.01; // The supplied OBJ is modeled in centimeters.
     const MODEL_Z_ROTATION = -Math.PI / 2; // Visual alignment only.
     const DISPLAY_FRAME_X_ROTATION = -Math.PI / 2; // Local Z is visually vertical.
     const DISPLAY_FRAME_Z_ROTATION = Math.PI / 2; // Local X forward, local Y left.
-    const TRIGGER_KEYS = new Set("adwsqeuokijl".split(""));
+    const TRIGGER_KEYS = new Set("123456qwerty".split(""));
 
     const sceneHost = document.getElementById("scene");
     const modelStatus = document.getElementById("model-status");
