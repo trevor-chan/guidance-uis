@@ -128,12 +128,12 @@
   const EXPERIMENTS = Object.freeze({
     modality: {
       buildConditions: buildModalityConditions,
-      flags: Object.freeze({ practice: true, preference: true, readyGate: false }),
+      flags: Object.freeze({ practice: true, preference: true, pausable: false }),
       usesMatrixOption: true,
     },
     learning_curve: {
       buildConditions: buildLearningCurveConditions,
-      flags: Object.freeze({ practice: true, preference: false, readyGate: true }),
+      flags: Object.freeze({ practice: true, preference: false, pausable: true }),
       usesMatrixOption: false,
     },
     noise: {
@@ -265,7 +265,7 @@
   function startBlockMetadata() {
     const context = contextForLocation();
     if (!context) return {};
-    const flags = context.session?.flags || { practice: true, preference: true, readyGate: false };
+    const flags = context.session?.flags || { practice: true, preference: true, pausable: false };
     return {
       participant_id: context.participantId,
       session_id: context.sessionId,
@@ -275,7 +275,6 @@
       modality_id: context.modalityId,
       n_trials: context.nTrials,
       include_preference: flags.preference,
-      require_ready: flags.readyGate,
     };
   }
 
@@ -450,7 +449,7 @@
       examinerName: savedSession.examiner_name || "",
       experimentCondition,
       option: savedSession.condition_option,
-      flags: experiment?.flags || { practice: true, preference: true, readyGate: false },
+      flags: experiment?.flags || { practice: true, preference: true, pausable: false },
       conditions,
       currentIndex: firstIncomplete === -1 ? conditions.length : firstIncomplete,
       boxSet: Boolean(persistentState.has_box_pose),

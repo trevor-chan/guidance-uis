@@ -239,6 +239,21 @@
     }
     .study-card-btn:hover { background: #383838; }
     .study-card-btn:disabled { opacity: 0.35; cursor: default; }
+    /* ── Pause / Resume ── */
+    .pause-overlay {
+      display: none;
+      position: fixed; inset: 0; z-index: 1000;
+      background: var(--bg);
+      align-items: center; justify-content: center;
+    }
+    .pause-overlay-btn {
+      padding: 24px 56px;
+      background: #2a2a2a; color: var(--text);
+      border: 2px solid #444; border-radius: 10px;
+      font: 1.1rem "Courier New", monospace;
+      letter-spacing: 0.1em; text-transform: uppercase; cursor: pointer;
+    }
+    .pause-overlay-btn:hover { background: #383838; }
     .rating-row { display: flex; gap: 8px; justify-content: center; }
     .rating-row button {
       flex: 1; padding: 8px 4px; max-width: 120px;
@@ -290,16 +305,11 @@
         <p class="study-prompt">Up to 1 minute of free practice. Move the probe freely.<br>Press Ready when comfortable.</p>
         <button class="study-card-btn" id="btn-2d-practice-done">Ready</button>
       </div>
-      <!-- Ready-gate phase: shown before each trial when the experiment requires it -->
-      <div class="study-phase" id="s2-ready">
-        <div class="study-heading">Study Mode — Ready?</div>
-        <p class="study-prompt" id="study-ready-label-2d">Trial 1 of 25</p>
-        <button class="study-card-btn" id="btn-2d-start-trial">Start Trial</button>
-      </div>
       <!-- Trial phase -->
       <div class="study-phase" id="s2-trial">
         <div class="study-heading">Study Mode</div>
         <p id="study-trial-label">Trial 1 of 3</p>
+        <button class="study-card-btn" id="btn-2d-pause">Pause</button>
       </div>
       <!-- Preference phase -->
       <div class="study-phase" id="s2-pref">
@@ -448,6 +458,11 @@
     <div id="connection">connecting...</div>
   </main>
 
+  <!-- Full-screen pause overlay: hides the reticle/target entirely while paused -->
+  <div class="pause-overlay" id="pause-overlay-2d">
+    <button class="pause-overlay-btn" id="btn-2d-resume">Resume</button>
+  </div>
+
   <script src="experiment-session.js"></script>
   <script type="module">
     import * as THREE from "three";
@@ -462,6 +477,7 @@
     const _p2 = new URLSearchParams(window.location.search);
     const _isStudy2    = _p2.get("study") === "1";
     const _studyFrame2 = _p2.get("frame") || "transducer";
+    const _pausable2d  = Boolean(window.ExperimentSession?.contextForLocation()?.session?.flags?.pausable);
     if (_isStudy2) {
       window.ExperimentSession.renderContext(document.getElementById("study-context-2d"));
       document.getElementById("calibration-prompt-2d").textContent =
@@ -847,10 +863,11 @@
     }
 
     // ── Study renderer ──────────────────────────────────────────────────────────
-    const _s2Phases = ["s2-cal", "s2-practice", "s2-ready", "s2-trial", "s2-pref", "s2-done"];
+    const _s2Phases = ["s2-cal", "s2-practice", "s2-trial", "s2-pref", "s2-done"];
     const _scoreboard = document.querySelector(".scoreboard").closest(".card");
     const _controls   = document.querySelector(".controls").closest(".card");
     const _studyCard  = document.getElementById("study-card");
+    const _pauseOverlay2d = document.getElementById("pause-overlay-2d");
 
     function renderStudy2D(d) {
       const act = d.activity_type;
@@ -861,6 +878,7 @@
       _studyCard.style.display  = "block";
 
       _s2Phases.forEach(id => document.getElementById(id).style.display = "none");
+      _pauseOverlay2d.style.display = (act === "paused") ? "flex" : "none";
 
       if (act === "calibration") {
         document.getElementById("s2-cal").style.display = "block";
@@ -869,18 +887,15 @@
           (_studyFrame2 === "user") ? "block" : "none";
       } else if (act === "practice") {
         document.getElementById("s2-practice").style.display = "block";
-      } else if (act === "await_ready") {
-        document.getElementById("s2-ready").style.display = "block";
-        const total = d.n_trials ?? 3;
-        const label = d.target_label ? ` (${d.target_label})` : "";
-        document.getElementById("study-ready-label-2d").textContent =
-          `Trial ${(d.trial_index ?? 0) + 1} of ${total}${label}`;
       } else if (act === "trial") {
         document.getElementById("s2-trial").style.display = "block";
+        document.getElementById("btn-2d-pause").style.display = _pausable2d ? "block" : "none";
         const total = d.n_trials ?? 3;
         const label = d.target_label ? ` (${d.target_label})` : "";
         document.getElementById("study-trial-label").textContent =
           `Trial ${(d.trial_index ?? 0) + 1} of ${total}${label}`;
+      } else if (act === "paused") {
+        // Full-screen Resume overlay (toggled above) covers the trial UI.
       } else if (act === "preference") {
         document.getElementById("s2-pref").style.display = "block";
         document.querySelectorAll("#rating-row-2d button").forEach(b => b.disabled = false);
@@ -1053,8 +1068,10 @@
       () => send({ cmd: "calibrate" }));
     document.getElementById("btn-2d-practice-done").addEventListener("click",
       () => send({ cmd: "practice_done" }));
-    document.getElementById("btn-2d-start-trial").addEventListener("click",
-      () => send({ cmd: "ready" }));
+    document.getElementById("btn-2d-pause").addEventListener("click",
+      () => send({ cmd: "pause" }));
+    document.getElementById("btn-2d-resume").addEventListener("click",
+      () => send({ cmd: "resume" }));
     document.querySelectorAll("#rating-row-2d button").forEach(btn => {
       btn.addEventListener("click", () => {
         send({ cmd: "rate", rating: parseInt(btn.dataset.r, 10) });

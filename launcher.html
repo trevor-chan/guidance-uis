@@ -758,9 +758,9 @@
         ? `Capture the ${details.modality.frame} reference pose before practice.`
         : "No separate reference-frame calibration is required.";
 
-      const flags = session.flags || { preference: true, readyGate: false };
-      document.getElementById("data-collection-copy").textContent = flags.readyGate
-        ? `Run ${condition.nTrials} target trials, one at a time — press "Start Trial" before each. Match within 5 mm and 5 degrees; each trial times out at 1 minute.`
+      const flags = session.flags || { preference: true, pausable: false };
+      document.getElementById("data-collection-copy").textContent = flags.pausable
+        ? `Run ${condition.nTrials} target trials. Match within 5 mm and 5 degrees; each trial times out at 1 minute. Press "Pause" during a trial to cancel it and restart with a fresh target.`
         : `Run ${condition.nTrials} target trials. Match within 5 mm and 5 degrees; each trial times out at 1 minute.`;
       document.getElementById("preference-step").style.display = flags.preference ? "" : "none";
 

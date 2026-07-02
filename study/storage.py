@@ -433,6 +433,7 @@ class ExperimentRepository(Protocol):
     def finish_trial(
         self, run_id: str, trial_index: int, result: dict
     ) -> None: ...
+    def discard_trial(self, run_id: str, trial_index: int) -> None: ...
     def save_preference(self, run_id: str, rating: int) -> None: ...
     def finish_condition(self, run_id: str) -> dict: ...
     def export_session(self, session_id: str) -> list[Path]: ...
@@ -881,6 +882,29 @@ class SqliteExperimentRepository:
                 },
             )
 
+    def discard_trial(self, run_id: str, trial_index: int) -> None:
+        """Delete a cancelled trial attempt (and its samples) so a later
+        restart of the same slot starts from a clean row instead of being
+        silently skipped by start_trial's ON CONFLICT DO NOTHING."""
+        database_path, session_id, condition_index = self._run_location(run_id)
+        with self._connect(database_path) as connection:
+            connection.execute(
+                "DELETE FROM trajectory_samples WHERE run_id = ? AND trial_index = ?",
+                (run_id, trial_index),
+            )
+            connection.execute(
+                "DELETE FROM trials WHERE run_id = ? AND trial_index = ?",
+                (run_id, trial_index),
+            )
+            self._event(
+                connection,
+                session_id,
+                "trial_cancelled",
+                condition_index=condition_index,
+                trial_index=trial_index,
+                run_id=run_id,
+            )
+
     def save_preference(self, run_id: str, rating: int) -> None:
         database_path, session_id, condition_index = self._run_location(run_id)
         with self._connect(database_path) as connection:
@@ -1316,6 +1340,21 @@ class ConditionRecorder:
             elif activity_type == "trial" and trial_index is not None:
                 self.flush(trial_index)
                 self.store.finish_trial(self.run_id, trial_index, data)
+
+    def cancel_current_trial(self) -> None:
+        """Discard the in-progress trial attempt after a participant pause.
+
+        Deletes any trial/trajectory rows already written for this attempt
+        (see ExperimentRepository.discard_trial) and resets tracking so the
+        eventual restart is recorded as a clean, brand-new trial.
+        """
+        if self._activity_key and self._activity_key[0] == "trial":
+            trial_index = self._activity_key[1]
+            if trial_index is not None:
+                self.store.discard_trial(self.run_id, trial_index)
+            self._buffer.clear()
+            self._sample_index = 0
+            self._activity_key = None
 
     def save_preference_and_finish(self, rating: int) -> dict:
         self.store.save_preference(self.run_id, rating)

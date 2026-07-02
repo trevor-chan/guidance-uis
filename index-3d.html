@@ -218,6 +218,21 @@
     }
     .study-card-btn-3d:hover { background: #383838; }
     .study-card-btn-3d:disabled { opacity: 0.35; cursor: default; }
+    /* ── Pause / Resume ── */
+    .pause-overlay {
+      display: none;
+      position: fixed; inset: 0; z-index: 1000;
+      background: var(--bg);
+      align-items: center; justify-content: center;
+    }
+    .pause-overlay-btn {
+      padding: 24px 56px;
+      background: #2a2a2a; color: var(--text);
+      border: 2px solid #444; border-radius: 10px;
+      font: 1.1rem "Courier New", monospace;
+      letter-spacing: 0.1em; text-transform: uppercase; cursor: pointer;
+    }
+    .pause-overlay-btn:hover { background: #383838; }
     .rating-row-3d { display: flex; gap: 8px; justify-content: center; }
     .rating-row-3d button {
       flex: 1; padding: 8px 4px; max-width: 120px;
@@ -285,14 +300,10 @@
         <p class="study-prompt-3d">Up to 1 minute of free practice. Move the probe freely.<br>Press Ready when comfortable.</p>
         <button class="study-card-btn-3d" id="btn-3d-practice-done">Ready</button>
       </div>
-      <div class="study-phase-3d" id="s3-ready">
-        <div class="study-heading-3d">Study Mode — Ready?</div>
-        <p class="study-prompt-3d" id="study-ready-label-3d">Trial 1 of 25</p>
-        <button class="study-card-btn-3d" id="btn-3d-start-trial">Start Trial</button>
-      </div>
       <div class="study-phase-3d" id="s3-trial">
         <div class="study-heading-3d">Study Mode</div>
         <p id="study-trial-label-3d">Trial 1 of 3</p>
+        <button class="study-card-btn-3d" id="btn-3d-pause">Pause</button>
       </div>
       <div class="study-phase-3d" id="s3-pref">
         <div class="study-heading-3d">Study Mode — Preference</div>
@@ -381,6 +392,11 @@
     <div id="connection">connecting...</div>
   </main>
 
+  <!-- Full-screen pause overlay: hides the reticle/target entirely while paused -->
+  <div class="pause-overlay" id="pause-overlay-3d">
+    <button class="pause-overlay-btn" id="btn-3d-resume">Resume</button>
+  </div>
+
   <script src="experiment-session.js"></script>
   <script type="module">
     import * as THREE from "three";
@@ -393,6 +409,7 @@
     const _p3 = new URLSearchParams(window.location.search);
     const _isStudy3    = _p3.get("study") === "1";
     const _studyFrame3 = _p3.get("frame") || "transducer";
+    const _pausable3d  = Boolean(window.ExperimentSession?.contextForLocation()?.session?.flags?.pausable);
     if (_isStudy3) {
       window.ExperimentSession.renderContext(document.getElementById("study-context-3d"));
       document.getElementById("calibration-prompt-3d").textContent =
@@ -691,10 +708,11 @@
     }
 
     // ── Study renderer (3D) ──────────────────────────────────────────────────
-    const _s3Phases = ["s3-cal", "s3-practice", "s3-ready", "s3-trial", "s3-pref", "s3-done"];
+    const _s3Phases = ["s3-cal", "s3-practice", "s3-trial", "s3-pref", "s3-done"];
     const _scoreboard3 = document.querySelector(".scoreboard").closest(".card");
     const _controls3   = document.querySelector(".controls").closest(".card");
     const _studyCard3  = document.getElementById("study-card-3d");
+    const _pauseOverlay3d = document.getElementById("pause-overlay-3d");
 
     function renderStudy3D(d) {
       const act = d.activity_type;
@@ -705,6 +723,7 @@
       _studyCard3.style.display  = "block";
 
       _s3Phases.forEach(id => document.getElementById(id).style.display = "none");
+      _pauseOverlay3d.style.display = (act === "paused") ? "flex" : "none";
 
       if (act === "calibration") {
         document.getElementById("s3-cal").style.display = "block";
@@ -712,18 +731,15 @@
           (_studyFrame3 === "user") ? "block" : "none";
       } else if (act === "practice") {
         document.getElementById("s3-practice").style.display = "block";
-      } else if (act === "await_ready") {
-        document.getElementById("s3-ready").style.display = "block";
-        const total = d.n_trials ?? 3;
-        const label = d.target_label ? ` (${d.target_label})` : "";
-        document.getElementById("study-ready-label-3d").textContent =
-          `Trial ${(d.trial_index ?? 0) + 1} of ${total}${label}`;
       } else if (act === "trial") {
         document.getElementById("s3-trial").style.display = "block";
+        document.getElementById("btn-3d-pause").style.display = _pausable3d ? "block" : "none";
         const total = d.n_trials ?? 3;
         const label = d.target_label ? ` (${d.target_label})` : "";
         document.getElementById("study-trial-label-3d").textContent =
           `Trial ${(d.trial_index ?? 0) + 1} of ${total}${label}`;
+      } else if (act === "paused") {
+        // Full-screen Resume overlay (toggled above) covers the trial UI.
       } else if (act === "preference") {
         document.getElementById("s3-pref").style.display = "block";
         document.querySelectorAll("#rating-row-3d button").forEach(b => b.disabled = false);
@@ -965,8 +981,10 @@
       () => send({ cmd: "calibrate" }));
     document.getElementById("btn-3d-practice-done").addEventListener("click",
       () => send({ cmd: "practice_done" }));
-    document.getElementById("btn-3d-start-trial").addEventListener("click",
-      () => send({ cmd: "ready" }));
+    document.getElementById("btn-3d-pause").addEventListener("click",
+      () => send({ cmd: "pause" }));
+    document.getElementById("btn-3d-resume").addEventListener("click",
+      () => send({ cmd: "resume" }));
     document.querySelectorAll("#rating-row-3d button").forEach(btn => {
       btn.addEventListener("click", () => {
         send({ cmd: "rate", rating: parseInt(btn.dataset.r, 10) });

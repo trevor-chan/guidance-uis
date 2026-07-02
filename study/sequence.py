@@ -63,7 +63,6 @@ class SequenceGenerator:
         n_trials: int = 3,
         target_set: str | None = None,
         include_preference: bool = True,
-        require_ready: bool = False,
     ) -> Block:
         """Build a single study block seeded with a pre-set box origin.
 
@@ -79,9 +78,10 @@ class SequenceGenerator:
         fresh random target per trial).
 
         include_preference=False omits the PreferenceActivity (learning_curve,
-        noise, latency have no preference rating). require_ready=True gates
-        every trial behind a participant-confirmed "ready" signal (see
-        Block.require_ready).
+        noise, latency have no preference rating). The block's rebuild_trial
+        callback lets Block.resume_current_trial() rebuild a cancelled/paused
+        trial as a fresh attempt (a new random target when the block draws
+        random targets, the same fixed target otherwise).
         """
         needs_calibration = frame == "user"
         calibration = CalibrationActivity(self._fetcher) if needs_calibration else None
@@ -91,17 +91,15 @@ class SequenceGenerator:
         fetcher = self._fetcher
         target_ids = TARGET_SETS.get(target_set) if target_set else None
 
-        def trial_factory(_effective_origin: np.ndarray) -> list[TrialActivity]:
+        def _make_trial(trial_index: int) -> TrialActivity:
             # Always sample from the set-box pose; calibration sets camera only.
             if target_ids:
-                return [
-                    TrialActivity(fetcher, fixed_study_target(origin, target_id), label=target_id)
-                    for target_id in target_ids[:n]
-                ]
-            return [
-                TrialActivity(fetcher, random_study_target(origin))
-                for _ in range(n)
-            ]
+                target_id = target_ids[trial_index]
+                return TrialActivity(fetcher, fixed_study_target(origin, target_id), label=target_id)
+            return TrialActivity(fetcher, random_study_target(origin))
+
+        def trial_factory(_effective_origin: np.ndarray) -> list[TrialActivity]:
+            return [_make_trial(i) for i in range(n)]
 
         return Block(
             calibration,
@@ -109,7 +107,7 @@ class SequenceGenerator:
             preference,
             practice=practice,
             fallback_origin=origin,
-            require_ready=require_ready,
+            rebuild_trial=_make_trial,
         )
 
     def make_blocks(self) -> list[Block]:
