@@ -713,12 +713,15 @@
         card.className = "condition-card";
         if (condition.status === "complete") card.classList.add("complete");
         if (index === session.currentIndex) card.classList.add("active");
+        const perceivedMs = condition.perceivedMs ?? (condition.latencyMs != null ? condition.latencyMs + 75 : null);
         const stepLabel = condition.targetSet
           ? `${condition.targetSet} · ${index + 1}/${totalConditions}`
           : condition.noiseMagnitude != null
             ? `mag ${condition.noiseMagnitude} · ${index + 1}/${totalConditions}`
             : condition.latencyMs != null
-              ? `${condition.latencyMs}ms · ${index + 1}/${totalConditions}`
+              ? condition.latencyMs === 0
+                ? `baseline (~${perceivedMs}ms) · ${index + 1}/${totalConditions}`
+                : `${perceivedMs}ms · ${index + 1}/${totalConditions}`
               : `${index + 1}/${totalConditions}`;
         card.innerHTML = `
           <div class="condition-step">${stepLabel}</div>

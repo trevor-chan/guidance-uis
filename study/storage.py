@@ -509,8 +509,9 @@ class SqliteExperimentRepository:
                     """
                     INSERT INTO conditions (
                         session_id, condition_index, target_set, modality_id,
-                        modality, frame, noise, latency_ms, learning_curve, status
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending')
+                        modality, frame, noise, latency_ms, perceived_ms,
+                        learning_curve, status
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending')
                     ON CONFLICT(session_id, condition_index) DO UPDATE SET
                         target_set = excluded.target_set,
                         modality_id = excluded.modality_id,
@@ -518,6 +519,7 @@ class SqliteExperimentRepository:
                         frame = excluded.frame,
                         noise = excluded.noise,
                         latency_ms = excluded.latency_ms,
+                        perceived_ms = excluded.perceived_ms,
                         learning_curve = excluded.learning_curve
                     """,
                     (
@@ -529,6 +531,7 @@ class SqliteExperimentRepository:
                         condition.get("frame"),
                         condition.get("noise"),
                         condition.get("latency_ms"),
+                        condition.get("perceived_ms"),
                         condition.get("learning_curve"),
                     ),
                 )
@@ -1161,6 +1164,7 @@ class SqliteExperimentRepository:
                 frame TEXT,
                 noise REAL,
                 latency_ms REAL,
+                perceived_ms REAL,
                 learning_curve TEXT,
                 status TEXT NOT NULL,
                 started_at TEXT,

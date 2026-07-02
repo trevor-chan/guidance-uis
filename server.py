@@ -73,7 +73,7 @@ def _apply_display_noise(pose: np.ndarray, magnitude: float | None) -> np.ndarra
     return noisy
 
 
-LATENCY_BUFFER_MAXLEN = 60  # 2s of history @ 30Hz — covers the 800ms max condition with margin
+LATENCY_BUFFER_MAXLEN = 60  # 2s of history @ 30Hz — covers the 1125ms max condition with margin
 
 
 def _apply_display_latency(

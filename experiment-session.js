@@ -103,7 +103,11 @@
   // TEMPORARY: LATENCY mode list/order and delay ramp. Change here if the
   // study design shifts. M3 = 2D/Patient, M5 = 3D/User.
   const LATENCY_MODES = ["M3", "M5"];
-  const LATENCY_MS = [50, 100, 200, 400, 800];   // display-only delay, milliseconds
+  // Injected delay only; this is what the server buffers on top of the
+  // ~75ms measured system baseline. See LATENCY_BASELINE_MS for the
+  // perceived (injected + baseline) value that gets persisted alongside it.
+  const LATENCY_MS = [0, 75, 225, 525, 1125];
+  const LATENCY_BASELINE_MS = 75;
   const LATENCY_TRIALS_PER_MAGNITUDE = 5;
 
   function participantOption(participantId) {
@@ -161,6 +165,7 @@
           modalityId,
           nTrials: LATENCY_TRIALS_PER_MAGNITUDE,
           latencyMs,
+          perceivedMs: latencyMs + LATENCY_BASELINE_MS,
           includePractice: magIndex === 0,
           status: "pending",
         });
@@ -430,6 +435,7 @@
           frame: modality.frame,
           noise: condition.noiseMagnitude ?? null,
           latency_ms: condition.latencyMs ?? null,
+          perceived_ms: condition.perceivedMs ?? null,
           learning_curve: null,
         };
       }),
@@ -501,6 +507,7 @@
       nTrials: template[index]?.nTrials || MODALITY_TRIALS_PER_CONDITION,
       noiseMagnitude: condition.noise ?? template[index]?.noiseMagnitude ?? null,
       latencyMs: condition.latency_ms ?? template[index]?.latencyMs ?? null,
+      perceivedMs: condition.perceived_ms ?? template[index]?.perceivedMs ?? null,
       includePractice: template[index]?.includePractice ?? true,
       status: condition.status,
       completedTrials: Number(condition.completed_trials || 0),
