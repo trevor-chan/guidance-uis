@@ -52,6 +52,26 @@ STUDY_BLOCK_TRIALS = 3       # trials per multi-mode study block
 BOX_ORIGIN: np.ndarray | None = None
 
 
+def _apply_display_noise(pose: np.ndarray, magnitude: float | None) -> np.ndarray:
+    """Return a display-only copy of pose perturbed by fresh Gaussian noise.
+
+    magnitude is the NOISE experiment's ramp level, applied as BOTH a
+    position std-dev (mm -> m) and an orientation std-dev (degrees),
+    resampled every call. magnitude 0/None returns pose unperturbed — every
+    other experiment passes 0, so their displayed pose is never touched.
+    """
+    if not magnitude:
+        return pose
+    noisy = pose.copy()
+    position_std_m = magnitude / 1000.0
+    noisy[:3, 3] = noisy[:3, 3] + np.random.normal(0.0, position_std_m, size=3)
+    angle_std_rad = math.radians(magnitude)
+    rx, ry, rz = np.random.normal(0.0, angle_std_rad, size=3)
+    R_noise = _rot_x(rx) @ _rot_y(ry) @ _rot_z(rz)
+    noisy[:3, :3] = R_noise @ pose[:3, :3]
+    return noisy
+
+
 class FakePoseFetcher(LivePoseFetcher):
     """Keyboard-driven pose: starts offset from TARGET_POSE so the bars are away from matched.
 
@@ -411,6 +431,7 @@ async def _new_study_handler(
         "condition_option":      None,
         "condition_index":       None,
         "target_set":            None,
+        "noise_magnitude":       0,
         "modality_id":           None,
         "session_id":            None,
         "recorder":              None,
@@ -508,6 +529,10 @@ async def _new_study_handler(
 
                 if modality in ("1d", "2d", "3d"):
                     live_arr = fetcher.get_pose()
+                    display_arr = (
+                        _apply_display_noise(live_arr, session["noise_magnitude"])
+                        if live_arr is not None else None
+                    )
                     origin   = block.origin
                     cur_act  = block.current_activity
                     target_arr = (
@@ -521,17 +546,17 @@ async def _new_study_handler(
                     state["source_label"]   = fetcher.source_label
                     state["tracker_visible"] = live_arr is not None
                     state["reference_frame"] = frame
-                    if live_arr is not None:
-                        state["live_pose"] = live_arr.tolist()
+                    if display_arr is not None:
+                        state["live_pose"] = display_arr.tolist()
                     if target_arr is not None:
                         state["target_pose"] = target_arr.tolist()
                     if origin is not None:
                         state["reference_pose"] = origin.tolist()
-                    if live_arr is not None and origin is not None and target_arr is not None:
-                        state["live_workspace_components"]   = component_errors(live_arr, origin)
+                    if display_arr is not None and origin is not None and target_arr is not None:
+                        state["live_workspace_components"]   = component_errors(display_arr, origin)
                         state["target_workspace_components"] = component_errors(target_arr, origin)
                         state["workspace_component_errors"]  = workspace_component_errors(
-                            live_arr, target_arr, origin
+                            display_arr, target_arr, origin
                         )
                         state["workspace_component_aligned"] = {
                             name: abs(val) <= (
@@ -678,11 +703,13 @@ async def _new_study_handler(
                     session["condition_option"]      = data.get("condition_option")
                     session["condition_index"]       = data.get("condition_index")
                     session["target_set"]            = data.get("target_set")
+                    session["noise_magnitude"]        = data.get("noise_magnitude") or 0
                     session["modality_id"]           = data.get("modality_id")
                     session["session_id"]            = requested_session_id
                     session["persistent_state"]      = None
                     block_n_trials       = data.get("n_trials") or n_trials
                     include_preference   = data.get("include_preference", True)
+                    include_practice     = data.get("include_practice", True)
                     session["n_trials"]  = block_n_trials
 
                     if not session["session_id"] or not session["participant_id"]:
@@ -696,6 +723,7 @@ async def _new_study_handler(
                         modality_req, frame_req, BOX_ORIGIN, block_n_trials,
                         target_set=session["target_set"],
                         include_preference=include_preference,
+                        include_practice=include_practice,
                     )
                     blk.start()
                     session["block"] = blk

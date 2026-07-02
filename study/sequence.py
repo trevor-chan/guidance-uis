@@ -63,6 +63,7 @@ class SequenceGenerator:
         n_trials: int = 3,
         target_set: str | None = None,
         include_preference: bool = True,
+        include_practice: bool = True,
     ) -> Block:
         """Build a single study block seeded with a pre-set box origin.
 
@@ -78,14 +79,17 @@ class SequenceGenerator:
         fresh random target per trial).
 
         include_preference=False omits the PreferenceActivity (learning_curve,
-        noise, latency have no preference rating). The block's rebuild_trial
-        callback lets Block.resume_current_trial() rebuild a cancelled/paused
-        trial as a fresh attempt (a new random target when the block draws
-        random targets, the same fixed target otherwise).
+        noise, latency have no preference rating). include_practice=False
+        omits the PracticeActivity (noise's ramp blocks after the first
+        magnitude of each mode, which reuse the mode's initial practice). The
+        block's rebuild_trial callback lets Block.resume_current_trial()
+        rebuild a cancelled/paused trial as a fresh attempt (a new random
+        target when the block draws random targets, the same fixed target
+        otherwise).
         """
         needs_calibration = frame == "user"
         calibration = CalibrationActivity(self._fetcher) if needs_calibration else None
-        practice    = PracticeActivity(self._fetcher, origin)
+        practice    = PracticeActivity(self._fetcher, origin) if include_practice else None
         preference  = PreferenceActivity() if include_preference else None
         n       = n_trials
         fetcher = self._fetcher

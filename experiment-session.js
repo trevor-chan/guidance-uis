@@ -94,6 +94,12 @@
   const LEARNING_CURVE_MODES = ["M3", "M5"];
   const LEARNING_CURVE_TRIALS_PER_MODE = 25;
 
+  // TEMPORARY: NOISE mode list/order and magnitude ramp. Change here if the
+  // study design shifts. M3 = 2D/Patient, M5 = 3D/User.
+  const NOISE_MODES = ["M3", "M5"];
+  const NOISE_MAGNITUDES = [0, 1, 2, 4, 8];   // mm position AND degrees orientation
+  const NOISE_TRIALS_PER_MAGNITUDE = 5;
+
   function participantOption(participantId) {
     const match = String(participantId || "").trim().match(/^p?([1-7])$/i);
     return match ? Number(match[1]) : null;
@@ -121,10 +127,28 @@
     }));
   }
 
+  function buildNoiseConditions() {
+    const conditions = [];
+    NOISE_MODES.forEach(modalityId => {
+      NOISE_MAGNITUDES.forEach((magnitude, magIndex) => {
+        conditions.push({
+          index: conditions.length,
+          targetSet: null,
+          modalityId,
+          nTrials: NOISE_TRIALS_PER_MAGNITUDE,
+          noiseMagnitude: magnitude,
+          includePractice: magIndex === 0,
+          status: "pending",
+        });
+      });
+    });
+    return conditions;
+  }
+
   // Registry of experiment types. Each entry supplies a buildConditions()
-  // function and the flags a session of that type runs with. noise/latency
-  // slots are reserved here but not wired yet — buildConditions is null
-  // until those experiments are implemented.
+  // function and the flags a session of that type runs with. latency's slot
+  // is reserved here but not wired yet — buildConditions is null until that
+  // experiment is implemented.
   const EXPERIMENTS = Object.freeze({
     modality: {
       buildConditions: buildModalityConditions,
@@ -137,8 +161,8 @@
       usesMatrixOption: false,
     },
     noise: {
-      buildConditions: null,
-      flags: null,
+      buildConditions: buildNoiseConditions,
+      flags: Object.freeze({ practice: true, preference: false, pausable: false }),
       usesMatrixOption: false,
     },
     latency: {
@@ -258,6 +282,8 @@
       modality_id: details.modalityId,
       session_id: session.sessionId,
       n_trials: String(details.nTrials || MODALITY_TRIALS_PER_CONDITION),
+      noise_magnitude: details.noiseMagnitude != null ? String(details.noiseMagnitude) : "",
+      include_practice: details.includePractice === false ? "0" : "1",
     });
     return `${details.modality.page}?${params.toString()}`;
   }
@@ -275,6 +301,8 @@
       modality_id: context.modalityId,
       n_trials: context.nTrials,
       include_preference: flags.preference,
+      noise_magnitude: context.noiseMagnitude,
+      include_practice: context.includePractice,
     };
   }
 
@@ -290,6 +318,7 @@
     const modality = MODALITIES[modalityId];
     if (!modalityId || !modality) return null;
     const nTrialsParam = Number(params.get("n_trials"));
+    const noiseMagnitudeParam = params.get("noise_magnitude");
     return {
       session,
       participantId: params.get("participant") || session?.participantId || "",
@@ -302,6 +331,12 @@
       nTrials: (Number.isInteger(nTrialsParam) && nTrialsParam > 0)
         ? nTrialsParam
         : (condition?.nTrials || MODALITY_TRIALS_PER_CONDITION),
+      noiseMagnitude: noiseMagnitudeParam !== null && noiseMagnitudeParam !== ""
+        ? Number(noiseMagnitudeParam)
+        : (condition?.noiseMagnitude ?? null),
+      includePractice: params.has("include_practice")
+        ? params.get("include_practice") !== "0"
+        : (condition?.includePractice ?? true),
       modalityId,
       modality,
     };
@@ -365,7 +400,7 @@
           modality_id: condition.modalityId,
           modality: modality.display.toLowerCase(),
           frame: modality.frame,
-          noise: null,
+          noise: condition.noiseMagnitude ?? null,
           latency_ms: null,
           learning_curve: null,
         };
@@ -436,6 +471,8 @@
       targetSet: condition.target_set || null,
       modalityId: condition.modality_id,
       nTrials: template[index]?.nTrials || MODALITY_TRIALS_PER_CONDITION,
+      noiseMagnitude: condition.noise ?? template[index]?.noiseMagnitude ?? null,
+      includePractice: template[index]?.includePractice ?? true,
       status: condition.status,
       completedTrials: Number(condition.completed_trials || 0),
       completedAt: condition.completed_at,

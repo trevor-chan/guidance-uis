@@ -715,7 +715,9 @@
         if (index === session.currentIndex) card.classList.add("active");
         const stepLabel = condition.targetSet
           ? `${condition.targetSet} · ${index + 1}/${totalConditions}`
-          : `${index + 1}/${totalConditions}`;
+          : condition.noiseMagnitude != null
+            ? `mag ${condition.noiseMagnitude} · ${index + 1}/${totalConditions}`
+            : `${index + 1}/${totalConditions}`;
         card.innerHTML = `
           <div class="condition-step">${stepLabel}</div>
           <div class="condition-id">${condition.modalityId}</div>
