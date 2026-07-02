@@ -8,37 +8,44 @@ trial_factory(origin) → list[TrialActivity] callback; Block expands its
 activity list the moment calibration returns done=True.
 """
 
-from typing import Callable
+from typing import Callable, Optional
 import numpy as np
 
 from .activities import Activity, CalibrationActivity, TrialActivity, PreferenceActivity, PracticeActivity
 
 
 class Block:
-    """Runs one condition: [Calibration?] → [Practice?] → Trial×N → Preference.
+    """Runs one condition: [Calibration?] → [Practice?] → Trial×N → [Preference?].
 
     calibration=None skips the calibration step; trials are expanded immediately
     from fallback_origin at start() time.
     practice=None skips the practice phase.
+    preference=None skips the preference phase (e.g. learning_curve/noise/latency).
+    require_ready=True gates every transition into a TrialActivity behind an
+    external confirm_ready() call (e.g. a participant-pressed "Start Trial"
+    button), instead of starting the trial immediately.
     """
 
     def __init__(
         self,
         calibration: CalibrationActivity | None,
         trial_factory: Callable[[np.ndarray], list[TrialActivity]],
-        preference: PreferenceActivity,
+        preference: Optional[PreferenceActivity],
         practice: PracticeActivity | None = None,
         fallback_origin: np.ndarray | None = None,
+        require_ready: bool = False,
     ) -> None:
         self._calibration = calibration
         self._practice = practice
         self._trial_factory = trial_factory
         self._preference = preference
         self._fallback_origin = fallback_origin
+        self._require_ready = require_ready
         self._activities: list[Activity] = []
         self._idx = 0
         self._done = False
         self._origin: np.ndarray | None = None
+        self._awaiting_ready = False
 
     # ── Public interface ──────────────────────────────────────────────────────
 
@@ -51,6 +58,7 @@ class Block:
         self._idx = 0
         self._done = False
         self._origin = None
+        self._awaiting_ready = False
         if self._calibration is not None:
             # Lazy expansion: start with calibration only; trials added after origin known.
             self._activities = [self._calibration]
@@ -60,8 +68,13 @@ class Block:
             self._origin = origin
             trials = self._trial_factory(origin) if origin is not None else []
             practice_part = [self._practice] if self._practice is not None else []
-            self._activities = practice_part + trials + [self._preference]
-        self._activities[0].start()
+            preference_part = [self._preference] if self._preference is not None else []
+            self._activities = practice_part + trials + preference_part
+        first = self._activities[0]
+        if self._require_ready and isinstance(first, TrialActivity):
+            self._awaiting_ready = True
+        else:
+            first.start()
 
     @property
     def done(self) -> bool:
@@ -89,7 +102,8 @@ class Block:
         Keys:
           block_done     bool   — True once all activities have finished
           activity_index int    — index of the activity that just stepped
-          activity_type  str    — "calibration" | "trial" | "preference" | "done"
+          activity_type  str    — "calibration" | "trial" | "preference" |
+                                   "await_ready" | "done"
           trial_index    int|None — 0-based trial number (None outside a trial)
           data           dict   — the activity's own step() return value
         """
@@ -103,6 +117,18 @@ class Block:
             }
 
         current_idx = self._idx
+
+        if self._awaiting_ready:
+            # Gated on an external confirm_ready(); do not step the unstarted
+            # trial's clock. current_activity still exposes its target_pose.
+            return {
+                "block_done": False,
+                "activity_index": current_idx,
+                "activity_type": "await_ready",
+                "trial_index": self._trial_index_at(current_idx),
+                "data": {"done": False},
+            }
+
         current = self._activities[current_idx]
         data = current.step()
 
@@ -114,15 +140,20 @@ class Block:
                     self._origin = origin
                     trials = self._trial_factory(origin)
                     practice_part = [self._practice] if self._practice is not None else []
+                    preference_part = [self._preference] if self._preference is not None else []
                     self._activities = (
-                        [self._calibration] + practice_part + trials + [self._preference]
+                        [self._calibration] + practice_part + trials + preference_part
                     )
 
             self._idx += 1
             if self._idx >= len(self._activities):
                 self._done = True
             else:
-                self._activities[self._idx].start()
+                nxt = self._activities[self._idx]
+                if self._require_ready and isinstance(nxt, TrialActivity):
+                    self._awaiting_ready = True
+                else:
+                    nxt.start()
 
         return {
             "block_done": self._done,
@@ -131,6 +162,12 @@ class Block:
             "trial_index": self._trial_index_at(current_idx),
             "data": data,
         }
+
+    def confirm_ready(self) -> None:
+        """Start the pending trial after an external ready confirmation."""
+        if self._awaiting_ready:
+            self._awaiting_ready = False
+            self._activities[self._idx].start()
 
     # ── Helpers ───────────────────────────────────────────────────────────────
 

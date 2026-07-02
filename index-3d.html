@@ -285,6 +285,11 @@
         <p class="study-prompt-3d">Up to 1 minute of free practice. Move the probe freely.<br>Press Ready when comfortable.</p>
         <button class="study-card-btn-3d" id="btn-3d-practice-done">Ready</button>
       </div>
+      <div class="study-phase-3d" id="s3-ready">
+        <div class="study-heading-3d">Study Mode — Ready?</div>
+        <p class="study-prompt-3d" id="study-ready-label-3d">Trial 1 of 25</p>
+        <button class="study-card-btn-3d" id="btn-3d-start-trial">Start Trial</button>
+      </div>
       <div class="study-phase-3d" id="s3-trial">
         <div class="study-heading-3d">Study Mode</div>
         <p id="study-trial-label-3d">Trial 1 of 3</p>
@@ -686,7 +691,7 @@
     }
 
     // ── Study renderer (3D) ──────────────────────────────────────────────────
-    const _s3Phases = ["s3-cal", "s3-practice", "s3-trial", "s3-pref", "s3-done"];
+    const _s3Phases = ["s3-cal", "s3-practice", "s3-ready", "s3-trial", "s3-pref", "s3-done"];
     const _scoreboard3 = document.querySelector(".scoreboard").closest(".card");
     const _controls3   = document.querySelector(".controls").closest(".card");
     const _studyCard3  = document.getElementById("study-card-3d");
@@ -707,6 +712,12 @@
           (_studyFrame3 === "user") ? "block" : "none";
       } else if (act === "practice") {
         document.getElementById("s3-practice").style.display = "block";
+      } else if (act === "await_ready") {
+        document.getElementById("s3-ready").style.display = "block";
+        const total = d.n_trials ?? 3;
+        const label = d.target_label ? ` (${d.target_label})` : "";
+        document.getElementById("study-ready-label-3d").textContent =
+          `Trial ${(d.trial_index ?? 0) + 1} of ${total}${label}`;
       } else if (act === "trial") {
         document.getElementById("s3-trial").style.display = "block";
         const total = d.n_trials ?? 3;
@@ -954,6 +965,8 @@
       () => send({ cmd: "calibrate" }));
     document.getElementById("btn-3d-practice-done").addEventListener("click",
       () => send({ cmd: "practice_done" }));
+    document.getElementById("btn-3d-start-trial").addEventListener("click",
+      () => send({ cmd: "ready" }));
     document.querySelectorAll("#rating-row-3d button").forEach(btn => {
       btn.addEventListener("click", () => {
         send({ cmd: "rate", rating: parseInt(btn.dataset.r, 10) });

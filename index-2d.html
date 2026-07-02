@@ -290,6 +290,12 @@
         <p class="study-prompt">Up to 1 minute of free practice. Move the probe freely.<br>Press Ready when comfortable.</p>
         <button class="study-card-btn" id="btn-2d-practice-done">Ready</button>
       </div>
+      <!-- Ready-gate phase: shown before each trial when the experiment requires it -->
+      <div class="study-phase" id="s2-ready">
+        <div class="study-heading">Study Mode — Ready?</div>
+        <p class="study-prompt" id="study-ready-label-2d">Trial 1 of 25</p>
+        <button class="study-card-btn" id="btn-2d-start-trial">Start Trial</button>
+      </div>
       <!-- Trial phase -->
       <div class="study-phase" id="s2-trial">
         <div class="study-heading">Study Mode</div>
@@ -841,7 +847,7 @@
     }
 
     // ── Study renderer ──────────────────────────────────────────────────────────
-    const _s2Phases = ["s2-cal", "s2-practice", "s2-trial", "s2-pref", "s2-done"];
+    const _s2Phases = ["s2-cal", "s2-practice", "s2-ready", "s2-trial", "s2-pref", "s2-done"];
     const _scoreboard = document.querySelector(".scoreboard").closest(".card");
     const _controls   = document.querySelector(".controls").closest(".card");
     const _studyCard  = document.getElementById("study-card");
@@ -863,6 +869,12 @@
           (_studyFrame2 === "user") ? "block" : "none";
       } else if (act === "practice") {
         document.getElementById("s2-practice").style.display = "block";
+      } else if (act === "await_ready") {
+        document.getElementById("s2-ready").style.display = "block";
+        const total = d.n_trials ?? 3;
+        const label = d.target_label ? ` (${d.target_label})` : "";
+        document.getElementById("study-ready-label-2d").textContent =
+          `Trial ${(d.trial_index ?? 0) + 1} of ${total}${label}`;
       } else if (act === "trial") {
         document.getElementById("s2-trial").style.display = "block";
         const total = d.n_trials ?? 3;
@@ -1041,6 +1053,8 @@
       () => send({ cmd: "calibrate" }));
     document.getElementById("btn-2d-practice-done").addEventListener("click",
       () => send({ cmd: "practice_done" }));
+    document.getElementById("btn-2d-start-trial").addEventListener("click",
+      () => send({ cmd: "ready" }));
     document.querySelectorAll("#rating-row-2d button").forEach(btn => {
       btn.addEventListener("click", () => {
         send({ cmd: "rate", rating: parseInt(btn.dataset.r, 10) });

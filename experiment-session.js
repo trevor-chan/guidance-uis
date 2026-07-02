@@ -86,30 +86,96 @@
     Object.freeze(["M2", "M3", "M4", "M5", "M6", "M7", "M1"]),
   ]);
 
+  const MODALITY_TRIALS_PER_CONDITION = 3;
+
+  // TEMPORARY: learning_curve mode list/order. Change here if the study
+  // design shifts. IDs reference MODALITIES above (M3 = 2D/Patient,
+  // M5 = 3D/User); order is fixed for every participant (no rotation).
+  const LEARNING_CURVE_MODES = ["M3", "M5"];
+  const LEARNING_CURVE_TRIALS_PER_MODE = 25;
+
   function participantOption(participantId) {
     const match = String(participantId || "").trim().match(/^p?([1-7])$/i);
     return match ? Number(match[1]) : null;
   }
 
-  function buildConditions(optionNumber) {
+  function buildModalityConditions(optionNumber) {
     const order = OPTION_ORDERS[optionNumber - 1];
     if (!order) throw new Error("Condition option must be between 1 and 7.");
     return order.map((modalityId, index) => ({
       index,
       targetSet: `S${index + 1}`,
       modalityId,
+      nTrials: MODALITY_TRIALS_PER_CONDITION,
       status: "pending",
     }));
   }
 
+  function buildLearningCurveConditions() {
+    return LEARNING_CURVE_MODES.map((modalityId, index) => ({
+      index,
+      targetSet: null,
+      modalityId,
+      nTrials: LEARNING_CURVE_TRIALS_PER_MODE,
+      status: "pending",
+    }));
+  }
+
+  // Registry of experiment types. Each entry supplies a buildConditions()
+  // function and the flags a session of that type runs with. noise/latency
+  // slots are reserved here but not wired yet — buildConditions is null
+  // until those experiments are implemented.
+  const EXPERIMENTS = Object.freeze({
+    modality: {
+      buildConditions: buildModalityConditions,
+      flags: Object.freeze({ practice: true, preference: true, readyGate: false }),
+      usesMatrixOption: true,
+    },
+    learning_curve: {
+      buildConditions: buildLearningCurveConditions,
+      flags: Object.freeze({ practice: true, preference: false, readyGate: true }),
+      usesMatrixOption: false,
+    },
+    noise: {
+      buildConditions: null,
+      flags: null,
+      usesMatrixOption: false,
+    },
+    latency: {
+      buildConditions: null,
+      flags: null,
+      usesMatrixOption: false,
+    },
+  });
+
+  function buildConditions(optionNumber) {
+    // Retained for backward compatibility: always the modality-matrix build.
+    return buildModalityConditions(optionNumber);
+  }
+
   function createSession(participantId, optionNumber, metadata = {}) {
     const normalizedId = String(participantId || "").trim().toUpperCase();
-    const option = Number(optionNumber);
-    const linkedOption = participantOption(normalizedId);
     if (!normalizedId) throw new Error("Enter a participant ID.");
-    if (!OPTION_ORDERS[option - 1]) throw new Error("Select condition option 1-7.");
-    if (linkedOption && linkedOption !== option) {
-      throw new Error(`Participant ${normalizedId} is linked to Option ${linkedOption}.`);
+
+    const experimentCondition = metadata.experimentCondition || "modality";
+    const experiment = EXPERIMENTS[experimentCondition];
+    if (!experiment) throw new Error(`Unknown experiment condition: ${experimentCondition}`);
+    if (!experiment.buildConditions) {
+      throw new Error(`Experiment "${experimentCondition}" is not implemented yet.`);
+    }
+
+    let option = null;
+    let conditions;
+    if (experiment.usesMatrixOption) {
+      option = Number(optionNumber);
+      const linkedOption = participantOption(normalizedId);
+      if (!OPTION_ORDERS[option - 1]) throw new Error("Select condition option 1-7.");
+      if (linkedOption && linkedOption !== option) {
+        throw new Error(`Participant ${normalizedId} is linked to Option ${linkedOption}.`);
+      }
+      conditions = experiment.buildConditions(option);
+    } else {
+      conditions = experiment.buildConditions();
     }
 
     const session = {
@@ -118,9 +184,10 @@
       participantId: normalizedId,
       participantName: String(metadata.participantName || "").trim(),
       examinerName: String(metadata.examinerName || "").trim(),
-      experimentCondition: metadata.experimentCondition || "modality",
+      experimentCondition,
       option,
-      conditions: buildConditions(option),
+      flags: experiment.flags,
+      conditions,
       currentIndex: 0,
       boxSet: false,
       startedAt: new Date().toISOString(),
@@ -185,11 +252,12 @@
       study: "1",
       frame: details.modality.frame,
       participant: session.participantId,
-      option: String(session.option),
+      option: session.option != null ? String(session.option) : "",
       condition: String(details.index + 1),
-      target_set: details.targetSet,
+      target_set: details.targetSet || "",
       modality_id: details.modalityId,
       session_id: session.sessionId,
+      n_trials: String(details.nTrials || MODALITY_TRIALS_PER_CONDITION),
     });
     return `${details.modality.page}?${params.toString()}`;
   }
@@ -197,13 +265,17 @@
   function startBlockMetadata() {
     const context = contextForLocation();
     if (!context) return {};
+    const flags = context.session?.flags || { practice: true, preference: true, readyGate: false };
     return {
       participant_id: context.participantId,
       session_id: context.sessionId,
       condition_option: context.option,
       condition_index: context.conditionNumber,
-      target_set: context.targetSet,
+      target_set: context.targetSet || null,
       modality_id: context.modalityId,
+      n_trials: context.nTrials,
+      include_preference: flags.preference,
+      require_ready: flags.readyGate,
     };
   }
 
@@ -218,13 +290,19 @@
     const modalityId = params.get("modality_id") || condition?.modalityId;
     const modality = MODALITIES[modalityId];
     if (!modalityId || !modality) return null;
+    const nTrialsParam = Number(params.get("n_trials"));
     return {
+      session,
       participantId: params.get("participant") || session?.participantId || "",
       sessionId: params.get("session_id") || session?.sessionId || "",
       option: Number(params.get("option")) || session?.option || null,
       conditionIndex,
       conditionNumber: conditionIndex + 1,
+      totalConditions: session?.conditions?.length || null,
       targetSet: params.get("target_set") || condition?.targetSet || "",
+      nTrials: (Number.isInteger(nTrialsParam) && nTrialsParam > 0)
+        ? nTrialsParam
+        : (condition?.nTrials || MODALITY_TRIALS_PER_CONDITION),
       modalityId,
       modality,
     };
@@ -239,11 +317,11 @@
     }
     element.textContent = [
       context.participantId,
-      `Option ${context.option}`,
-      `Condition ${context.conditionNumber} of 7`,
-      `${context.targetSet} / ${context.modalityId}`,
+      context.option != null ? `Option ${context.option}` : null,
+      `Condition ${context.conditionNumber} of ${context.totalConditions || "?"}`,
+      context.targetSet ? `${context.targetSet} / ${context.modalityId}` : context.modalityId,
       context.modality.label,
-    ].join("  |  ");
+    ].filter(Boolean).join("  |  ");
   }
 
   function completeConditionFromLocation() {
@@ -339,10 +417,26 @@
   function restorePersistentSession(persistentState) {
     if (!persistentState?.session) return null;
     const savedSession = persistentState.session;
+    const experimentCondition = savedSession.experiment_condition || "modality";
+    const experiment = EXPERIMENTS[experimentCondition];
+    // Re-derive nTrials/flags from the registry (not persisted in the DB
+    // conditions table) by rebuilding the same template this experiment
+    // type would produce, then overlaying it on the saved condition rows.
+    let template = [];
+    try {
+      if (experiment?.buildConditions) {
+        template = experiment.usesMatrixOption
+          ? experiment.buildConditions(Number(savedSession.condition_option))
+          : experiment.buildConditions();
+      }
+    } catch (_error) {
+      template = [];
+    }
     const conditions = (persistentState.conditions || []).map((condition, index) => ({
       index,
-      targetSet: condition.target_set,
+      targetSet: condition.target_set || null,
       modalityId: condition.modality_id,
+      nTrials: template[index]?.nTrials || MODALITY_TRIALS_PER_CONDITION,
       status: condition.status,
       completedTrials: Number(condition.completed_trials || 0),
       completedAt: condition.completed_at,
@@ -354,8 +448,9 @@
       participantId: savedSession.participant_id,
       participantName: savedSession.participant_name || "",
       examinerName: savedSession.examiner_name || "",
-      experimentCondition: savedSession.experiment_condition || "modality",
+      experimentCondition,
       option: savedSession.condition_option,
+      flags: experiment?.flags || { practice: true, preference: true, readyGate: false },
       conditions,
       currentIndex: firstIncomplete === -1 ? conditions.length : firstIncomplete,
       boxSet: Boolean(persistentState.has_box_pose),
@@ -386,6 +481,8 @@
   window.ExperimentSession = Object.freeze({
     MODALITIES,
     OPTION_ORDERS,
+    EXPERIMENTS,
+    LEARNING_CURVE_MODES,
     participantOption,
     buildConditions,
     createSession,

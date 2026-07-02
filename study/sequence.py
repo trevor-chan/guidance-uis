@@ -62,6 +62,8 @@ class SequenceGenerator:
         origin: np.ndarray,
         n_trials: int = 3,
         target_set: str | None = None,
+        include_preference: bool = True,
+        require_ready: bool = False,
     ) -> Block:
         """Build a single study block seeded with a pre-set box origin.
 
@@ -72,12 +74,19 @@ class SequenceGenerator:
         target_set (e.g. "S1"-"S7") selects the block's 3 trial targets from
         the committed T1-T21 pool via study.targets.TARGET_SETS, in fixed
         ascending order, so every participant sees identical targets. Falls
-        back to random_study_target when target_set is unset (e.g. legacy 1D).
+        back to random_study_target when target_set is unset (e.g. legacy 1D
+        and non-modality experiments like learning_curve, which sample a
+        fresh random target per trial).
+
+        include_preference=False omits the PreferenceActivity (learning_curve,
+        noise, latency have no preference rating). require_ready=True gates
+        every trial behind a participant-confirmed "ready" signal (see
+        Block.require_ready).
         """
         needs_calibration = frame == "user"
         calibration = CalibrationActivity(self._fetcher) if needs_calibration else None
         practice    = PracticeActivity(self._fetcher, origin)
-        preference  = PreferenceActivity()
+        preference  = PreferenceActivity() if include_preference else None
         n       = n_trials
         fetcher = self._fetcher
         target_ids = TARGET_SETS.get(target_set) if target_set else None
@@ -100,6 +109,7 @@ class SequenceGenerator:
             preference,
             practice=practice,
             fallback_origin=origin,
+            require_ready=require_ready,
         )
 
     def make_blocks(self) -> list[Block]:

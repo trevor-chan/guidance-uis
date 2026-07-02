@@ -324,7 +324,7 @@
             <label class="field-label" for="participant-id">Participant ID</label>
             <input class="setup-input" id="participant-id" autocomplete="off"
                    placeholder="P1" maxlength="12">
-            <p class="helper">Current protocol IDs P1-P7 automatically select the matching matrix row.</p>
+            <p class="helper" id="participant-helper">Current protocol IDs P1-P7 automatically select the matching matrix row.</p>
 
             <div class="setup-field">
               <label class="field-label" for="participant-name">Participant full name</label>
@@ -354,7 +354,7 @@
             </ul>
           </div>
 
-          <div>
+          <div id="option-grid-wrap">
             <span class="field-label">Condition matrix option</span>
             <div class="option-grid" id="option-grid"></div>
           </div>
@@ -392,7 +392,7 @@
               <span class="tag" id="participant-tag"></span>
               <span class="tag" id="option-tag"></span>
               <span class="tag" id="storage-tag"></span>
-              <span class="tag">3 trials per modality</span>
+              <span class="tag" id="trials-tag"></span>
             </div>
           </div>
           <div class="progress-copy">
@@ -445,9 +445,9 @@
             <div class="workflow-step">
               <div class="workflow-index">Step 3</div>
               <h3>Data collection</h3>
-              <p>Run 3 target trials. Match within 5 mm and 5 degrees; each trial times out at 1 minute.</p>
+              <p id="data-collection-copy">Run 3 target trials. Match within 5 mm and 5 degrees; each trial times out at 1 minute.</p>
             </div>
-            <div class="workflow-step">
+            <div class="workflow-step" id="preference-step">
               <div class="workflow-index">Step 4</div>
               <h3>Preference</h3>
               <p>Rate the effectiveness of the visual interface from 1 to 5.</p>
@@ -457,7 +457,7 @@
       </div>
 
       <div class="panel completion" id="completion-panel" hidden>
-        <h2>All seven conditions complete</h2>
+        <h2 id="completion-title">All conditions complete</h2>
         <p>Thank the participant and complete reimbursement or closing procedures.</p>
         <button class="secondary-btn" id="finish-session-btn">Finish session</button>
       </div>
@@ -470,6 +470,7 @@
     const {
       MODALITIES,
       OPTION_ORDERS,
+      EXPERIMENTS,
       participantOption,
       createSession,
       getSession,
@@ -494,6 +495,8 @@
     const examinerNameInput = document.getElementById("examiner-name");
     const experimentConditionInput = document.getElementById("experiment-condition");
     const optionGrid = document.getElementById("option-grid");
+    const optionGridWrap = document.getElementById("option-grid-wrap");
+    const participantHelper = document.getElementById("participant-helper");
     const prepareButton = document.getElementById("prepare-session-btn");
     const resumeButton = document.getElementById("resume-session-btn");
     const setupMessage = document.getElementById("setup-message");
@@ -551,7 +554,34 @@
       });
     }
 
+    function currentExperiment() {
+      return EXPERIMENTS[experimentConditionInput.value] || EXPERIMENTS.modality;
+    }
+
     function updateSetupState() {
+      const experiment = currentExperiment();
+      const usesMatrixOption = experiment.usesMatrixOption;
+      optionGridWrap.style.display = usesMatrixOption ? "" : "none";
+
+      if (!usesMatrixOption) {
+        selectedOption = null;
+        participantHelper.textContent = "Enter the participant ID for this session.";
+        const ready = Boolean(participantInput.value.trim()) && Boolean(experiment.buildConditions);
+        prepareButton.disabled = !ready;
+        resumeButton.disabled = !participantInput.value.trim();
+        setupMessage.className = "message";
+        if (!experiment.buildConditions) {
+          setupMessage.textContent = `Experiment "${experimentConditionInput.value}" is not implemented yet.`;
+        } else if (participantInput.value.trim()) {
+          setupMessage.textContent = "Ready to prepare this session.";
+          setupMessage.classList.add("ok");
+        } else {
+          setupMessage.textContent = "Enter a participant ID.";
+        }
+        return;
+      }
+
+      participantHelper.textContent = "Current protocol IDs P1-P7 automatically select the matching matrix row.";
       const linked = participantOption(participantInput.value);
       if (linked) selectedOption = linked;
       document.querySelectorAll(".option-btn").forEach(button => {
@@ -607,7 +637,7 @@
         }, "find_latest_session");
         const session = restorePersistentSession(response.persistent_state);
         if (!session) throw new Error("No saved session was found for this participant.");
-        selectedOption = Number(session.option);
+        selectedOption = session.option != null ? Number(session.option) : null;
         renderDashboard();
         showScreen(session.boxSet ? "dashboard" : "box");
       } catch (error) {
@@ -661,13 +691,18 @@
       }
 
       document.getElementById("participant-tag").textContent = `Participant ${session.participantId}`;
-      document.getElementById("option-tag").textContent = `Condition Option ${session.option}`;
+      document.getElementById("option-tag").textContent = session.option != null
+        ? `Condition Option ${session.option}`
+        : session.experimentCondition;
       const storage = session.persistentState;
       document.getElementById("storage-tag").textContent = storage
         ? `${storage.storageLayout} ${storage.storageBackend || "storage"} · ${(storage.exportFormats || []).join(", ") || "no export"}`
         : "storage pending";
       const completeCount = session.conditions.filter(item => item.status === "complete").length;
-      document.getElementById("progress-count").textContent = `${completeCount} / 7`;
+      const totalConditions = session.conditions.length;
+      document.getElementById("progress-count").textContent = `${completeCount} / ${totalConditions}`;
+      const trialsPerCondition = session.conditions[0]?.nTrials || 3;
+      document.getElementById("trials-tag").textContent = `${trialsPerCondition} trials per condition`;
 
       const strip = document.getElementById("condition-strip");
       strip.innerHTML = "";
@@ -678,10 +713,13 @@
         card.className = "condition-card";
         if (condition.status === "complete") card.classList.add("complete");
         if (index === session.currentIndex) card.classList.add("active");
+        const stepLabel = condition.targetSet
+          ? `${condition.targetSet} · ${index + 1}/${totalConditions}`
+          : `${index + 1}/${totalConditions}`;
         card.innerHTML = `
-          <div class="condition-step">${condition.targetSet} · ${index + 1}/7</div>
+          <div class="condition-step">${stepLabel}</div>
           <div class="condition-id">${condition.modalityId}</div>
-          <div class="condition-name">${details.modality.shortLabel}<br>${condition.completedTrials || 0}/3 trials saved</div>
+          <div class="condition-name">${details.modality.shortLabel}<br>${condition.completedTrials || 0}/${condition.nTrials || 3} trials saved</div>
         `;
         card.addEventListener("click", () => {
           selectCondition(index);
@@ -704,9 +742,10 @@
       const details = conditionDetails(condition);
       document.getElementById("current-title").textContent =
         `${condition.modalityId} · ${details.modality.label}`;
-      document.getElementById("current-description").textContent =
-        `Condition ${condition.index + 1} uses target set ${condition.targetSet} in the protocol matrix.`;
-      document.getElementById("current-target-set").textContent = condition.targetSet;
+      document.getElementById("current-description").textContent = condition.targetSet
+        ? `Condition ${condition.index + 1} uses target set ${condition.targetSet} in the protocol matrix.`
+        : `Condition ${condition.index + 1} of ${totalConditions} — ${condition.nTrials} fresh random targets.`;
+      document.getElementById("current-target-set").textContent = condition.targetSet || "Random (fresh per trial)";
       document.getElementById("current-modality-id").textContent = condition.modalityId;
       document.getElementById("current-display").textContent = details.modality.display;
       document.getElementById("current-frame").textContent =
@@ -718,6 +757,12 @@
       calibrationCopy.textContent = details.modality.needsCalibration
         ? `Capture the ${details.modality.frame} reference pose before practice.`
         : "No separate reference-frame calibration is required.";
+
+      const flags = session.flags || { preference: true, readyGate: false };
+      document.getElementById("data-collection-copy").textContent = flags.readyGate
+        ? `Run ${condition.nTrials} target trials, one at a time — press "Start Trial" before each. Match within 5 mm and 5 degrees; each trial times out at 1 minute.`
+        : `Run ${condition.nTrials} target trials. Match within 5 mm and 5 degrees; each trial times out at 1 minute.`;
+      document.getElementById("preference-step").style.display = flags.preference ? "" : "none";
 
       document.getElementById("start-condition-btn").onclick = () => {
         if (
@@ -757,6 +802,7 @@
 
     renderOptionButtons();
     participantInput.addEventListener("input", updateSetupState);
+    experimentConditionInput.addEventListener("change", updateSetupState);
     prepareButton.addEventListener("click", prepareSession);
     resumeButton.addEventListener("click", resumeSavedSession);
     setBoxButton.addEventListener("click", captureBox);

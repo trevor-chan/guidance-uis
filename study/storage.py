@@ -1321,6 +1321,14 @@ class ConditionRecorder:
         self.store.save_preference(self.run_id, rating)
         return self.store.finish_condition(self.run_id)
 
+    def finish(self) -> dict:
+        """Mark the condition run complete without a preference rating.
+
+        Used by experiments (learning_curve, noise, latency) that omit the
+        PreferenceActivity.
+        """
+        return self.store.finish_condition(self.run_id)
+
     def flush(self, trial_index: int | None) -> None:
         if trial_index is None or not self._buffer:
             return

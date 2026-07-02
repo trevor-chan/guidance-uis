@@ -401,6 +401,7 @@ async def _new_study_handler(
         "phase":                 "idle",       # idle|await_calibrate|running|await_preference|complete
         "calibrate_pending":     False,
         "practice_done_pending": False,
+        "ready_pending":         False,
         "pending_rating":        None,
         "preference_act":        None,
         "practice_act":          None,
@@ -456,6 +457,10 @@ async def _new_study_handler(
                     session["practice_done_pending"] = False
                     session["practice_act"].request_end()
 
+                if session["ready_pending"]:
+                    session["ready_pending"] = False
+                    block.confirm_ready()
+
                 block_data = block.step()
                 act_type   = block_data["activity_type"]
                 act_data   = block_data["data"]
@@ -472,7 +477,7 @@ async def _new_study_handler(
                     if hasattr(cur, "request_end"):
                         session["practice_act"] = cur
 
-                if act_type == "trial":
+                if act_type in ("trial", "await_ready"):
                     session["trial_index"] = block_data["trial_index"]
 
                 if isinstance(block.current_activity, PreferenceActivity):
@@ -480,6 +485,9 @@ async def _new_study_handler(
                     session["preference_act"] = block.current_activity
                 elif block.done:
                     session["phase"] = "complete"
+                    if recorder:
+                        result = recorder.finish()
+                        session["persistent_state"] = result["state"]
 
                 state = _study_blank(act_type, frame, modality, n, session["trial_index"])
                 state["linear"]          = act_data.get("linear")
@@ -488,7 +496,7 @@ async def _new_study_handler(
                 state["elapsed"]         = act_data.get("elapsed") or 0.0
                 state["hold_progress"]   = act_data.get("hold_progress", 0.0)
                 state["timed_out"]       = act_data.get("timed_out", False)
-                state["comp_calibrated"] = act_type in ("practice", "trial")
+                state["comp_calibrated"] = act_type in ("practice", "trial", "await_ready")
 
                 if modality in ("1d", "2d", "3d"):
                     live_arr = fetcher.get_pose()
@@ -499,7 +507,7 @@ async def _new_study_handler(
                         if hasattr(cur_act, "target_pose")
                         else origin
                     )
-                    if act_type == "trial":
+                    if act_type in ("trial", "await_ready"):
                         state["target_label"] = getattr(cur_act, "label", None)
                     state["source_mode"]    = fetcher.source_mode
                     state["source_label"]   = fetcher.source_label
@@ -655,6 +663,7 @@ async def _new_study_handler(
                     session["preference_act"]        = None
                     session["calibrate_pending"]     = False
                     session["practice_done_pending"] = False
+                    session["ready_pending"]         = False
                     session["pending_rating"]        = None
                     session["participant_id"]        = data.get("participant_id")
                     session["condition_option"]      = data.get("condition_option")
@@ -663,6 +672,10 @@ async def _new_study_handler(
                     session["modality_id"]           = data.get("modality_id")
                     session["session_id"]            = requested_session_id
                     session["persistent_state"]      = None
+                    block_n_trials       = data.get("n_trials") or n_trials
+                    include_preference   = data.get("include_preference", True)
+                    require_ready        = data.get("require_ready", False)
+                    session["n_trials"]  = block_n_trials
 
                     if not session["session_id"] or not session["participant_id"]:
                         await websocket.send(json.dumps({
@@ -672,8 +685,10 @@ async def _new_study_handler(
 
                     gen   = SequenceGenerator(fetcher)
                     blk   = gen.make_block(
-                        modality_req, frame_req, BOX_ORIGIN, n_trials,
+                        modality_req, frame_req, BOX_ORIGIN, block_n_trials,
                         target_set=session["target_set"],
+                        include_preference=include_preference,
+                        require_ready=require_ready,
                     )
                     blk.start()
                     session["block"] = blk
@@ -700,6 +715,9 @@ async def _new_study_handler(
 
                 elif cmd == "practice_done":
                     session["practice_done_pending"] = True
+
+                elif cmd == "ready":
+                    session["ready_pending"] = True
 
                 elif cmd == "rate":
                     rating = data.get("rating")
