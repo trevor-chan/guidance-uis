@@ -100,6 +100,12 @@
   const NOISE_MAGNITUDES = [0, 1, 2, 4, 8];   // mm position AND degrees orientation
   const NOISE_TRIALS_PER_MAGNITUDE = 5;
 
+  // TEMPORARY: LATENCY mode list/order and delay ramp. Change here if the
+  // study design shifts. M3 = 2D/Patient, M5 = 3D/User.
+  const LATENCY_MODES = ["M3", "M5"];
+  const LATENCY_MS = [50, 100, 200, 400, 800];   // display-only delay, milliseconds
+  const LATENCY_TRIALS_PER_MAGNITUDE = 5;
+
   function participantOption(participantId) {
     const match = String(participantId || "").trim().match(/^p?([1-7])$/i);
     return match ? Number(match[1]) : null;
@@ -145,10 +151,26 @@
     return conditions;
   }
 
+  function buildLatencyConditions() {
+    const conditions = [];
+    LATENCY_MODES.forEach(modalityId => {
+      LATENCY_MS.forEach((latencyMs, magIndex) => {
+        conditions.push({
+          index: conditions.length,
+          targetSet: null,
+          modalityId,
+          nTrials: LATENCY_TRIALS_PER_MAGNITUDE,
+          latencyMs,
+          includePractice: magIndex === 0,
+          status: "pending",
+        });
+      });
+    });
+    return conditions;
+  }
+
   // Registry of experiment types. Each entry supplies a buildConditions()
-  // function and the flags a session of that type runs with. latency's slot
-  // is reserved here but not wired yet — buildConditions is null until that
-  // experiment is implemented.
+  // function and the flags a session of that type runs with.
   const EXPERIMENTS = Object.freeze({
     modality: {
       buildConditions: buildModalityConditions,
@@ -166,8 +188,8 @@
       usesMatrixOption: false,
     },
     latency: {
-      buildConditions: null,
-      flags: null,
+      buildConditions: buildLatencyConditions,
+      flags: Object.freeze({ practice: true, preference: false, pausable: false }),
       usesMatrixOption: false,
     },
   });
@@ -283,6 +305,7 @@
       session_id: session.sessionId,
       n_trials: String(details.nTrials || MODALITY_TRIALS_PER_CONDITION),
       noise_magnitude: details.noiseMagnitude != null ? String(details.noiseMagnitude) : "",
+      latency_ms: details.latencyMs != null ? String(details.latencyMs) : "",
       include_practice: details.includePractice === false ? "0" : "1",
     });
     return `${details.modality.page}?${params.toString()}`;
@@ -302,6 +325,7 @@
       n_trials: context.nTrials,
       include_preference: flags.preference,
       noise_magnitude: context.noiseMagnitude,
+      latency_ms: context.latencyMs,
       include_practice: context.includePractice,
     };
   }
@@ -319,6 +343,7 @@
     if (!modalityId || !modality) return null;
     const nTrialsParam = Number(params.get("n_trials"));
     const noiseMagnitudeParam = params.get("noise_magnitude");
+    const latencyMsParam = params.get("latency_ms");
     return {
       session,
       participantId: params.get("participant") || session?.participantId || "",
@@ -334,6 +359,9 @@
       noiseMagnitude: noiseMagnitudeParam !== null && noiseMagnitudeParam !== ""
         ? Number(noiseMagnitudeParam)
         : (condition?.noiseMagnitude ?? null),
+      latencyMs: latencyMsParam !== null && latencyMsParam !== ""
+        ? Number(latencyMsParam)
+        : (condition?.latencyMs ?? null),
       includePractice: params.has("include_practice")
         ? params.get("include_practice") !== "0"
         : (condition?.includePractice ?? true),
@@ -401,7 +429,7 @@
           modality: modality.display.toLowerCase(),
           frame: modality.frame,
           noise: condition.noiseMagnitude ?? null,
-          latency_ms: null,
+          latency_ms: condition.latencyMs ?? null,
           learning_curve: null,
         };
       }),
@@ -472,6 +500,7 @@
       modalityId: condition.modality_id,
       nTrials: template[index]?.nTrials || MODALITY_TRIALS_PER_CONDITION,
       noiseMagnitude: condition.noise ?? template[index]?.noiseMagnitude ?? null,
+      latencyMs: condition.latency_ms ?? template[index]?.latencyMs ?? null,
       includePractice: template[index]?.includePractice ?? true,
       status: condition.status,
       completedTrials: Number(condition.completed_trials || 0),

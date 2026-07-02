@@ -2,6 +2,7 @@
 
 import argparse
 import asyncio
+from collections import deque
 from functools import partial
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 import json
@@ -70,6 +71,36 @@ def _apply_display_noise(pose: np.ndarray, magnitude: float | None) -> np.ndarra
     R_noise = _rot_x(rx) @ _rot_y(ry) @ _rot_z(rz)
     noisy[:3, :3] = R_noise @ pose[:3, :3]
     return noisy
+
+
+LATENCY_BUFFER_MAXLEN = 60  # 2s of history @ 30Hz — covers the 800ms max condition with margin
+
+
+def _apply_display_latency(
+    pose: np.ndarray, latency_ms: float | None, buffer: "deque[tuple[float, np.ndarray]]"
+) -> np.ndarray:
+    """Return a display-only pose delayed by latency_ms via a timestamped buffer.
+
+    Same principle as _apply_display_noise: only the DISPLAYED pose is touched.
+    Every call pushes (now, pose) onto buffer, then returns the newest buffered
+    pose whose timestamp is >= latency_ms old. latency_ms 0/None returns pose
+    immediately, unbuffered — every other experiment passes 0, so their
+    displayed pose is never delayed. Early in a block, before the buffer holds
+    latency_ms worth of history, returns the oldest pose available rather than
+    blocking.
+    """
+    if not latency_ms:
+        return pose
+    now = time.monotonic()
+    buffer.append((now, pose.copy()))
+    cutoff = now - latency_ms / 1000.0
+    selected = buffer[0][1]
+    for ts, buffered_pose in buffer:
+        if ts <= cutoff:
+            selected = buffered_pose
+        else:
+            break
+    return selected
 
 
 class FakePoseFetcher(LivePoseFetcher):
@@ -432,6 +463,8 @@ async def _new_study_handler(
         "condition_index":       None,
         "target_set":            None,
         "noise_magnitude":       0,
+        "latency_ms":            0,
+        "latency_buffer":        None,
         "modality_id":           None,
         "session_id":            None,
         "recorder":              None,
@@ -529,10 +562,12 @@ async def _new_study_handler(
 
                 if modality in ("1d", "2d", "3d"):
                     live_arr = fetcher.get_pose()
-                    display_arr = (
-                        _apply_display_noise(live_arr, session["noise_magnitude"])
-                        if live_arr is not None else None
-                    )
+                    display_arr = None
+                    if live_arr is not None:
+                        display_arr = _apply_display_latency(
+                            live_arr, session["latency_ms"], session["latency_buffer"]
+                        )
+                        display_arr = _apply_display_noise(display_arr, session["noise_magnitude"])
                     origin   = block.origin
                     cur_act  = block.current_activity
                     target_arr = (
@@ -704,6 +739,8 @@ async def _new_study_handler(
                     session["condition_index"]       = data.get("condition_index")
                     session["target_set"]            = data.get("target_set")
                     session["noise_magnitude"]        = data.get("noise_magnitude") or 0
+                    session["latency_ms"]            = data.get("latency_ms") or 0
+                    session["latency_buffer"]        = deque(maxlen=LATENCY_BUFFER_MAXLEN)
                     session["modality_id"]           = data.get("modality_id")
                     session["session_id"]            = requested_session_id
                     session["persistent_state"]      = None
