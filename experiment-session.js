@@ -266,10 +266,36 @@
         parsed.examinerName ||= "";
         saveSession(parsed);
       }
+      if (parsed.experimentCondition === "latency" && migrateStaleLatencyConditions(parsed)) {
+        saveSession(parsed);
+      }
       return parsed;
     } catch (_error) {
       return null;
     }
+  }
+
+  // Sessions created before LATENCY_MS moved from [50,100,200,400,800] to
+  // [0,75,225,525,1125] (+ a separate perceivedMs = injected + 75ms baseline)
+  // persisted the old raw values straight into localStorage. Conditions
+  // already run keep their real injected value — rewriting those would
+  // misrepresent what the participant actually experienced. Conditions not
+  // yet started are safe to repair in place so they pick up the current
+  // design instead of a stale one baked in at session-creation time.
+  function migrateStaleLatencyConditions(session) {
+    const fresh = buildLatencyConditions();
+    let changed = false;
+    session.conditions.forEach((condition, index) => {
+      if (condition.status !== "pending") return;
+      const template = fresh[index];
+      if (!template) return;
+      if (condition.latencyMs !== template.latencyMs || condition.perceivedMs !== template.perceivedMs) {
+        condition.latencyMs = template.latencyMs;
+        condition.perceivedMs = template.perceivedMs;
+        changed = true;
+      }
+    });
+    return changed;
   }
 
   function clearSession() {
@@ -506,8 +532,16 @@
       modalityId: condition.modality_id,
       nTrials: template[index]?.nTrials || MODALITY_TRIALS_PER_CONDITION,
       noiseMagnitude: condition.noise ?? template[index]?.noiseMagnitude ?? null,
-      latencyMs: condition.latency_ms ?? template[index]?.latencyMs ?? null,
-      perceivedMs: condition.perceived_ms ?? template[index]?.perceivedMs ?? null,
+      // For a condition never yet run, prefer the freshly-built template over
+      // a possibly-stale DB row (e.g. latency_ms/perceived_ms persisted by an
+      // older LATENCY_MS ramp before a design change). Once a condition has
+      // actually run, the DB value is the real recorded history and wins.
+      latencyMs: condition.status !== "pending"
+        ? (condition.latency_ms ?? template[index]?.latencyMs ?? null)
+        : (template[index]?.latencyMs ?? condition.latency_ms ?? null),
+      perceivedMs: condition.status !== "pending"
+        ? (condition.perceived_ms ?? template[index]?.perceivedMs ?? null)
+        : (template[index]?.perceivedMs ?? condition.perceived_ms ?? null),
       includePractice: template[index]?.includePractice ?? true,
       status: condition.status,
       completedTrials: Number(condition.completed_trials || 0),
