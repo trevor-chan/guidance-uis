@@ -448,7 +448,12 @@ class ExperimentRepository(Protocol):
     def start_practice(self, run_id: str) -> None: ...
     def finish_practice(self, run_id: str) -> None: ...
     def start_trial(
-        self, run_id: str, trial_index: int, target_pose: Any, start_pose: Any
+        self,
+        run_id: str,
+        trial_index: int,
+        target_pose: Any,
+        start_pose: Any,
+        trial_meta: dict | None = None,
     ) -> None: ...
     def append_trajectory_samples(
         self, run_id: str, trial_index: int, samples: Iterable[dict]
@@ -806,15 +811,19 @@ class SqliteExperimentRepository:
         trial_index: int,
         target_pose: Any,
         start_pose: Any,
+        trial_meta: dict | None = None,
     ) -> None:
         database_path, session_id, condition_index = self._run_location(run_id)
+        meta = trial_meta or {}
         with self._connect(database_path) as connection:
             connection.execute(
                 """
                 INSERT INTO trials (
                     run_id, trial_index, status, started_at,
-                    start_pose_json, target_pose_json
-                ) VALUES (?, ?, 'in_progress', ?, ?, ?)
+                    start_pose_json, target_pose_json,
+                    trial_noise, trial_latency_ms, trial_perceived_ms,
+                    trial_precision_linear_mm, trial_precision_angular_deg
+                ) VALUES (?, ?, 'in_progress', ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(run_id, trial_index) DO NOTHING
                 """,
                 (
@@ -823,6 +832,11 @@ class SqliteExperimentRepository:
                     utc_now(),
                     _json(start_pose),
                     _json(target_pose),
+                    meta.get("noise"),
+                    meta.get("latency_ms"),
+                    meta.get("perceived_ms"),
+                    meta.get("precision_linear_mm"),
+                    meta.get("precision_angular_deg"),
                 ),
             )
             self._event(
@@ -1262,6 +1276,11 @@ class SqliteExperimentRepository:
                 end_pose_json TEXT,
                 final_linear_m REAL,
                 final_angular_deg REAL,
+                trial_noise REAL,
+                trial_latency_ms REAL,
+                trial_perceived_ms REAL,
+                trial_precision_linear_mm REAL,
+                trial_precision_angular_deg REAL,
                 PRIMARY KEY (run_id, trial_index),
                 FOREIGN KEY (run_id) REFERENCES condition_runs(run_id)
             );
@@ -1325,6 +1344,20 @@ class SqliteExperimentRepository:
         }
         if "data_category" not in existing_session_columns:
             connection.execute("ALTER TABLE sessions ADD COLUMN data_category TEXT")
+
+        # Same idempotent pattern for trials predating the scrambled-block
+        # noise/latency/precision ramp, where the magnitude became a per-trial
+        # property instead of a per-condition one (see SequenceGenerator
+        # .make_block's trial_overrides).
+        existing_trial_columns = {
+            row[1] for row in connection.execute("PRAGMA table_info(trials)")
+        }
+        for column in (
+            "trial_noise", "trial_latency_ms", "trial_perceived_ms",
+            "trial_precision_linear_mm", "trial_precision_angular_deg",
+        ):
+            if column not in existing_trial_columns:
+                connection.execute(f"ALTER TABLE trials ADD COLUMN {column} REAL")
 
 
 @dataclass
@@ -1453,6 +1486,13 @@ class ConditionRecorder:
                 trial_index,
                 data.get("target_pose"),
                 data.get("live_pose"),
+                trial_meta={
+                    "noise": data.get("noise"),
+                    "latency_ms": data.get("latency_ms"),
+                    "perceived_ms": data.get("perceived_ms"),
+                    "precision_linear_mm": data.get("precision_linear_mm"),
+                    "precision_angular_deg": data.get("precision_angular_deg"),
+                },
             )
 
 

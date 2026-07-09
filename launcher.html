@@ -577,6 +577,31 @@
     let selectedOption = null;
     let selectedCategory = DEFAULT_DATA_CATEGORY;
 
+    // Noise/latency/precision conditions pool every magnitude/threshold into
+    // one scrambled block per mode (see experiment-session.js buildNoiseConditions
+    // et al.) — condition.trialPlan carries the per-trial ramp. These helpers
+    // summarize that ramp for the dashboard so the operator sees "N trials,
+    // X shuffled" instead of a single per-condition magnitude.
+    const SCRAMBLE_NOUN = { noise: "magnitudes", latency: "delays", precision: "thresholds" };
+
+    function trialPlanSummary(session, condition) {
+      const plan = condition.trialPlan;
+      if (!plan || !plan.length) return null;
+      if (session.experimentCondition === "noise") {
+        const mags = [...new Set(plan.map(t => t.noise))].sort((a, b) => a - b);
+        return `noise magnitude shuffled across ${mags.join(", ")} mm/deg`;
+      }
+      if (session.experimentCondition === "latency") {
+        const delays = [...new Set(plan.map(t => t.perceivedMs))].sort((a, b) => a - b);
+        return `perceived latency shuffled across ${delays.join(", ")} ms`;
+      }
+      if (session.experimentCondition === "precision") {
+        const thresholds = [...new Set(plan.map(t => `${t.precisionLinearMm}mm/${t.precisionAngularDeg}deg`))];
+        return `match threshold shuffled across ${thresholds.join(", ")}`;
+      }
+      return null;
+    }
+
     function requestStudyServer(message, expectedAck) {
       return new Promise((resolve, reject) => {
         const socket = new WebSocket(WS_URL);
@@ -817,18 +842,11 @@
         card.className = "condition-card";
         if (condition.status === "complete") card.classList.add("complete");
         if (index === session.currentIndex) card.classList.add("active");
-        const perceivedMs = condition.perceivedMs ?? (condition.latencyMs != null ? condition.latencyMs + 75 : null);
         const stepLabel = condition.targetSet
           ? `${condition.targetSet} · ${index + 1}/${totalConditions}`
-          : condition.noiseMagnitude != null
-            ? `mag ${condition.noiseMagnitude} · ${index + 1}/${totalConditions}`
-            : condition.latencyMs != null
-              ? condition.latencyMs === 0
-                ? `baseline (~${perceivedMs}ms) · ${index + 1}/${totalConditions}`
-                : `${perceivedMs}ms · ${index + 1}/${totalConditions}`
-              : condition.precisionLinearMm != null
-                ? `${condition.precisionLinearMm}mm/${condition.precisionAngularDeg}deg · ${index + 1}/${totalConditions}`
-                : `${index + 1}/${totalConditions}`;
+          : condition.trialPlan
+            ? `${condition.trialPlan.length} trials, ${SCRAMBLE_NOUN[session.experimentCondition] || "values"} shuffled · ${index + 1}/${totalConditions}`
+            : `${index + 1}/${totalConditions}`;
         card.innerHTML = `
           <div class="condition-step">${stepLabel}</div>
           <div class="condition-id">${condition.modalityId}</div>
@@ -855,9 +873,12 @@
       const details = conditionDetails(condition);
       document.getElementById("current-title").textContent =
         `${condition.modalityId} · ${details.modality.label}`;
+      const planSummary = trialPlanSummary(session, condition);
       document.getElementById("current-description").textContent = condition.targetSet
         ? `Condition ${condition.index + 1} uses target set ${condition.targetSet} in the protocol matrix.`
-        : `Condition ${condition.index + 1} of ${totalConditions} — ${condition.nTrials} fresh random targets.`;
+        : planSummary
+          ? `Condition ${condition.index + 1} of ${totalConditions} — ${condition.nTrials} trials; ${planSummary}.`
+          : `Condition ${condition.index + 1} of ${totalConditions} — ${condition.nTrials} fresh random targets.`;
       document.getElementById("current-target-set").textContent = condition.targetSet || "Random (fresh per trial)";
       document.getElementById("current-modality-id").textContent = condition.modalityId;
       document.getElementById("current-display").textContent = details.modality.display;
@@ -872,11 +893,12 @@
         : "No separate reference-frame calibration is required.";
 
       const flags = session.flags || { preference: true, pausable: false };
-      const thresholdLinearMm = condition.precisionLinearMm ?? 5;
-      const thresholdAngularDeg = condition.precisionAngularDeg ?? 5;
+      const matchPhrase = (session.experimentCondition === "precision" && planSummary)
+        ? planSummary.charAt(0).toUpperCase() + planSummary.slice(1)
+        : "Match within 5 mm and 5 degrees";
       document.getElementById("data-collection-copy").textContent = flags.pausable
-        ? `Run ${condition.nTrials} target trials. Match within ${thresholdLinearMm} mm and ${thresholdAngularDeg} degrees; each trial times out at 90 seconds. Press "Pause" during a trial to cancel it and restart with a fresh target.`
-        : `Run ${condition.nTrials} target trials. Match within ${thresholdLinearMm} mm and ${thresholdAngularDeg} degrees; each trial times out at 90 seconds.`;
+        ? `Run ${condition.nTrials} target trials. ${matchPhrase}; each trial times out at 90 seconds. Press "Pause" during a trial to cancel it and restart with a fresh target.`
+        : `Run ${condition.nTrials} target trials. ${matchPhrase}; each trial times out at 90 seconds.`;
       document.getElementById("preference-step").style.display = flags.preference ? "" : "none";
 
       document.getElementById("start-condition-btn").onclick = () => {

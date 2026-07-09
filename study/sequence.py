@@ -64,8 +64,7 @@ class SequenceGenerator:
         target_set: str | None = None,
         include_preference: bool = True,
         include_practice: bool = True,
-        linear_tol: float | None = None,
-        angular_tol: float | None = None,
+        trial_overrides: list[dict] | None = None,
     ) -> Block:
         """Build a single study block seeded with a pre-set box origin.
 
@@ -81,40 +80,40 @@ class SequenceGenerator:
         fresh random target per trial).
 
         include_preference=False omits the PreferenceActivity (learning_curve,
-        noise, latency have no preference rating). include_practice=False
-        omits the PracticeActivity (noise's ramp blocks after the first
-        magnitude of each mode, which reuse the mode's initial practice). The
-        block's rebuild_trial callback lets Block.resume_current_trial()
-        rebuild a cancelled/paused trial as a fresh attempt (a new random
-        target when the block draws random targets, the same fixed target
-        otherwise).
+        noise, latency, precision have no preference rating). include_practice=
+        False omits the PracticeActivity. The block's rebuild_trial callback
+        lets Block.resume_current_trial() rebuild a cancelled/paused trial as
+        a fresh attempt (a new random target when the block draws random
+        targets, the same fixed target otherwise) — trial_overrides[trial_index]
+        still applies to the rebuilt attempt, so a pause/resume keeps that
+        trial slot's magnitude.
 
-        linear_tol/angular_tol override the match threshold (meters/degrees)
-        for every trial in this block — used by the precision experiment's
-        per-condition ramp. None (the default, and every other experiment)
-        falls through to TrialActivity's own defaults (5mm/5deg).
+        trial_overrides, when given, is a list of per-trial-index dicts (one
+        entry per trial, aligned by index — its length becomes n_trials) whose
+        keys are forwarded straight to TrialActivity's constructor: noise,
+        latency_ms, perceived_ms, precision_linear_mm, precision_angular_deg,
+        linear_tol, angular_tol. This is how the noise/latency/precision
+        experiments' scrambled blocks give each trial its own ramp value —
+        see the "scramble trials within each mode" design. None (every other
+        experiment) leaves every trial at TrialActivity's defaults.
         """
         needs_calibration = frame == "user"
         calibration = CalibrationActivity(self._fetcher) if needs_calibration else None
         practice    = PracticeActivity(self._fetcher, origin) if include_practice else None
         preference  = PreferenceActivity() if include_preference else None
-        n       = n_trials
+        n       = len(trial_overrides) if trial_overrides is not None else n_trials
         fetcher = self._fetcher
         target_ids = TARGET_SETS.get(target_set) if target_set else None
-        tol_kwargs: dict = {}
-        if linear_tol is not None:
-            tol_kwargs["linear_tol"] = linear_tol
-        if angular_tol is not None:
-            tol_kwargs["angular_tol"] = angular_tol
 
         def _make_trial(trial_index: int) -> TrialActivity:
+            overrides = trial_overrides[trial_index] if trial_overrides else {}
             # Always sample from the set-box pose; calibration sets camera only.
             if target_ids:
                 target_id = target_ids[trial_index]
                 return TrialActivity(
-                    fetcher, fixed_study_target(origin, target_id), label=target_id, **tol_kwargs
+                    fetcher, fixed_study_target(origin, target_id), label=target_id, **overrides
                 )
-            return TrialActivity(fetcher, random_study_target(origin), **tol_kwargs)
+            return TrialActivity(fetcher, random_study_target(origin), **overrides)
 
         def trial_factory(_effective_origin: np.ndarray) -> list[TrialActivity]:
             return [_make_trial(i) for i in range(n)]

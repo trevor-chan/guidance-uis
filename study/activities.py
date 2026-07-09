@@ -84,6 +84,11 @@ class TrialActivity(Activity):
         angular_tol: float = 5.0,
         hold_duration: float = HOLD_DURATION,
         label: str | None = None,
+        noise: float | None = None,
+        latency_ms: float | None = None,
+        perceived_ms: float | None = None,
+        precision_linear_mm: float | None = None,
+        precision_angular_deg: float | None = None,
     ) -> None:
         # angular_tol defaults to 5° — matches trial.ANGULAR_TOLERANCE.
         self._trial = Trial(fetcher, target_pose, linear_tol=linear_tol, angular_tol=angular_tol)
@@ -92,6 +97,16 @@ class TrialActivity(Activity):
         self._achieved = False
         self._done = False
         self.label = label  # e.g. "T5" for fixed study targets; None otherwise
+        # Per-trial ramp metadata for the noise/latency/precision experiments'
+        # scrambled blocks (see SequenceGenerator.make_block's trial_overrides).
+        # None for every other experiment/trial — server.py and persistence
+        # both read these straight off the active TrialActivity so display
+        # perturbation and the recorded trial_* columns never disagree.
+        self.noise = noise
+        self.latency_ms = latency_ms
+        self.perceived_ms = perceived_ms
+        self.precision_linear_mm = precision_linear_mm
+        self.precision_angular_deg = precision_angular_deg
 
     @property
     def target_pose(self) -> np.ndarray:
@@ -102,6 +117,18 @@ class TrialActivity(Activity):
         self._hold_start = None
         self._achieved = False
         self._done = False
+
+    def _meta(self) -> dict:
+        return {
+            "label": self.label,
+            "noise": self.noise,
+            "latency_ms": self.latency_ms,
+            "perceived_ms": self.perceived_ms,
+            "precision_linear_mm": self.precision_linear_mm,
+            "precision_angular_deg": self.precision_angular_deg,
+            "linear_tol": self._trial.linear_tol,
+            "angular_tol": self._trial.angular_tol,
+        }
 
     def step(self) -> dict:
         if self._done:
@@ -117,6 +144,7 @@ class TrialActivity(Activity):
                 "live_pose": None,
                 "target_pose": self.target_pose.tolist(),
                 "components": None,
+                **self._meta(),
             }
 
         state = self._trial.step()
@@ -149,6 +177,7 @@ class TrialActivity(Activity):
             "live_pose": state["live_pose"],
             "target_pose": self.target_pose.tolist(),
             "components": state["components"],
+            **self._meta(),
         }
 
 

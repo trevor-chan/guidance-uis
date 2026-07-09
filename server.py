@@ -74,7 +74,7 @@ def _apply_display_noise(pose: np.ndarray, magnitude: float | None) -> np.ndarra
     return noisy
 
 
-LATENCY_BUFFER_MAXLEN = 60  # 2s of history @ 30Hz — covers the 525ms max condition with margin
+LATENCY_BUFFER_MAXLEN = 60  # 2s of history @ 30Hz — covers the 1125ms max condition with margin
 
 
 def _apply_display_latency(
@@ -102,6 +102,31 @@ def _apply_display_latency(
         else:
             break
     return selected
+
+
+def _trial_override_from_plan_item(item: dict) -> dict:
+    """Map one client trial_plan entry (see experiment-session.js
+    buildNoiseConditions/buildLatencyConditions/buildPrecisionConditions) to
+    TrialActivity constructor kwargs for SequenceGenerator.make_block's
+    trial_overrides. Only the keys present in item are set, so a noise-only
+    entry leaves latency/precision metadata at TrialActivity's None default
+    (and vice versa) — each experiment's trial_* columns stay NULL for the
+    other two experiments.
+    """
+    override: dict = {}
+    if item.get("noise") is not None:
+        override["noise"] = item["noise"]
+    if item.get("latencyMs") is not None:
+        override["latency_ms"] = item["latencyMs"]
+        override["perceived_ms"] = item.get("perceivedMs")
+    if item.get("precisionLinearMm") is not None:
+        override["precision_linear_mm"] = item["precisionLinearMm"]
+        override["linear_tol"] = item["precisionLinearMm"] / 1000.0
+        angular = item.get("precisionAngularDeg")
+        if angular is not None:
+            override["precision_angular_deg"] = angular
+            override["angular_tol"] = angular
+    return override
 
 
 class FakePoseFetcher(LivePoseFetcher):
@@ -463,13 +488,8 @@ async def _new_study_handler(
         "condition_option":      None,
         "condition_index":       None,
         "target_set":            None,
-        "noise_magnitude":       0,
-        "latency_ms":            0,
         "latency_buffer":        None,
-        "precision_linear_mm":   None,
-        "precision_angular_deg": None,
-        "effective_linear_tol":  LINEAR_TOLERANCE,
-        "effective_angular_tol": 5.0,
+        "prev_act_type":         None,  # edge-triggers latency_buffer reset on trial entry
         "modality_id":           None,
         "session_id":            None,
         "recorder":              None,
@@ -531,6 +551,15 @@ async def _new_study_handler(
                 block_data = block.step()
                 act_type   = block_data["activity_type"]
                 act_data   = block_data["data"]
+
+                if act_type == "trial" and session["prev_act_type"] != "trial":
+                    # Fresh entry into a trial slot — first trial, next trial,
+                    # or a resume-from-pause rebuild. Clear so no pose
+                    # buffered under a different (or now-discarded) trial's
+                    # delay leaks into this one.
+                    session["latency_buffer"].clear()
+                session["prev_act_type"] = act_type
+
                 recorder   = session.get("recorder")
                 if recorder:
                     recorder.observe_activity(
@@ -568,20 +597,30 @@ async def _new_study_handler(
                 if modality in ("1d", "2d", "3d"):
                     live_arr = fetcher.get_pose()
                     display_arr = None
+                    # Sourced from act_data (this tick's own stepped activity),
+                    # never from block.current_activity — Block.step() already
+                    # advances to the NEXT activity internally the moment the
+                    # current one finishes, so block.current_activity can be
+                    # one tick ahead of act_type/act_data here. Reading through
+                    # it caused the next trial's target to flash into the
+                    # display a frame before its countdown/act_type caught up.
+                    active_noise       = act_data.get("noise") if act_type == "trial" else None
+                    active_latency_ms  = act_data.get("latency_ms") if act_type == "trial" else None
+                    active_linear_tol  = act_data.get("linear_tol") if act_type == "trial" else None
+                    active_angular_tol = act_data.get("angular_tol") if act_type == "trial" else None
                     if live_arr is not None:
                         display_arr = _apply_display_latency(
-                            live_arr, session["latency_ms"], session["latency_buffer"]
+                            live_arr, active_latency_ms, session["latency_buffer"]
                         )
-                        display_arr = _apply_display_noise(display_arr, session["noise_magnitude"])
+                        display_arr = _apply_display_noise(display_arr, active_noise)
                     origin   = block.origin
-                    cur_act  = block.current_activity
                     target_arr = (
-                        cur_act.target_pose
-                        if hasattr(cur_act, "target_pose")
+                        np.array(act_data["target_pose"], dtype=float)
+                        if act_data.get("target_pose") is not None
                         else origin
                     )
                     if act_type in ("trial", "paused"):
-                        state["target_label"] = getattr(cur_act, "label", None)
+                        state["target_label"] = act_data.get("label")
                     state["source_mode"]    = fetcher.source_mode
                     state["source_label"]   = fetcher.source_label
                     state["tracker_visible"] = live_arr is not None
@@ -598,10 +637,12 @@ async def _new_study_handler(
                         state["workspace_component_errors"]  = workspace_component_errors(
                             display_arr, target_arr, origin
                         )
+                        effective_linear_tol  = active_linear_tol if active_linear_tol is not None else LINEAR_TOLERANCE
+                        effective_angular_tol = active_angular_tol if active_angular_tol is not None else 5.0
                         state["workspace_component_aligned"] = {
                             name: abs(val) <= (
-                                session["effective_linear_tol"] if name in ("x", "y", "z")
-                                else session["effective_angular_tol"]
+                                effective_linear_tol if name in ("x", "y", "z")
+                                else effective_angular_tol
                             )
                             for name, val in state["workspace_component_errors"].items()
                         }
@@ -744,24 +785,22 @@ async def _new_study_handler(
                     session["condition_option"]      = data.get("condition_option")
                     session["condition_index"]       = data.get("condition_index")
                     session["target_set"]            = data.get("target_set")
-                    session["noise_magnitude"]        = data.get("noise_magnitude") or 0
-                    session["latency_ms"]            = data.get("latency_ms") or 0
                     session["latency_buffer"]        = deque(maxlen=LATENCY_BUFFER_MAXLEN)
-                    precision_linear_mm  = data.get("precision_linear_mm")
-                    precision_angular_deg = data.get("precision_angular_deg")
-                    session["precision_linear_mm"]   = precision_linear_mm
-                    session["precision_angular_deg"] = precision_angular_deg
-                    # Per-condition match threshold: precision experiment overrides
-                    # the 5mm/5deg default for this block only; every other
-                    # experiment leaves these fields unset and gets the default.
-                    linear_tol  = (precision_linear_mm / 1000.0) if precision_linear_mm is not None else None
-                    angular_tol = precision_angular_deg if precision_angular_deg is not None else None
-                    session["effective_linear_tol"]  = linear_tol if linear_tol is not None else LINEAR_TOLERANCE
-                    session["effective_angular_tol"] = angular_tol if angular_tol is not None else 5.0
+                    session["prev_act_type"]         = None
                     session["modality_id"]           = data.get("modality_id")
                     session["session_id"]            = requested_session_id
                     session["persistent_state"]      = None
-                    block_n_trials       = data.get("n_trials") or n_trials
+                    # trial_plan (see experiment-session.js buildNoiseConditions et
+                    # al.) is the noise/latency/precision experiments' scrambled,
+                    # per-trial magnitude ramp — one entry per trial, in run order.
+                    # Every other experiment omits it and every trial gets
+                    # TrialActivity's defaults (no noise/latency, 5mm/5deg match).
+                    trial_plan       = data.get("trial_plan") or []
+                    trial_overrides  = (
+                        [_trial_override_from_plan_item(item) for item in trial_plan]
+                        if trial_plan else None
+                    )
+                    block_n_trials       = len(trial_plan) if trial_plan else (data.get("n_trials") or n_trials)
                     include_preference   = data.get("include_preference", True)
                     include_practice     = data.get("include_practice", True)
                     session["n_trials"]  = block_n_trials
@@ -778,8 +817,7 @@ async def _new_study_handler(
                         target_set=session["target_set"],
                         include_preference=include_preference,
                         include_practice=include_practice,
-                        linear_tol=linear_tol,
-                        angular_tol=angular_tol,
+                        trial_overrides=trial_overrides,
                     )
                     blk.start()
                     session["block"] = blk

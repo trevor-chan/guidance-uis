@@ -99,7 +99,7 @@
   // TEMPORARY: NOISE mode list/order and magnitude ramp. Change here if the
   // study design shifts. M3 = 2D/Patient, M5 = 3D/User.
   const NOISE_MODES = ["M3", "M5"];
-  const NOISE_MAGNITUDES = [0, 1, 2, 4];   // mm position AND degrees orientation
+  const NOISE_MAGNITUDES = [0, 1, 2, 4, 8];   // mm position AND degrees orientation
   const NOISE_TRIALS_PER_MAGNITUDE = 3;
 
   // TEMPORARY: LATENCY mode list/order and delay ramp. Change here if the
@@ -108,7 +108,7 @@
   // Injected delay only; this is what the server buffers on top of the
   // ~75ms measured system baseline. See LATENCY_BASELINE_MS for the
   // perceived (injected + baseline) value that gets persisted alongside it.
-  const LATENCY_MS = [0, 75, 225, 525];
+  const LATENCY_MS = [0, 75, 225, 525, 1125];
   const LATENCY_BASELINE_MS = 75;
   const LATENCY_TRIALS_PER_MAGNITUDE = 3;
 
@@ -151,60 +151,82 @@
     }));
   }
 
+  // Fisher-Yates shuffle. Uses Math.random() (no seed) so the trial order is
+  // fresh per participant, per the scrambled-block design (see
+  // buildNoiseConditions/buildLatencyConditions/buildPrecisionConditions).
+  function shuffled(items) {
+    const arr = items.slice();
+    for (let i = arr.length - 1; i > 0; i--) {
+      const j = Math.floor(Math.random() * (i + 1));
+      [arr[i], arr[j]] = [arr[j], arr[i]];
+    }
+    return arr;
+  }
+
+  // Noise/latency/precision each pool every magnitude/threshold x its
+  // per-level repeat count into ONE scrambled block per mode (instead of one
+  // block per magnitude): the magnitude becomes a per-trial property, carried
+  // in condition.trialPlan (one entry per trial, in run order). Practice runs
+  // once at the start of that block, hence includePractice is always true.
   function buildNoiseConditions() {
-    const conditions = [];
-    NOISE_MODES.forEach(modalityId => {
-      NOISE_MAGNITUDES.forEach((magnitude, magIndex) => {
-        conditions.push({
-          index: conditions.length,
-          targetSet: null,
-          modalityId,
-          nTrials: NOISE_TRIALS_PER_MAGNITUDE,
-          noiseMagnitude: magnitude,
-          includePractice: magIndex === 0,
-          status: "pending",
-        });
+    return NOISE_MODES.map((modalityId, index) => {
+      const plan = [];
+      NOISE_MAGNITUDES.forEach(magnitude => {
+        for (let i = 0; i < NOISE_TRIALS_PER_MAGNITUDE; i++) plan.push({ noise: magnitude });
       });
+      return {
+        index,
+        targetSet: null,
+        modalityId,
+        nTrials: plan.length,
+        trialPlan: shuffled(plan),
+        includePractice: true,
+        status: "pending",
+      };
     });
-    return conditions;
   }
 
   function buildLatencyConditions() {
-    const conditions = [];
-    LATENCY_MODES.forEach(modalityId => {
-      LATENCY_MS.forEach((latencyMs, magIndex) => {
-        conditions.push({
-          index: conditions.length,
-          targetSet: null,
-          modalityId,
-          nTrials: LATENCY_TRIALS_PER_MAGNITUDE,
-          latencyMs,
-          perceivedMs: latencyMs + LATENCY_BASELINE_MS,
-          includePractice: magIndex === 0,
-          status: "pending",
-        });
+    return LATENCY_MODES.map((modalityId, index) => {
+      const plan = [];
+      LATENCY_MS.forEach(latencyMs => {
+        for (let i = 0; i < LATENCY_TRIALS_PER_MAGNITUDE; i++) {
+          plan.push({ latencyMs, perceivedMs: latencyMs + LATENCY_BASELINE_MS });
+        }
       });
+      return {
+        index,
+        targetSet: null,
+        modalityId,
+        nTrials: plan.length,
+        trialPlan: shuffled(plan),
+        includePractice: true,
+        status: "pending",
+      };
     });
-    return conditions;
   }
 
   function buildPrecisionConditions() {
-    const conditions = [];
-    PRECISION_MODES.forEach(modalityId => {
-      PRECISION_THRESHOLDS.forEach((threshold, thresholdIndex) => {
-        conditions.push({
-          index: conditions.length,
-          targetSet: null,
-          modalityId,
-          nTrials: PRECISION_TRIALS_PER_THRESHOLD,
-          precisionLinearMm: threshold.linearMm,
-          precisionAngularDeg: threshold.angularDeg,
-          includePractice: thresholdIndex === 0,
-          status: "pending",
-        });
+    return PRECISION_MODES.map((modalityId, index) => {
+      const plan = [];
+      PRECISION_THRESHOLDS.forEach(threshold => {
+        for (let i = 0; i < PRECISION_TRIALS_PER_THRESHOLD; i++) {
+          plan.push({
+            precisionLinearMm: threshold.linearMm,
+            precisionAngularDeg: threshold.angularDeg,
+          });
+        }
       });
+      return {
+        index,
+        targetSet: null,
+        modalityId,
+        nTrials: plan.length,
+        trialPlan: shuffled(plan),
+        includePractice: true,
+        status: "pending",
+      };
     });
-    return conditions;
   }
 
   // Registry of experiment types. Each entry supplies a buildConditions()
@@ -222,17 +244,17 @@
     },
     noise: {
       buildConditions: buildNoiseConditions,
-      flags: Object.freeze({ practice: true, preference: false, pausable: false }),
+      flags: Object.freeze({ practice: true, preference: false, pausable: true }),
       usesMatrixOption: false,
     },
     latency: {
       buildConditions: buildLatencyConditions,
-      flags: Object.freeze({ practice: true, preference: false, pausable: false }),
+      flags: Object.freeze({ practice: true, preference: false, pausable: true }),
       usesMatrixOption: false,
     },
     precision: {
       buildConditions: buildPrecisionConditions,
-      flags: Object.freeze({ practice: true, preference: false, pausable: false }),
+      flags: Object.freeze({ practice: true, preference: false, pausable: true }),
       usesMatrixOption: false,
     },
   });
@@ -308,36 +330,10 @@
         parsed.examinerName ||= "";
         saveSession(parsed);
       }
-      if (parsed.experimentCondition === "latency" && migrateStaleLatencyConditions(parsed)) {
-        saveSession(parsed);
-      }
       return parsed;
     } catch (_error) {
       return null;
     }
-  }
-
-  // Sessions created before LATENCY_MS moved from [50,100,200,400,800] to
-  // [0,75,225,525,1125] (+ a separate perceivedMs = injected + 75ms baseline)
-  // persisted the old raw values straight into localStorage. Conditions
-  // already run keep their real injected value — rewriting those would
-  // misrepresent what the participant actually experienced. Conditions not
-  // yet started are safe to repair in place so they pick up the current
-  // design instead of a stale one baked in at session-creation time.
-  function migrateStaleLatencyConditions(session) {
-    const fresh = buildLatencyConditions();
-    let changed = false;
-    session.conditions.forEach((condition, index) => {
-      if (condition.status !== "pending") return;
-      const template = fresh[index];
-      if (!template) return;
-      if (condition.latencyMs !== template.latencyMs || condition.perceivedMs !== template.perceivedMs) {
-        condition.latencyMs = template.latencyMs;
-        condition.perceivedMs = template.perceivedMs;
-        changed = true;
-      }
-    });
-    return changed;
   }
 
   function clearSession() {
@@ -377,10 +373,6 @@
       modality_id: details.modalityId,
       session_id: session.sessionId,
       n_trials: String(details.nTrials || MODALITY_TRIALS_PER_CONDITION),
-      noise_magnitude: details.noiseMagnitude != null ? String(details.noiseMagnitude) : "",
-      latency_ms: details.latencyMs != null ? String(details.latencyMs) : "",
-      precision_linear_mm: details.precisionLinearMm != null ? String(details.precisionLinearMm) : "",
-      precision_angular_deg: details.precisionAngularDeg != null ? String(details.precisionAngularDeg) : "",
       include_practice: details.includePractice === false ? "0" : "1",
     });
     return `${details.modality.page}?${params.toString()}`;
@@ -399,10 +391,11 @@
       modality_id: context.modalityId,
       n_trials: context.nTrials,
       include_preference: flags.preference,
-      noise_magnitude: context.noiseMagnitude,
-      latency_ms: context.latencyMs,
-      precision_linear_mm: context.precisionLinearMm,
-      precision_angular_deg: context.precisionAngularDeg,
+      // Per-trial noise/latency/precision ramp for the scrambled noise,
+      // latency, and precision experiments (see buildNoiseConditions et al.)
+      // — one entry per trial, in the shuffled run order. null for
+      // experiments that don't vary per trial (modality, learning_curve).
+      trial_plan: context.trialPlan,
       include_practice: context.includePractice,
     };
   }
@@ -419,10 +412,6 @@
     const modality = MODALITIES[modalityId];
     if (!modalityId || !modality) return null;
     const nTrialsParam = Number(params.get("n_trials"));
-    const noiseMagnitudeParam = params.get("noise_magnitude");
-    const latencyMsParam = params.get("latency_ms");
-    const precisionLinearMmParam = params.get("precision_linear_mm");
-    const precisionAngularDegParam = params.get("precision_angular_deg");
     return {
       session,
       participantId: params.get("participant") || session?.participantId || "",
@@ -435,18 +424,7 @@
       nTrials: (Number.isInteger(nTrialsParam) && nTrialsParam > 0)
         ? nTrialsParam
         : (condition?.nTrials || MODALITY_TRIALS_PER_CONDITION),
-      noiseMagnitude: noiseMagnitudeParam !== null && noiseMagnitudeParam !== ""
-        ? Number(noiseMagnitudeParam)
-        : (condition?.noiseMagnitude ?? null),
-      latencyMs: latencyMsParam !== null && latencyMsParam !== ""
-        ? Number(latencyMsParam)
-        : (condition?.latencyMs ?? null),
-      precisionLinearMm: precisionLinearMmParam !== null && precisionLinearMmParam !== ""
-        ? Number(precisionLinearMmParam)
-        : (condition?.precisionLinearMm ?? null),
-      precisionAngularDeg: precisionAngularDegParam !== null && precisionAngularDegParam !== ""
-        ? Number(precisionAngularDegParam)
-        : (condition?.precisionAngularDeg ?? null),
+      trialPlan: condition?.trialPlan || null,
       includePractice: params.has("include_practice")
         ? params.get("include_practice") !== "0"
         : (condition?.includePractice ?? true),
@@ -583,28 +561,19 @@
     } catch (_error) {
       template = [];
     }
+    // Noise/latency/precision no longer carry a single per-condition
+    // magnitude (see buildNoiseConditions et al.) — the per-trial ramp lives
+    // only in trialPlan, which isn't persisted to the DB. A resumed session
+    // gets a freshly reshuffled trialPlan from the template; this only
+    // matters for a condition resumed on a different browser/machine than
+    // the one that started it (localStorage normally carries the original
+    // trialPlan through page reloads on the same machine untouched).
     const conditions = (persistentState.conditions || []).map((condition, index) => ({
       index,
       targetSet: condition.target_set || null,
       modalityId: condition.modality_id,
       nTrials: template[index]?.nTrials || MODALITY_TRIALS_PER_CONDITION,
-      noiseMagnitude: condition.noise ?? template[index]?.noiseMagnitude ?? null,
-      // For a condition never yet run, prefer the freshly-built template over
-      // a possibly-stale DB row (e.g. latency_ms/perceived_ms persisted by an
-      // older LATENCY_MS ramp before a design change). Once a condition has
-      // actually run, the DB value is the real recorded history and wins.
-      latencyMs: condition.status !== "pending"
-        ? (condition.latency_ms ?? template[index]?.latencyMs ?? null)
-        : (template[index]?.latencyMs ?? condition.latency_ms ?? null),
-      perceivedMs: condition.status !== "pending"
-        ? (condition.perceived_ms ?? template[index]?.perceivedMs ?? null)
-        : (template[index]?.perceivedMs ?? condition.perceived_ms ?? null),
-      precisionLinearMm: condition.status !== "pending"
-        ? (condition.precision_linear_mm ?? template[index]?.precisionLinearMm ?? null)
-        : (template[index]?.precisionLinearMm ?? condition.precision_linear_mm ?? null),
-      precisionAngularDeg: condition.status !== "pending"
-        ? (condition.precision_angular_deg ?? template[index]?.precisionAngularDeg ?? null)
-        : (template[index]?.precisionAngularDeg ?? condition.precision_angular_deg ?? null),
+      trialPlan: template[index]?.trialPlan ?? null,
       includePractice: template[index]?.includePractice ?? true,
       status: condition.status,
       completedTrials: Number(condition.completed_trials || 0),

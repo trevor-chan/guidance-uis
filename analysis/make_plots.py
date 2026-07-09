@@ -165,16 +165,28 @@ def find_sqlite_files(folder: Path) -> list[Path]:
 # them, so missing columns are substituted with NULL at query time instead.
 CONDITIONS_MIGRATED_COLUMNS = ("precision_linear_mm", "precision_angular_deg")
 
+# trial_* columns hold the per-trial noise/latency/precision magnitude for
+# the scrambled noise/latency/precision blocks (one condition = one whole
+# mode's shuffled ramp; see SequenceGenerator.make_block's trial_overrides).
+# Older data predating that change only has the per-condition columns above,
+# where every trial in a condition shared one fixed magnitude — COALESCE
+# prefers the trial-level value and falls back to the condition-level one so
+# both eras of data resolve to the same output columns.
+TRIALS_MIGRATED_COLUMNS = (
+    "trial_noise", "trial_latency_ms", "trial_perceived_ms",
+    "trial_precision_linear_mm", "trial_precision_angular_deg",
+)
+
 TRIAL_QUERY_TEMPLATE = """
 SELECT
     sessions.experiment_condition AS experiment_condition,
     sessions.participant_id AS participant_id,
     conditions.modality_id AS modality_id,
-    conditions.noise AS noise,
-    conditions.latency_ms AS latency_ms,
-    conditions.perceived_ms AS perceived_ms,
-    {precision_linear_mm} AS precision_linear_mm,
-    {precision_angular_deg} AS precision_angular_deg,
+    COALESCE({trial_noise}, conditions.noise) AS noise,
+    COALESCE({trial_latency_ms}, conditions.latency_ms) AS latency_ms,
+    COALESCE({trial_perceived_ms}, conditions.perceived_ms) AS perceived_ms,
+    COALESCE({trial_precision_linear_mm}, {precision_linear_mm}) AS precision_linear_mm,
+    COALESCE({trial_precision_angular_deg}, {precision_angular_deg}) AS precision_angular_deg,
     condition_runs.run_id AS run_id,
     condition_runs.attempt_number AS attempt_number,
     trials.trial_index AS trial_index,
@@ -191,11 +203,16 @@ WHERE trials.status = 'complete'
 
 
 def trial_query_for(connection: sqlite3.Connection) -> str:
-    existing = {row[1] for row in connection.execute("PRAGMA table_info(conditions)")}
+    existing_conditions = {row[1] for row in connection.execute("PRAGMA table_info(conditions)")}
+    existing_trials = {row[1] for row in connection.execute("PRAGMA table_info(trials)")}
     columns = {
-        name: f"conditions.{name}" if name in existing else "NULL"
+        name: f"conditions.{name}" if name in existing_conditions else "NULL"
         for name in CONDITIONS_MIGRATED_COLUMNS
     }
+    columns.update({
+        name: f"trials.{name}" if name in existing_trials else "NULL"
+        for name in TRIALS_MIGRATED_COLUMNS
+    })
     return TRIAL_QUERY_TEMPLATE.format(**columns)
 
 PREFERENCE_QUERY = """
