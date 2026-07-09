@@ -14,6 +14,7 @@ the study configuration do not silently break these plots.
 
 from __future__ import annotations
 
+import random
 import sqlite3
 import sys
 from collections import defaultdict
@@ -32,64 +33,103 @@ import matplotlib.pyplot as plt
 # 3D families, shades distinguish reference frame (user / patient /
 # transducer). M3 and M5 are the two-mode comparison plots' series, so their
 # shade doubles as that family's canonical tone — one color per mode
-# everywhere it appears.
+# everywhere it appears. Shades are generated from one base hue per family so
+# the family relationship stays visually systematic rather than hand-tuned.
+
+
+def lighten(hex_color: str, factor: float) -> str:
+    """Blend a hex color toward white by `factor` in [0, 1]."""
+    hex_color = hex_color.lstrip("#")
+    r, g, b = (int(hex_color[i : i + 2], 16) for i in (0, 2, 4))
+    r = round(r + (255 - r) * factor)
+    g = round(g + (255 - g) * factor)
+    b = round(b + (255 - b) * factor)
+    return f"#{r:02x}{g:02x}{b:02x}"
+
+
+def darken(hex_color: str, factor: float) -> str:
+    """Blend a hex color toward black by `factor` in [0, 1]."""
+    hex_color = hex_color.lstrip("#")
+    r, g, b = (int(hex_color[i : i + 2], 16) for i in (0, 2, 4))
+    r = round(r * (1 - factor))
+    g = round(g * (1 - factor))
+    b = round(b * (1 - factor))
+    return f"#{r:02x}{g:02x}{b:02x}"
+
 
 MODALITY_IDS = [f"M{i}" for i in range(1, 8)]
 MODALITY_LABELS = {
-    "M1": "M1\n1D",
-    "M2": "M2\n2D/User",
-    "M3": "M3\n2D/Patient",
-    "M4": "M4\n2D/Transducer",
-    "M5": "M5\n3D/User",
-    "M6": "M6\n3D/Patient",
-    "M7": "M7\n3D/Transducer",
+    "M1": "M1 (1D)",
+    "M2": "M2 (2D/User)",
+    "M3": "M3 (2D/Patient)",
+    "M4": "M4 (2D/Transducer)",
+    "M5": "M5 (3D/User)",
+    "M6": "M6 (3D/Patient)",
+    "M7": "M7 (3D/Transducer)",
 }
+
+_GRAY = "#767676"
+_BLUE = "#2f6f9e"  # 2D/Patient — canonical "2D" tone in compare plots
+_GREEN = "#3f8f57"  # 3D/User — canonical "3D" tone in compare plots
+
 MODALITY_COLORS = {
-    "M1": "#7f7f7f",  # 1D — gray
-    "M2": "#9ecae1",  # 2D/User — light blue
-    "M3": "#1f77b4",  # 2D/Patient — blue
-    "M4": "#08519c",  # 2D/Transducer — dark blue
-    "M5": "#2ca02c",  # 3D/User — green
-    "M6": "#74c476",  # 3D/Patient — light green
-    "M7": "#005a32",  # 3D/Transducer — dark green
+    "M1": _GRAY,
+    "M2": lighten(_BLUE, 0.42),
+    "M3": _BLUE,
+    "M4": darken(_BLUE, 0.35),
+    "M5": _GREEN,
+    "M6": lighten(_GREEN, 0.42),
+    "M7": darken(_GREEN, 0.35),
 }
+# Dot clouds sit a shade lighter than their summary marker/bar so the mean +
+# CI reads clearly on top of the raw data.
+MODALITY_DOT_COLORS = {m: lighten(c, 0.5) for m, c in MODALITY_COLORS.items()}
+
 COMPARE_MODES = ["M3", "M5"]  # 2D/Patient vs 3D/User: the two-series plots
 COMPARE_LABELS = {"M3": "M3 (2D/Patient)", "M5": "M5 (3D/User)"}
 COMPARE_COLORS = {m: MODALITY_COLORS[m] for m in COMPARE_MODES}
+COMPARE_DOT_COLORS = {m: MODALITY_DOT_COLORS[m] for m in COMPARE_MODES}
 
 INK = "#1a1a1a"
-MUTED = "#8c8c8c"
-GRID_COLOR = "#cccccc"
+GRID_COLOR = "#e3e3e3"
 SPINE_COLOR = "#333333"
 
-FIGSIZE = (6, 4.5)
+FIGSIZE = (6.5, 4.5)
 
 plt.rcParams.update(
     {
         "font.family": "sans-serif",
         "font.sans-serif": ["Arial", "Helvetica", "DejaVu Sans"],
         "font.size": 10,
-        "axes.titlesize": 13,
-        "axes.labelsize": 11,
-        "xtick.labelsize": 10,
-        "ytick.labelsize": 10,
+        "axes.titlesize": 14,
+        "axes.titleweight": "bold",
+        "axes.labelsize": 13,
+        "axes.labelweight": "bold",
+        "xtick.labelsize": 11,
+        "ytick.labelsize": 11,
         "legend.fontsize": 10,
         "axes.spines.top": False,
         "axes.spines.right": False,
-        "axes.linewidth": 0.8,
+        "axes.linewidth": 1.0,
         "axes.edgecolor": SPINE_COLOR,
         "axes.labelcolor": INK,
         "axes.titlecolor": INK,
         "text.color": INK,
         "xtick.color": SPINE_COLOR,
         "ytick.color": SPINE_COLOR,
+        "xtick.direction": "out",
+        "ytick.direction": "out",
+        "xtick.major.size": 4,
+        "ytick.major.size": 4,
+        "xtick.major.width": 0.9,
+        "ytick.major.width": 0.9,
         "axes.grid": True,
         "axes.grid.axis": "y",
         "axes.axisbelow": True,
         "grid.color": GRID_COLOR,
         "grid.linestyle": ":",
-        "grid.linewidth": 0.7,
-        "grid.alpha": 0.9,
+        "grid.linewidth": 0.6,
+        "grid.alpha": 0.6,
         "figure.figsize": FIGSIZE,
         "figure.facecolor": "white",
         "axes.facecolor": "white",
@@ -102,6 +142,14 @@ plt.rcParams.update(
 PLOTS_DIR = Path(__file__).resolve().parent / "plots"
 
 EXPERIMENTS = ["modality", "noise", "latency", "learning_curve", "precision"]
+
+# Deterministic horizontal jitter for dot clouds: a fixed seed keeps repeated
+# runs over the same data visually stable instead of reshuffling each time.
+_JITTER_RNG = random.Random(20260709)
+
+
+def jittered_xs(x_center: float, n: int, width: float) -> list[float]:
+    return [x_center + _JITTER_RNG.uniform(-width, width) for _ in range(n)]
 
 
 # -- Data loading ------------------------------------------------------------
@@ -214,26 +262,6 @@ def style_axes(ax) -> None:
     ax.grid(axis="y", zorder=0)
 
 
-def style_box(bp, color: str) -> None:
-    for box in bp["boxes"]:
-        box.set_facecolor(color)
-        box.set_alpha(0.55)
-        box.set_edgecolor(color)
-        box.set_linewidth(1.2)
-    for element in ("whiskers", "caps"):
-        for artist in bp[element]:
-            artist.set_color(MUTED)
-            artist.set_linewidth(1.0)
-    for median in bp["medians"]:
-        median.set_color(INK)
-        median.set_linewidth(1.5)
-    for flier in bp["fliers"]:
-        flier.set_markeredgecolor(color)
-        flier.set_markerfacecolor(color)
-        flier.set_markersize(4)
-        flier.set_alpha(0.6)
-
-
 def save(fig, name: str) -> None:
     PLOTS_DIR.mkdir(parents=True, exist_ok=True)
     out_path = PLOTS_DIR / name
@@ -246,6 +274,17 @@ def save(fig, name: str) -> None:
 def present_modalities(rows: list[dict]) -> list[str]:
     found = {r["modality_id"] for r in rows if r["modality_id"]}
     return [m for m in MODALITY_IDS if m in found]
+
+
+def apply_category_ticklabels(ax, xs: list[float], labels: list[str], rotate_len: int = 8) -> None:
+    """Rotate long category labels ~38° right-aligned so they never overlap;
+    short labels stay horizontal."""
+    ax.set_xticks(xs)
+    flat = [str(label).replace("\n", " ") for label in labels]
+    if max(len(label) for label in flat) > rotate_len:
+        ax.set_xticklabels(flat, rotation=38, ha="right", rotation_mode="anchor")
+    else:
+        ax.set_xticklabels(flat)
 
 
 # -- Confidence intervals ---------------------------------------------------
@@ -292,6 +331,142 @@ def wilson_ci95(successes: float, n: int) -> tuple[float, float, float]:
     return phat, center - half, center + half
 
 
+# -- Summary-with-dots primitives -------------------------------------------
+#
+# Nature "show the dots" convention: every bar / mean-marker gets the raw,
+# per-trial values plotted underneath as a small semi-transparent jittered
+# dot cloud in a lighter tone, with the mean ± 95% CI drawn on top at full
+# opacity so the summary reads clearly over the cloud.
+
+
+def draw_dot_cloud(ax, x_center: float, values: list[float], color: str, width: float, zorder: float) -> None:
+    if not values:
+        return
+    xs = jittered_xs(x_center, len(values), width)
+    ax.plot(
+        xs, values, "o", color=color, markersize=3.5, alpha=0.45,
+        markeredgewidth=0, zorder=zorder,
+    )
+
+
+def point_range_by_category(
+    ax,
+    categories: list[str],
+    colors: dict[str, str],
+    labels: dict[str, str],
+    *,
+    raw_values: dict[str, list[float]] | None = None,
+    means: list[float] | None = None,
+    los: list[float] | None = None,
+    his: list[float] | None = None,
+    dot_colors: dict[str, str] | None = None,
+) -> None:
+    """Single-series mean ± 95% CI point-range, one point per category (no
+    connecting line — categories here are unordered groups, not a swept
+    variable). If raw_values is given, an underlying jittered dot cloud is
+    drawn per category, in that category's (lighter) color."""
+    xs = list(range(1, len(categories) + 1))
+    if raw_values is not None:
+        for x, cat in zip(xs, categories):
+            draw_dot_cloud(ax, x, raw_values[cat], (dot_colors or colors)[cat], width=0.13, zorder=1)
+        means, los, his = [], [], []
+        for cat in categories:
+            m, lo, hi = mean_ci95(raw_values[cat])
+            means.append(m)
+            los.append(lo)
+            his.append(hi)
+    lo_err = [m - lo for m, lo in zip(means, los)]
+    hi_err = [hi - m for m, hi in zip(means, his)]
+    for x, m, loe, hie, cat in zip(xs, means, lo_err, hi_err, categories):
+        color = colors[cat]
+        ax.errorbar(
+            x, m, yerr=[[loe], [hie]],
+            fmt="o", color=color, ecolor=color,
+            elinewidth=1.3, capsize=4, capthick=1.3, markersize=7,
+            markeredgecolor="white", markeredgewidth=0.8, zorder=3,
+        )
+    apply_category_ticklabels(ax, xs, [labels[c] for c in categories])
+
+
+def bar_with_ci(
+    ax,
+    categories: list[str],
+    colors: dict[str, str],
+    labels: dict[str, str],
+    *,
+    raw_values: dict[str, list[float]] | None = None,
+    means: list[float] | None = None,
+    los: list[float] | None = None,
+    his: list[float] | None = None,
+    dot_colors: dict[str, str] | None = None,
+) -> None:
+    """Bar to the mean, with an optional jittered dot cloud of raw values
+    layered on top of the bar, and the 95% CI drawn above both."""
+    xs = list(range(1, len(categories) + 1))
+    if raw_values is not None:
+        means, los, his = [], [], []
+        for cat in categories:
+            m, lo, hi = mean_ci95(raw_values[cat])
+            means.append(m)
+            los.append(lo)
+            his.append(hi)
+    bar_colors = [colors[c] for c in categories]
+    ax.bar(xs, means, width=0.6, color=bar_colors, alpha=0.85, edgecolor=INK, linewidth=0.9, zorder=2)
+    if raw_values is not None:
+        for x, cat in zip(xs, categories):
+            draw_dot_cloud(ax, x, raw_values[cat], (dot_colors or colors)[cat], width=0.16, zorder=2.5)
+    lo_err = [m - lo for m, lo in zip(means, los)]
+    hi_err = [hi - m for m, hi in zip(means, his)]
+    ax.errorbar(
+        xs, means, yerr=[lo_err, hi_err],
+        fmt="none", ecolor=INK, elinewidth=1.3, capsize=4, capthick=1.3, zorder=3,
+    )
+    apply_category_ticklabels(ax, xs, [labels[c] for c in categories])
+
+
+def point_range_by_group(
+    ax,
+    groups: list,
+    group_labels: list[str],
+    series: list[str],
+    values: dict,
+    series_colors: dict,
+    series_labels: dict,
+    dot_colors: dict | None = None,
+) -> None:
+    """Mean line with 95% CI point-range per group, plus a jittered raw-value
+    dot cloud per (group, series). All series share the same x position (no
+    dodge) — overlap is expected, color differentiates. A thin line threads
+    through each series' mean markers, drawn under the markers."""
+    for s in series:
+        color = series_colors[s]
+        dot_color = (dot_colors or series_colors)[s]
+        xs, means, lo_err, hi_err = [], [], [], []
+        for i, g in enumerate(groups):
+            vals = values.get((g, s), [])
+            if not vals:
+                continue
+            x = i + 1
+            draw_dot_cloud(ax, x, vals, dot_color, width=0.15, zorder=1)
+            m, lo, hi = mean_ci95(vals)
+            xs.append(x)
+            means.append(m)
+            lo_err.append(m - lo)
+            hi_err.append(hi - m)
+        if not xs:
+            continue
+        ax.plot(xs, means, "-", color=color, linewidth=1.5, zorder=2)
+        ax.errorbar(
+            xs, means, yerr=[lo_err, hi_err],
+            fmt="o", color=color, ecolor=color,
+            elinewidth=1.3, capsize=4, capthick=1.3, markersize=6.5,
+            markeredgecolor="white", markeredgewidth=0.7,
+            label=series_labels[s], zorder=3,
+        )
+    apply_category_ticklabels(ax, list(range(1, len(groups) + 1)), group_labels)
+    ax.legend(loc="best")
+
+
 # -- Individual plots --------------------------------------------------
 
 
@@ -301,35 +476,17 @@ def plot_modality_time(trials: list[dict]) -> None:
         print("  modality_time: no data, skipping")
         return
     modalities = present_modalities(rows)
-    data = [[r["elapsed_s"] for r in rows if r["modality_id"] == m] for m in modalities]
+    raw_values = {m: [r["elapsed_s"] for r in rows if r["modality_id"] == m] for m in modalities}
 
     fig, ax = plt.subplots()
-    bp = ax.boxplot(data, patch_artist=True, widths=0.55)
-    style_box(bp, INK)
-    for i, m in enumerate(modalities):
-        bp["boxes"][i].set_edgecolor(MODALITY_COLORS[m])
-        bp["boxes"][i].set_facecolor(MODALITY_COLORS[m])
-        bp["boxes"][i].set_alpha(0.6)
-    ax.set_xticks(range(1, len(modalities) + 1))
-    ax.set_xticklabels([MODALITY_LABELS[m] for m in modalities], fontsize=9)
+    point_range_by_category(
+        ax, modalities, MODALITY_COLORS, MODALITY_LABELS,
+        raw_values=raw_values, dot_colors=MODALITY_DOT_COLORS,
+    )
     ax.set_ylabel("Time to match (s)")
     ax.set_title("Modality: time to match by modality")
     style_axes(ax)
     save(fig, "modality_time.png")
-
-
-def bar_with_ci(ax, modalities: list[str], means: list[float], los: list[float], his: list[float]) -> None:
-    xs = list(range(1, len(modalities) + 1))
-    colors = [MODALITY_COLORS[m] for m in modalities]
-    ax.bar(xs, means, width=0.62, color=colors, alpha=0.85, edgecolor=INK, linewidth=0.8, zorder=2)
-    lo_err = [m - lo for m, lo in zip(means, los)]
-    hi_err = [hi - m for m, hi in zip(means, his)]
-    ax.errorbar(
-        xs, means, yerr=[lo_err, hi_err],
-        fmt="none", ecolor=INK, elinewidth=1.2, capsize=4, capthick=1.2, zorder=3,
-    )
-    ax.set_xticks(xs)
-    ax.set_xticklabels([MODALITY_LABELS[m] for m in modalities], fontsize=9)
 
 
 def plot_modality_preference(preferences: list[dict]) -> None:
@@ -337,17 +494,14 @@ def plot_modality_preference(preferences: list[dict]) -> None:
         print("  modality_preference: no data, skipping")
         return
     modalities = present_modalities(preferences)
-    means, los, his = [], [], []
-    for m in modalities:
-        ratings = [p["rating"] for p in preferences if p["modality_id"] == m]
-        mn, lo, hi = mean_ci95(ratings)
-        means.append(mn)
-        los.append(lo)
-        his.append(hi)
+    raw_values = {m: [p["rating"] for p in preferences if p["modality_id"] == m] for m in modalities}
 
     fig, ax = plt.subplots()
-    bar_with_ci(ax, modalities, means, los, his)
-    ax.set_ylim(1, 5)
+    bar_with_ci(
+        ax, modalities, MODALITY_COLORS, MODALITY_LABELS,
+        raw_values=raw_values, dot_colors=MODALITY_DOT_COLORS,
+    )
+    ax.set_ylim(0.7, 5.3)
     ax.set_yticks([1, 2, 3, 4, 5])
     ax.set_ylabel("Preference rating (1-5)")
     ax.set_title("Modality: preference rating by modality (mean ± 95% CI)")
@@ -370,51 +524,17 @@ def plot_modality_success(trials: list[dict]) -> None:
         his.append(hi)
 
     fig, ax = plt.subplots()
-    bar_with_ci(ax, modalities, means, los, his)
-    ax.set_ylim(0, 1)
+    # Binary outcomes: no dot cloud (a 0/1 jitter carries no information),
+    # just a clean point + Wilson 95% CI per modality.
+    point_range_by_category(
+        ax, modalities, MODALITY_COLORS, MODALITY_LABELS,
+        means=means, los=los, his=his,
+    )
+    ax.set_ylim(0, 1.05)
     ax.set_ylabel("Success rate")
     ax.set_title("Modality: success rate by modality (mean ± 95% CI)")
     style_axes(ax)
     save(fig, "modality_success.png")
-
-
-def point_range_by_group(
-    ax,
-    groups: list,
-    group_labels: list[str],
-    series: list[str],
-    values: dict,
-    series_colors: dict,
-    series_labels: dict,
-) -> None:
-    """Mean line with 95% CI point-range per group. All series share the same
-    x position (no dodge) — overlap is expected, color differentiates. A line
-    threads through each series' mean markers."""
-    for s in series:
-        xs, means, lo_err, hi_err = [], [], [], []
-        for i, g in enumerate(groups):
-            vals = values.get((g, s), [])
-            if not vals:
-                continue
-            m, lo, hi = mean_ci95(vals)
-            xs.append(i + 1)
-            means.append(m)
-            lo_err.append(m - lo)
-            hi_err.append(hi - m)
-        if not xs:
-            continue
-        color = series_colors[s]
-        ax.plot(xs, means, "-", color=color, linewidth=1.4, zorder=2)
-        ax.errorbar(
-            xs, means, yerr=[lo_err, hi_err],
-            fmt="o", color=color, ecolor=color,
-            elinewidth=1.2, capsize=4, capthick=1.2, markersize=6,
-            markeredgecolor="white", markeredgewidth=0.6,
-            label=series_labels[s], zorder=3,
-        )
-    ax.set_xticks(range(1, len(groups) + 1))
-    ax.set_xticklabels(group_labels)
-    ax.legend(loc="best")
 
 
 def plot_learning_curve_time(trials: list[dict]) -> None:
@@ -442,6 +562,7 @@ def plot_learning_curve_time(trials: list[dict]) -> None:
         values=values,
         series_colors=COMPARE_COLORS,
         series_labels=COMPARE_LABELS,
+        dot_colors=COMPARE_DOT_COLORS,
     )
     ax.set_xlabel("Trial number")
     ax.set_ylabel("Time to match (s)")
@@ -476,6 +597,7 @@ def plot_noise_time(trials: list[dict]) -> None:
         values=values,
         series_colors=COMPARE_COLORS,
         series_labels=COMPARE_LABELS,
+        dot_colors=COMPARE_DOT_COLORS,
     )
     ax.set_xlabel("Noise magnitude (mm / deg)")
     ax.set_ylabel("Time to match (s)")
@@ -510,6 +632,7 @@ def plot_latency_time(trials: list[dict]) -> None:
         values=values,
         series_colors=COMPARE_COLORS,
         series_labels=COMPARE_LABELS,
+        dot_colors=COMPARE_DOT_COLORS,
     )
     ax.set_xlabel("Perceived latency (ms)")
     ax.set_ylabel("Time to match (s)")
@@ -559,6 +682,7 @@ def plot_precision_time(trials: list[dict]) -> None:
         values=values,
         series_colors=COMPARE_COLORS,
         series_labels=COMPARE_LABELS,
+        dot_colors=COMPARE_DOT_COLORS,
     )
     ax.set_xlabel("Precision threshold (mm / deg)")
     ax.set_ylabel("Time to match (s)")
