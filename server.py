@@ -1144,7 +1144,7 @@ async def main(
                 print(
                     f"Data:      {data_store.config.layout} layout under "
                     f"{data_store.config.root} "
-                    f"[{', '.join(CATEGORIES)}]/{{date}}/{{experiment}}"
+                    f"[{', '.join(CATEGORIES)}]/{{experiment}}"
                 )
             await asyncio.Future()
     finally:

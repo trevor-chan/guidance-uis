@@ -43,34 +43,30 @@ class StorageLayoutTests(unittest.TestCase):
             root=root,
             layout="session",
             experiment_id="study",
-            collection_date="2026-06-24",
         )
         participant_config = StorageConfig(
             root=root,
             layout="participant",
             experiment_id="study",
-            collection_date="2026-06-24",
         )
         experiment_config = StorageConfig(
             root=root,
             layout="experiment",
             experiment_id="study",
-            collection_date="2026-06-24",
         )
 
         self.assertEqual(
             session_config.database_path("abc", "P1"),
-            root / "practice" / "2026-06-24" / "study" / "sessions" / "abc" / "experiment.sqlite",
+            root / "practice" / "study" / "sessions" / "abc" / "experiment.sqlite",
         )
         self.assertEqual(
             participant_config.database_path("abc", "P1"),
-            root / "practice" / "2026-06-24" / "study" / "participants" / "P1" / "experiment.sqlite",
+            root / "practice" / "study" / "participants" / "P1" / "experiment.sqlite",
         )
         self.assertEqual(
             participant_config.database_path("abc", "P1", "Direct Identifier"),
             root
             / "practice"
-            / "2026-06-24"
             / "study"
             / "participants"
             / "Direct-Identifier_P1"
@@ -78,11 +74,11 @@ class StorageLayoutTests(unittest.TestCase):
         )
         self.assertEqual(
             experiment_config.database_path("abc", "P1"),
-            root / "practice" / "2026-06-24" / "study" / "experiment.sqlite",
+            root / "practice" / "study" / "experiment.sqlite",
         )
         self.assertEqual(
             participant_config.database_path("abc", "P1", category="real"),
-            root / "real" / "2026-06-24" / "study" / "participants" / "P1" / "experiment.sqlite",
+            root / "real" / "study" / "participants" / "P1" / "experiment.sqlite",
         )
 
     def test_all_layouts_store_the_same_logical_schema(self):
@@ -205,7 +201,6 @@ class RecordingAndExportTests(unittest.TestCase):
                 layout="participant",
                 experiment_id="study",
                 export_formats=("patient_trials",),
-                collection_date="2026-06-24",
             )
             store = create_data_store(config, Path.cwd())
             store.create_session(session_payload("session-3", participant_id="P2"))
@@ -322,7 +317,6 @@ class DataCategoryTests(unittest.TestCase):
                 layout="participant",
                 experiment_id="study",
                 export_formats=("none",),
-                collection_date="2026-06-24",
             )
             store = create_data_store(config, Path.cwd())
             payload = session_payload("session-real")
@@ -334,7 +328,6 @@ class DataCategoryTests(unittest.TestCase):
                 database_path,
                 Path(temp_dir)
                 / "real"
-                / "2026-06-24"
                 / "study"
                 / "participants"
                 / "Test-Participant_P1"
@@ -349,7 +342,6 @@ class DataCategoryTests(unittest.TestCase):
                 layout="participant",
                 experiment_id="study",
                 export_formats=("none",),
-                collection_date="2026-06-24",
             )
             store = create_data_store(config, Path.cwd())
             payload = session_payload("session-bogus")
@@ -368,7 +360,6 @@ class DataCategoryTests(unittest.TestCase):
                 layout="participant",
                 experiment_id="study",
                 export_formats=("none",),
-                collection_date="2026-06-24",
             )
             store = create_data_store(config, Path.cwd())
             payload = session_payload("session-trash", participant_id="P9")
@@ -425,6 +416,91 @@ class DataCategoryTests(unittest.TestCase):
                     "SELECT session_id, data_category FROM sessions WHERE session_id = 'old-session'"
                 ).fetchone()
             self.assertEqual(row, ("old-session", None))
+
+
+class LegacyDatedLayoutTests(unittest.TestCase):
+    """New writes drop the {date} folder that used to sit between the
+    category bin and the experiment folder, but old dated-layout data must
+    stay discoverable without moving it."""
+
+    def _write_legacy_database(self, temp_dir, category, date, participant_id):
+        config = StorageConfig(root=Path(temp_dir), layout="participant", experiment_id="study")
+        legacy_path = (
+            Path(temp_dir)
+            / category
+            / date
+            / "study"
+            / "participants"
+            / participant_id
+            / "experiment.sqlite"
+        )
+        legacy_path.parent.mkdir(parents=True, exist_ok=True)
+        store = create_data_store(config, Path.cwd())
+        with store._connect(legacy_path) as connection:
+            connection.execute(
+                """
+                INSERT INTO sessions (
+                    session_id, experiment_id, participant_id, participant_name,
+                    examiner_name, experiment_condition, condition_option,
+                    data_category, started_at, status, git_commit, schema_version,
+                    storage_layout, metadata_json
+                ) VALUES (?, 'study', ?, NULL, NULL, 'modality', 1, ?, ?, 'complete',
+                          NULL, 1, 'participant', '{}')
+                """,
+                (
+                    f"legacy-{participant_id}",
+                    participant_id,
+                    category,
+                    f"{date}T00:00:00Z",
+                ),
+            )
+        return legacy_path
+
+    def test_locate_database_finds_legacy_dated_path(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            self._write_legacy_database(temp_dir, "practice", "2026-06-24", "P5")
+            config = StorageConfig(root=Path(temp_dir), layout="participant", experiment_id="study")
+            store = create_data_store(config, Path.cwd())
+
+            state = store.get_session_state("legacy-P5", "P5")
+            self.assertIsNotNone(state)
+            self.assertEqual(state["session"]["participant_id"], "P5")
+
+    def test_latest_session_for_participant_includes_legacy_dated_sessions(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            self._write_legacy_database(temp_dir, "real", "2026-05-01", "P6")
+            config = StorageConfig(root=Path(temp_dir), layout="participant", experiment_id="study")
+            store = create_data_store(config, Path.cwd())
+
+            found = store.latest_session_for_participant("P6")
+            self.assertIsNotNone(found)
+            self.assertEqual(found["session"]["session_id"], "legacy-P6")
+
+    def test_new_session_for_returning_participant_reuses_the_undated_database(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            config = StorageConfig(
+                root=Path(temp_dir),
+                layout="participant",
+                experiment_id="study",
+                export_formats=("none",),
+            )
+            store = create_data_store(config, Path.cwd())
+            store.create_session(session_payload("session-day1", participant_id="P7"))
+            store.create_session(session_payload("session-day2", participant_id="P7"))
+
+            database_path = config.database_path("session-day2", "P7", "Test Participant")
+            self.assertEqual(
+                database_path,
+                Path(temp_dir) / "practice" / "study" / "participants" / "Test-Participant_P7" / "experiment.sqlite",
+            )
+            with sqlite3.connect(database_path) as connection:
+                session_ids = {
+                    row[0]
+                    for row in connection.execute(
+                        "SELECT session_id FROM sessions WHERE participant_id = 'P7'"
+                    )
+                }
+            self.assertEqual(session_ids, {"session-day1", "session-day2"})
 
 
 if __name__ == "__main__":
