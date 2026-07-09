@@ -1008,6 +1008,22 @@ async def _study_handler(websocket, fetcher, runner):
         pass
 
 
+class _NoCacheHTMLRequestHandler(SimpleHTTPRequestHandler):
+    """Static file handler that forces revalidation of .html pages.
+
+    The JS these pages load is already cache-busted via a content-hash
+    query string, but the HTML itself was being served stale from the
+    browser's HTTP cache on the rig — a new launcher.html/setbox.html
+    deploy silently kept showing the old page until an incognito reload.
+    HTML pages are tiny, so always revalidating them costs nothing.
+    """
+
+    def end_headers(self):
+        if self.path.split("?", 1)[0].endswith(".html"):
+            self.send_header("Cache-Control", "no-cache")
+        super().end_headers()
+
+
 # ── Transport layer ────────────────────────────────────────────────────────────
 
 async def handler(
@@ -1088,7 +1104,7 @@ async def main(
             diagnostic,
         )
 
-    request_handler = partial(SimpleHTTPRequestHandler, directory=str(root))
+    request_handler = partial(_NoCacheHTMLRequestHandler, directory=str(root))
     http_server = ThreadingHTTPServer((HOST, HTTP_PORT), request_handler)
     http_thread = threading.Thread(target=http_server.serve_forever, daemon=True)
     http_thread.start()
