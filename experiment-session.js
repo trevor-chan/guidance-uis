@@ -118,7 +118,7 @@
     { linearMm: 10, angularDeg: 10 },
     { linearMm: 5,  angularDeg: 5  },
     { linearMm: 3,  angularDeg: 3  },
-    { linearMm: 2,  angularDeg: 2  },
+    { linearMm: 1,  angularDeg: 1  },
   ];
   const PRECISION_TRIALS_PER_THRESHOLD = 3;
 
