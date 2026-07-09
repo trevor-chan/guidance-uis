@@ -17,14 +17,14 @@ from __future__ import annotations
 import sqlite3
 import sys
 from collections import defaultdict
+from math import sqrt
 from pathlib import Path
-from statistics import mean
+from statistics import mean, stdev
 
 import matplotlib
 
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
-from matplotlib.patches import Patch
 
 # -- Palette (validated categorical order; see the dataviz skill) ----------
 
@@ -222,6 +222,50 @@ def present_modalities(rows: list[dict]) -> list[str]:
     return [m for m in MODALITY_IDS if m in found]
 
 
+# -- Confidence intervals ---------------------------------------------------
+
+# Two-tailed 97.5th-percentile Student's t critical values, df 1-30. Beyond
+# df=30 a Cornish-Fisher expansion around the normal quantile is accurate to
+# the precision these plots need, avoiding a scipy dependency.
+_T_TABLE_975 = {
+    1: 12.706, 2: 4.303, 3: 3.182, 4: 2.776, 5: 2.571,
+    6: 2.447, 7: 2.365, 8: 2.306, 9: 2.262, 10: 2.228,
+    11: 2.201, 12: 2.179, 13: 2.160, 14: 2.145, 15: 2.131,
+    16: 2.120, 17: 2.110, 18: 2.101, 19: 2.093, 20: 2.086,
+    21: 2.080, 22: 2.074, 23: 2.069, 24: 2.064, 25: 2.060,
+    26: 2.056, 27: 2.052, 28: 2.048, 29: 2.045, 30: 2.042,
+}
+_Z_975 = 1.959964
+
+
+def t_critical_975(df: int) -> float:
+    if df in _T_TABLE_975:
+        return _T_TABLE_975[df]
+    z = _Z_975
+    return z + (z**3 + z) / (4 * df) + (5 * z**5 + 16 * z**3 + 3 * z) / (96 * df**2)
+
+
+def mean_ci95(values: list[float]) -> tuple[float, float, float]:
+    """t-based 95% CI of the mean. Returns (mean, lower, upper); lower==upper==mean if n==1."""
+    n = len(values)
+    m = mean(values)
+    if n <= 1:
+        return m, m, m
+    se = stdev(values) / sqrt(n)
+    half = t_critical_975(n - 1) * se
+    return m, m - half, m + half
+
+
+def wilson_ci95(successes: float, n: int) -> tuple[float, float, float]:
+    """Wilson score 95% CI for a binomial proportion. Returns (phat, lower, upper)."""
+    z = _Z_975
+    phat = successes / n
+    denom = 1 + z**2 / n
+    center = (phat + z**2 / (2 * n)) / denom
+    half = (z * sqrt(phat * (1 - phat) / n + z**2 / (4 * n**2))) / denom
+    return phat, center - half, center + half
+
+
 # -- Individual plots --------------------------------------------------
 
 
@@ -248,26 +292,39 @@ def plot_modality_time(trials: list[dict]) -> None:
     save(fig, "modality_time.png")
 
 
+def bar_with_ci(ax, modalities: list[str], means: list[float], los: list[float], his: list[float]) -> None:
+    xs = list(range(1, len(modalities) + 1))
+    colors = [MODALITY_COLORS[m] for m in modalities]
+    ax.bar(xs, means, width=0.6, color=colors, alpha=0.75, edgecolor=colors, linewidth=1.2, zorder=2)
+    lo_err = [m - lo for m, lo in zip(means, los)]
+    hi_err = [hi - m for m, hi in zip(means, his)]
+    ax.errorbar(
+        xs, means, yerr=[lo_err, hi_err],
+        fmt="none", ecolor=INK, elinewidth=1.6, capsize=5, zorder=3,
+    )
+    ax.set_xticks(xs)
+    ax.set_xticklabels([MODALITY_LABELS[m] for m in modalities], fontsize=9)
+
+
 def plot_modality_preference(preferences: list[dict]) -> None:
     if not preferences:
         print("  modality_preference: no data, skipping")
         return
     modalities = present_modalities(preferences)
-    data = [[p["rating"] for p in preferences if p["modality_id"] == m] for m in modalities]
+    means, los, his = [], [], []
+    for m in modalities:
+        ratings = [p["rating"] for p in preferences if p["modality_id"] == m]
+        mn, lo, hi = mean_ci95(ratings)
+        means.append(mn)
+        los.append(lo)
+        his.append(hi)
 
     fig, ax = plt.subplots(figsize=(8, 5))
-    bp = ax.boxplot(data, patch_artist=True, widths=0.55)
-    style_box(bp, INK)
-    for i, m in enumerate(modalities):
-        bp["boxes"][i].set_edgecolor(MODALITY_COLORS[m])
-        bp["boxes"][i].set_facecolor(MODALITY_COLORS[m])
-        bp["boxes"][i].set_alpha(0.6)
-    ax.set_xticks(range(1, len(modalities) + 1))
-    ax.set_xticklabels([MODALITY_LABELS[m] for m in modalities], fontsize=9)
-    ax.set_ylim(0.5, 5.5)
+    bar_with_ci(ax, modalities, means, los, his)
+    ax.set_ylim(1, 5)
     ax.set_yticks([1, 2, 3, 4, 5])
     ax.set_ylabel("Preference rating (1-5)")
-    ax.set_title("Modality: preference rating by modality", fontsize=13)
+    ax.set_title("Modality: preference rating by modality (mean ± 95% CI)", fontsize=13)
     style_axes(ax)
     save(fig, "modality_preference.png")
 
@@ -278,20 +335,57 @@ def plot_modality_success(trials: list[dict]) -> None:
         print("  modality_success: no data, skipping")
         return
     modalities = present_modalities(rows)
-    fractions = [
-        mean(r["achieved"] for r in rows if r["modality_id"] == m) for m in modalities
-    ]
+    means, los, his = [], [], []
+    for m in modalities:
+        outcomes = [r["achieved"] for r in rows if r["modality_id"] == m]
+        phat, lo, hi = wilson_ci95(sum(outcomes), len(outcomes))
+        means.append(phat)
+        los.append(lo)
+        his.append(hi)
 
     fig, ax = plt.subplots(figsize=(8, 5))
-    for i, (m, frac) in enumerate(zip(modalities, fractions)):
-        ax.scatter(i + 1, frac, color=MODALITY_COLORS[m], s=110, zorder=3, edgecolor=INK, linewidth=0.8)
-    ax.set_xticks(range(1, len(modalities) + 1))
-    ax.set_xticklabels([MODALITY_LABELS[m] for m in modalities], fontsize=9)
-    ax.set_ylim(-0.05, 1.05)
+    bar_with_ci(ax, modalities, means, los, his)
+    ax.set_ylim(0, 1)
     ax.set_ylabel("Fraction achieved")
-    ax.set_title("Modality: success rate by modality", fontsize=13)
+    ax.set_title("Modality: success rate by modality (mean ± 95% CI)", fontsize=13)
     style_axes(ax)
     save(fig, "modality_success.png")
+
+
+def point_range_by_group(
+    ax,
+    groups: list,
+    group_labels: list[str],
+    series: list[str],
+    values: dict,
+    series_colors: dict,
+    series_labels: dict,
+) -> None:
+    """Mean ± 95% CI point-range per group. All series share the same x
+    position (no dodge) — overlap is expected, color differentiates."""
+    for s in series:
+        xs, means, lo_err, hi_err = [], [], [], []
+        for i, g in enumerate(groups):
+            vals = values.get((g, s), [])
+            if not vals:
+                continue
+            m, lo, hi = mean_ci95(vals)
+            xs.append(i + 1)
+            means.append(m)
+            lo_err.append(m - lo)
+            hi_err.append(hi - m)
+        if not xs:
+            continue
+        ax.errorbar(
+            xs, means, yerr=[lo_err, hi_err],
+            fmt="o", color=series_colors[s], ecolor=series_colors[s],
+            elinewidth=2.2, capsize=0, markersize=7,
+            markeredgecolor=INK, markeredgewidth=0.6,
+            label=series_labels[s], zorder=3,
+        )
+    ax.set_xticks(range(1, len(groups) + 1))
+    ax.set_xticklabels(group_labels)
+    ax.legend(frameon=False, labelcolor=INK, fontsize=10)
 
 
 def plot_learning_curve_time(trials: list[dict]) -> None:
@@ -305,57 +399,26 @@ def plot_learning_curve_time(trials: list[dict]) -> None:
     if not rows:
         print("  learning_curve_time: no data, skipping")
         return
+    trial_numbers = sorted({r["trial_index"] + 1 for r in rows})
+    values = defaultdict(list)
+    for r in rows:
+        values[(r["trial_index"] + 1, r["modality_id"])].append(r["elapsed_s"])
 
     fig, ax = plt.subplots(figsize=(9, 5.5))
-    for mode in COMPARE_MODES:
-        mode_rows = [r for r in rows if r["modality_id"] == mode]
-        if not mode_rows:
-            continue
-        xs = [r["trial_index"] + 1 for r in mode_rows]
-        ys = [r["elapsed_s"] for r in mode_rows]
-        ax.scatter(
-            xs, ys,
-            color=MODALITY_COLORS[mode], label=COMPARE_LABELS[mode],
-            alpha=0.65, s=28, edgecolor="none",
-        )
+    point_range_by_group(
+        ax,
+        groups=trial_numbers,
+        group_labels=[str(n) for n in trial_numbers],
+        series=COMPARE_MODES,
+        values=values,
+        series_colors=MODALITY_COLORS,
+        series_labels=COMPARE_LABELS,
+    )
     ax.set_xlabel("Trial number")
     ax.set_ylabel("Time (s)")
-    ax.set_title("Learning curve: time per trial", fontsize=13)
+    ax.set_title("Learning curve: time per trial (mean ± 95% CI)", fontsize=13)
     style_axes(ax)
-    ax.legend(frameon=False, labelcolor=INK, fontsize=10)
     save(fig, "learning_curve_time.png")
-
-
-def grouped_boxplot(
-    ax,
-    groups: list,
-    group_labels: list[str],
-    series: list[str],
-    values: dict,
-    series_colors: dict,
-    series_labels: dict,
-) -> None:
-    n_series = len(series)
-    box_width = 0.7 / n_series
-    for j, s in enumerate(series):
-        offset = (j - (n_series - 1) / 2) * box_width
-        positions = [i + 1 + offset for i in range(len(groups))]
-        data = [values.get((g, s), []) for g in groups]
-        bp = ax.boxplot(
-            data, positions=positions, widths=box_width * 0.85, patch_artist=True,
-        )
-        style_box(bp, series_colors[s])
-        for box in bp["boxes"]:
-            box.set_facecolor(series_colors[s])
-            box.set_edgecolor(series_colors[s])
-            box.set_alpha(0.6)
-    ax.set_xticks(range(1, len(groups) + 1))
-    ax.set_xticklabels(group_labels)
-    legend_handles = [
-        Patch(facecolor=series_colors[s], edgecolor=series_colors[s], alpha=0.6, label=series_labels[s])
-        for s in series
-    ]
-    ax.legend(handles=legend_handles, frameon=False, labelcolor=INK, fontsize=10)
 
 
 def plot_noise_time(trials: list[dict]) -> None:
@@ -376,7 +439,7 @@ def plot_noise_time(trials: list[dict]) -> None:
         values[(r["noise"], r["modality_id"])].append(r["elapsed_s"])
 
     fig, ax = plt.subplots(figsize=(9, 5.5))
-    grouped_boxplot(
+    point_range_by_group(
         ax,
         groups=magnitudes,
         group_labels=[f"{m:g}" for m in magnitudes],
@@ -387,7 +450,7 @@ def plot_noise_time(trials: list[dict]) -> None:
     )
     ax.set_xlabel("Noise magnitude (mm / deg)")
     ax.set_ylabel("Time (s)")
-    ax.set_title("Noise: completion time by magnitude", fontsize=13)
+    ax.set_title("Noise: completion time by magnitude (mean ± 95% CI)", fontsize=13)
     style_axes(ax)
     save(fig, "noise_time.png")
 
@@ -410,7 +473,7 @@ def plot_latency_time(trials: list[dict]) -> None:
         values[(r["perceived_ms"], r["modality_id"])].append(r["elapsed_s"])
 
     fig, ax = plt.subplots(figsize=(9, 5.5))
-    grouped_boxplot(
+    point_range_by_group(
         ax,
         groups=latencies,
         group_labels=[f"{l:g}" for l in latencies],
@@ -421,7 +484,7 @@ def plot_latency_time(trials: list[dict]) -> None:
     )
     ax.set_xlabel("Perceived latency (ms)")
     ax.set_ylabel("Time (s)")
-    ax.set_title("Latency: completion time by perceived latency", fontsize=13)
+    ax.set_title("Latency: completion time by perceived latency (mean ± 95% CI)", fontsize=13)
     style_axes(ax)
     save(fig, "latency_time.png")
 
@@ -459,7 +522,7 @@ def plot_precision_time(trials: list[dict]) -> None:
         values[(precision_key(r), r["modality_id"])].append(r["elapsed_s"])
 
     fig, ax = plt.subplots(figsize=(9, 5.5))
-    grouped_boxplot(
+    point_range_by_group(
         ax,
         groups=groups,
         group_labels=[precision_label(g) for g in groups],
@@ -470,50 +533,9 @@ def plot_precision_time(trials: list[dict]) -> None:
     )
     ax.set_xlabel("Match threshold (easiest -> hardest)")
     ax.set_ylabel("Time (s)")
-    ax.set_title("Precision: completion time by threshold", fontsize=13)
+    ax.set_title("Precision: completion time by threshold (mean ± 95% CI)", fontsize=13)
     style_axes(ax)
     save(fig, "precision_time.png")
-
-
-def plot_precision_success(trials: list[dict]) -> None:
-    rows = [
-        t
-        for t in trials
-        if t["experiment_condition"] == "precision"
-        and t["modality_id"] in COMPARE_MODES
-        and t["precision_linear_mm"] is not None
-        and t["achieved"] is not None
-    ]
-    if not rows:
-        print("  precision_success: no data, skipping")
-        return
-    groups = precision_groups(rows)
-
-    fig, ax = plt.subplots(figsize=(9, 5.5))
-    for mode in COMPARE_MODES:
-        mode_rows = [r for r in rows if r["modality_id"] == mode]
-        if not mode_rows:
-            continue
-        xs, ys = [], []
-        for i, g in enumerate(groups):
-            group_rows = [r for r in mode_rows if precision_key(r) == g]
-            if not group_rows:
-                continue
-            xs.append(i + 1)
-            ys.append(mean(r["achieved"] for r in group_rows))
-        ax.scatter(
-            xs, ys, color=MODALITY_COLORS[mode], label=COMPARE_LABELS[mode],
-            s=110, zorder=3, edgecolor=INK, linewidth=0.8,
-        )
-    ax.set_xticks(range(1, len(groups) + 1))
-    ax.set_xticklabels([precision_label(g) for g in groups])
-    ax.set_xlabel("Match threshold (easiest -> hardest)")
-    ax.set_ylim(-0.05, 1.05)
-    ax.set_ylabel("Fraction achieved")
-    ax.set_title("Precision: success rate by threshold", fontsize=13)
-    style_axes(ax)
-    ax.legend(frameon=False, labelcolor=INK, fontsize=10)
-    save(fig, "precision_success.png")
 
 
 def main() -> None:
@@ -543,7 +565,6 @@ def main() -> None:
     plot_noise_time(trials)
     plot_latency_time(trials)
     plot_precision_time(trials)
-    plot_precision_success(trials)
 
 
 if __name__ == "__main__":
