@@ -5,10 +5,10 @@
   <title>Trial Monitor</title>
   <style>
     :root {
-      --bg: #111;
+      --bg: #0a0a0a;
       --surface: #1e1e1e;
-      --text: #f0f0f0;
-      --dim: #999;
+      --text: #fafafa;
+      --dim: #d4d4d4;
       --track: #2a2a2a;
     }
     * { box-sizing: border-box; margin: 0; padding: 0; }
@@ -21,16 +21,17 @@
       align-items: center;
       justify-content: center;
       min-height: 100vh;
-      gap: 20px;
+      gap: 24px;
       padding: 32px;
     }
-    h1 { font-size: 1rem; letter-spacing: 0.15em; color: var(--dim); }
+    h1 { font-size: 1.4rem; letter-spacing: 0.15em; color: var(--text); }
 
     .card {
       background: var(--surface);
       border-radius: 8px;
-      padding: 24px 28px;
-      width: 460px;
+      padding: 28px 32px;
+      width: 560px;
+      max-width: 100%;
     }
 
     .metric { margin-bottom: 20px; }
@@ -43,15 +44,15 @@
       margin-bottom: 8px;
     }
     .metric-label {
-      font-size: 0.75rem;
+      font-size: 1rem;
       text-transform: uppercase;
       letter-spacing: 0.1em;
-      color: var(--dim);
+      color: var(--text);
     }
-    .metric-value { font-size: 1rem; font-weight: bold; }
+    .metric-value { font-size: 1.4rem; font-weight: bold; }
 
     .bar-track {
-      height: 22px;
+      height: 28px;
       background: var(--track);
       border-radius: 4px;
       overflow: hidden;
@@ -66,8 +67,8 @@
     .null-notice {
       display: none;
       text-align: center;
-      font-size: 0.8rem;
-      color: var(--dim);
+      font-size: 1.1rem;
+      color: var(--text);
       padding: 6px 0 0;
       letter-spacing: 0.05em;
     }
@@ -78,19 +79,19 @@
       align-items: center;
     }
     .badge {
-      padding: 4px 12px;
+      padding: 8px 18px;
       border-radius: 4px;
-      font-size: 0.8rem;
+      font-size: 1.15rem;
       font-weight: bold;
       letter-spacing: 0.08em;
     }
-    .badge-running  { background: #2a2a2a; color: var(--dim); }
+    .badge-running  { background: #2a2a2a; color: var(--text); }
     .badge-matched  { background: #14532d; color: #4ade80; }
     .badge-timeout  { background: #450a0a; color: #f87171; }
 
     #ws-status {
-      font-size: 0.7rem;
-      color: var(--dim);
+      font-size: 1rem;
+      color: var(--text);
       letter-spacing: 0.05em;
     }
     .ws-ok  { color: #4ade80 !important; }
@@ -105,7 +106,7 @@
     }
     .comp-stat { text-align: center; }
     .comp-big {
-      font-size: 2rem;
+      font-size: 2.6rem;
       font-weight: bold;
       letter-spacing: 0.05em;
       margin-top: 4px;
@@ -121,7 +122,7 @@
       margin-bottom: 20px;
     }
     #comp-final-score {
-      font-size: 3rem;
+      font-size: 3.6rem;
       font-weight: bold;
       color: #4ade80;
       margin-top: 4px;
@@ -133,13 +134,13 @@
     }
     .comp-btn {
       flex: 1;
-      padding: 10px 0;
+      padding: 16px 0;
       background: #2a2a2a;
       color: var(--text);
       border: 1px solid #444;
       border-radius: 6px;
       font-family: 'Courier New', monospace;
-      font-size: 0.8rem;
+      font-size: 1.15rem;
       letter-spacing: 0.08em;
       text-transform: uppercase;
       cursor: pointer;
@@ -169,19 +170,19 @@
     .study-phase { display: none; }
 
     .study-heading {
-      font-size: 0.75rem;
+      font-size: 1.1rem;
       text-transform: uppercase;
       letter-spacing: 0.1em;
-      color: var(--dim);
+      color: var(--text);
       text-align: center;
-      margin-bottom: 16px;
+      margin-bottom: 18px;
     }
     .study-prompt {
-      font-size: 0.9rem;
+      font-size: 1.6rem;
       text-align: center;
       color: var(--text);
-      line-height: 1.6;
-      margin-bottom: 20px;
+      line-height: 1.5;
+      margin-bottom: 24px;
     }
     .rating-buttons {
       display: flex;
@@ -189,14 +190,14 @@
       justify-content: center;
     }
     .rating-btn {
-      padding: 8px 4px;
+      padding: 14px 6px;
       flex: 1;
       background: #2a2a2a;
       color: var(--text);
       border: 1px solid #444;
       border-radius: 6px;
       font-family: 'Courier New', monospace;
-      font-size: 1.1rem;
+      font-size: 1.5rem;
       font-weight: bold;
       cursor: pointer;
       transition: background 120ms;
@@ -207,53 +208,36 @@
     .rating-btn:disabled { opacity: 0.35; cursor: default; }
     .rating-btn small {
       display: block;
-      font-size: 0.62rem;
+      font-size: 0.95rem;
       font-weight: normal;
-      color: #888;
+      color: var(--text);
       margin-top: 3px;
       line-height: 1.3;
     }
 
     #trial-progress-label {
-      font-size: 0.85rem;
-      color: var(--dim);
+      font-size: 1.5rem;
+      font-weight: bold;
+      color: var(--text);
       text-align: center;
       letter-spacing: 0.08em;
       text-transform: uppercase;
     }
     .study-complete-msg {
-      font-size: 1rem;
+      font-size: 2rem;
       text-align: center;
       color: #4ade80;
       letter-spacing: 0.05em;
     }
     .study-context {
-      color: #38bdf8;
-      font-size: 0.66rem;
+      color: #7dd3fc;
+      font-size: 0.9rem;
       line-height: 1.5;
       letter-spacing: 0.04em;
       text-align: center;
       padding-bottom: 14px;
       margin-bottom: 16px;
       border-bottom: 1px solid #333;
-    }
-    .axis-stats {
-      display: grid;
-      grid-template-columns: repeat(6, 1fr);
-      gap: 8px;
-    }
-    .axis-stat {
-      padding: 8px 6px;
-      border: 1px solid #333;
-      border-radius: 5px;
-      color: #f87171;
-      font-size: 0.7rem;
-      line-height: 1.5;
-      text-align: center;
-    }
-    .axis-stat.aligned {
-      border-color: #166534;
-      color: #4ade80;
     }
   </style>
 </head>
@@ -296,7 +280,7 @@
     <!-- Waiting for calibrate -->
     <div class="study-phase" id="study-cal-phase">
       <div class="study-heading">Study Mode</div>
-      <p class="study-prompt">Press Calibrate to capture the origin and begin the session.</p>
+      <p class="study-prompt">Press Calibrate to begin.</p>
       <div class="comp-buttons">
         <button class="comp-btn" id="btn-study-calibrate">Calibrate</button>
       </div>
@@ -338,18 +322,6 @@
 
   </div>
 
-  <!-- Component readout -->
-  <div class="card" id="axis-card" style="padding: 12px 28px;">
-    <div class="axis-stats">
-      <div class="axis-stat" id="axis-x"><strong>X</strong><br><span>--</span></div>
-      <div class="axis-stat" id="axis-y"><strong>Y</strong><br><span>--</span></div>
-      <div class="axis-stat" id="axis-z"><strong>Z</strong><br><span>--</span></div>
-      <div class="axis-stat" id="axis-roll"><strong>ROLL</strong><br><span>--</span></div>
-      <div class="axis-stat" id="axis-pitch"><strong>PITCH</strong><br><span>--</span></div>
-      <div class="axis-stat" id="axis-yaw"><strong>YAW</strong><br><span>--</span></div>
-    </div>
-  </div>
-
   <!-- Distance bars -->
   <div class="card" id="bars-card">
     <div class="metric">
@@ -382,30 +354,12 @@
 
   <div id="ws-status">connecting…</div>
 
-  <script src="experiment-session.js?v=92c0837f"></script>
+  <script src="experiment-session.js?v=6c5fb514"></script>
   <script>
     const WS_URL      = "ws://localhost:8765";
     const MAX_LINEAR  = 0.5;   // meters  — full cold at or beyond this
     const MAX_ANGULAR = 90;    // degrees — full cold at or beyond this
     const TRIGGER_KEYS = new Set("123456qwerty".split(""));
-    const AXES = ["x", "y", "z", "roll", "pitch", "yaw"];
-
-    function updateAxisStats(components, aligned) {
-      for (const name of AXES) {
-        const el = document.getElementById(`axis-${name}`);
-        if (!el) continue;
-        const isAligned = Boolean(aligned?.[name]);
-        el.className = `axis-stat${isAligned ? " aligned" : ""}`;
-        if (components?.[name] != null) {
-          const isTranslation = name === "x" || name === "y" || name === "z";
-          const value = isTranslation ? components[name] * 100 : components[name];
-          el.querySelector("span").textContent =
-            `${value.toFixed(1)} ${isTranslation ? "cm" : "deg"}`;
-        } else {
-          el.querySelector("span").textContent = "--";
-        }
-      }
-    }
 
     // Interpolate between cold (#1e3a8a) and hot (#dc2626) by closeness [0,1]
     function barColor(closeness) {
@@ -569,6 +523,7 @@
         } else if (act === "trial") {
           document.getElementById("study-trial-phase").style.display  = "block";
           if (d.trial_index !== null && d.trial_index !== undefined) {
+            window.ExperimentSession.maybeRunTrialCountdown(d.trial_index);
             const total = d.n_trials ?? d.trial_count ?? "?";
             const label = d.target_label ? ` (${d.target_label})` : "";
             document.getElementById("trial-progress-label").textContent =
@@ -624,7 +579,6 @@
         } else {
           renderCompetition(d);
         }
-        updateAxisStats(d.workspace_component_errors, d.workspace_component_aligned);
       };
 
       ws.onclose = () => {

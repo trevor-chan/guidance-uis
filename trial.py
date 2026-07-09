@@ -21,18 +21,26 @@ TARGET_POSE = np.array([
 
 LINEAR_TOLERANCE = 0.005    # meters (5 mm)
 ANGULAR_TOLERANCE = 5.0     # degrees
-TIMEOUT_SECONDS = 60.0
+TIMEOUT_SECONDS = 90.0
 
 
 class Trial:
-    """Runs one target-match test against a live pose source."""
+    """Runs one target-match test against a live pose source.
+
+    timeout_seconds=None (default) reads the module-level TIMEOUT_SECONDS on
+    every step, so tests that monkeypatch it still affect already-constructed
+    instances. Pass math.inf explicitly to disable the timeout entirely (used
+    by PracticeActivity, which must never auto-end on time).
+    """
 
     def __init__(self, fetcher: LivePoseFetcher, target_pose: np.ndarray = TARGET_POSE,
-                 linear_tol: float = LINEAR_TOLERANCE, angular_tol: float = ANGULAR_TOLERANCE):
+                 linear_tol: float = LINEAR_TOLERANCE, angular_tol: float = ANGULAR_TOLERANCE,
+                 timeout_seconds: float | None = None):
         self.fetcher = fetcher
         self.target_pose = target_pose
         self.linear_tol = linear_tol
         self.angular_tol = angular_tol
+        self.timeout_seconds = timeout_seconds
         self.start_time = None
 
     def start(self) -> None:
@@ -47,13 +55,14 @@ class Trial:
         """
         live_pose = self.fetcher.get_pose()
         elapsed = time.perf_counter() - self.start_time
+        timeout = self.timeout_seconds if self.timeout_seconds is not None else TIMEOUT_SECONDS
 
         if live_pose is None:
             return {
                 "linear": None,
                 "angular": None,
                 "matched": False,
-                "timed_out": elapsed >= TIMEOUT_SECONDS,
+                "timed_out": elapsed >= timeout,
                 "elapsed": elapsed,
                 "live_pose": None,
                 "components": None,
@@ -77,7 +86,7 @@ class Trial:
             "linear": lin,
             "angular": ang,
             "matched": matched,
-            "timed_out": elapsed >= TIMEOUT_SECONDS,
+            "timed_out": elapsed >= timeout,
             "elapsed": elapsed,
             "live_pose": live_pose.tolist(),
             "components": components,

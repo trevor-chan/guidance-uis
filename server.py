@@ -262,7 +262,7 @@ async def _competition_handler(websocket, fetcher, modality="1d", frame="transdu
             if not comp["active"]:
                 state["matched"] = False
 
-            # trial.py's 60s timed_out is per-target study logic; the competition
+            # trial.py's 90s timed_out is per-target study logic; the competition
             # uses only its own 3-minute clock.  Hide timed_out from the client
             # while a competition is running so the badge never shows "TIMED OUT".
             if comp["active"]:

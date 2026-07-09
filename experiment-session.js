@@ -584,6 +584,68 @@
     window.location.replace("launcher.html?resume=1");
   }
 
+  // ── Inter-trial countdown ────────────────────────────────────────────────
+  // Full-screen, opaque, always-on-top overlay so the participant can see
+  // neither the previous nor the upcoming target while it's up. Shared by all
+  // three modality pages so the occlusion behavior is identical everywhere.
+  const COUNTDOWN_OVERLAY_ID = "trial-countdown-overlay";
+  let _countdownShownForTrial = null;
+  let _countdownBusy = false;
+
+  function countdownOverlay() {
+    let overlay = document.getElementById(COUNTDOWN_OVERLAY_ID);
+    if (overlay) return overlay;
+    overlay = document.createElement("div");
+    overlay.id = COUNTDOWN_OVERLAY_ID;
+    Object.assign(overlay.style, {
+      position: "fixed",
+      inset: "0",
+      zIndex: "999999",
+      display: "none",
+      alignItems: "center",
+      justifyContent: "center",
+      background: "#000",
+      color: "#fff",
+      fontFamily: "'Courier New', monospace",
+      fontWeight: "bold",
+      fontSize: "min(45vh, 45vw)",
+    });
+    document.body.appendChild(overlay);
+    return overlay;
+  }
+
+  function runTrialCountdown(onComplete) {
+    const overlay = countdownOverlay();
+    overlay.style.display = "flex";
+    let count = 3;
+    overlay.textContent = String(count);
+    const tick = () => {
+      count -= 1;
+      if (count <= 0) {
+        overlay.style.display = "none";
+        onComplete?.();
+        return;
+      }
+      overlay.textContent = String(count);
+      setTimeout(tick, 1000);
+    };
+    setTimeout(tick, 1000);
+  }
+
+  // Call every render tick while activity_type is "trial". No-ops unless
+  // trialIndex is one we haven't already counted down for, and guards against
+  // re-triggering from the ~30Hz stream of messages while the countdown runs.
+  function maybeRunTrialCountdown(trialIndex, onComplete) {
+    if (trialIndex === null || trialIndex === undefined) return;
+    if (trialIndex === _countdownShownForTrial || _countdownBusy) return;
+    _countdownBusy = true;
+    runTrialCountdown(() => {
+      _countdownShownForTrial = trialIndex;
+      _countdownBusy = false;
+      onComplete?.();
+    });
+  }
+
   window.ExperimentSession = Object.freeze({
     MODALITIES,
     OPTION_ORDERS,
@@ -608,5 +670,7 @@
     applyPersistentState,
     restorePersistentSession,
     selectCondition,
+    runTrialCountdown,
+    maybeRunTrialCountdown,
   });
 })();

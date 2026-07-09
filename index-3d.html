@@ -6,10 +6,10 @@
   <title>3D Pose Guidance</title>
   <style>
     :root {
-      --bg: #111;
+      --bg: #0a0a0a;
       --surface: #1e1e1e;
-      --text: #f0f0f0;
-      --dim: #aaa;
+      --text: #fafafa;
+      --dim: #d4d4d4;
       --border: #333;
       --live: #ffffff;
       --ghost: #7dd3fc;
@@ -30,8 +30,8 @@
       gap: 16px;
     }
     h1 {
-      color: var(--dim);
-      font-size: 1rem;
+      color: var(--text);
+      font-size: 1.4rem;
       letter-spacing: 0.15em;
       text-align: center;
     }
@@ -48,25 +48,25 @@
     }
     .stat { text-align: center; }
     .label {
-      color: var(--dim);
-      font-size: 0.72rem;
+      color: var(--text);
+      font-size: 1rem;
       letter-spacing: 0.1em;
       text-transform: uppercase;
     }
     .big {
       margin-top: 4px;
-      font-size: 1.8rem;
+      font-size: 2.2rem;
       font-weight: bold;
     }
     #time-value { color: #facc15; }
     #score-value { color: var(--success); }
     .badge {
       display: inline-block;
-      padding: 5px 12px;
+      padding: 8px 16px;
       border-radius: 4px;
       background: #2a2a2a;
-      color: var(--dim);
-      font-size: 0.78rem;
+      color: var(--text);
+      font-size: 1.05rem;
       font-weight: bold;
       letter-spacing: 0.08em;
     }
@@ -108,14 +108,14 @@
       background: linear-gradient(90deg, #ef4444 0 33%, #22c55e 33% 66%, #3b82f6 66%);
     }
     #model-status, #pose-readout {
-      color: var(--dim);
-      font-size: 0.7rem;
+      color: var(--text);
+      font-size: 1rem;
       line-height: 1.5;
     }
     #source-status {
       margin-bottom: 4px;
       color: #facc15;
-      font-size: 0.72rem;
+      font-size: 1rem;
       font-weight: bold;
       letter-spacing: 0.06em;
     }
@@ -129,13 +129,13 @@
       display: grid;
       grid-template-columns: repeat(3, max-content);
       gap: 7px 18px;
-      color: var(--dim);
-      font-size: 0.72rem;
+      color: var(--text);
+      font-size: 1rem;
     }
     .tracker-help {
       display: none;
-      color: var(--dim);
-      font-size: 0.75rem;
+      color: var(--text);
+      font-size: 1rem;
       line-height: 1.5;
     }
     kbd {
@@ -154,20 +154,20 @@
     .ind.on  { color: #4ade80; }
     .ind.off { color: #f87171; }
     button {
-      padding: 9px 14px;
+      padding: 12px 18px;
       border: 1px solid #444;
       border-radius: 5px;
       background: #2a2a2a;
       color: var(--text);
-      font: 0.75rem "Courier New", monospace;
+      font: 1rem "Courier New", monospace;
       letter-spacing: 0.06em;
       text-transform: uppercase;
       cursor: pointer;
     }
     button:hover { background: #383838; }
     #connection {
-      color: var(--dim);
-      font-size: 0.7rem;
+      color: var(--text);
+      font-size: 1rem;
       letter-spacing: 0.05em;
       text-align: center;
     }
@@ -202,17 +202,17 @@
     #study-card-3d { display: none; }
     .study-phase-3d { display: none; }
     .study-heading-3d {
-      font-size: 0.72rem; text-transform: uppercase; letter-spacing: 0.1em;
-      color: var(--dim); text-align: center; margin-bottom: 14px;
+      font-size: 1.1rem; text-transform: uppercase; letter-spacing: 0.1em;
+      color: var(--text); text-align: center; margin-bottom: 16px;
     }
     .study-prompt-3d {
-      font-size: 0.9rem; text-align: center; line-height: 1.6; margin-bottom: 16px;
+      font-size: 1.6rem; text-align: center; line-height: 1.5; margin-bottom: 20px;
     }
     .study-card-btn-3d {
-      display: block; width: 100%; padding: 10px 0;
+      display: block; width: 100%; padding: 18px 0;
       background: #2a2a2a; color: var(--text);
       border: 1px solid #444; border-radius: 6px;
-      font: 0.8rem "Courier New", monospace;
+      font: bold 1.3rem "Courier New", monospace;
       letter-spacing: 0.08em; text-transform: uppercase; cursor: pointer;
       transition: background 120ms; margin-top: 4px;
     }
@@ -235,43 +235,34 @@
     .pause-overlay-btn:hover { background: #383838; }
     .rating-row-3d { display: flex; gap: 8px; justify-content: center; }
     .rating-row-3d button {
-      flex: 1; padding: 8px 4px; max-width: 120px;
+      flex: 1; padding: 12px 4px; max-width: 120px;
       background: #2a2a2a; border: 1px solid #444; border-radius: 6px;
-      color: var(--text); font: bold 1.1rem "Courier New", monospace; cursor: pointer;
+      color: var(--text); font: bold 1.4rem "Courier New", monospace; cursor: pointer;
       line-height: 1.2;
     }
     .rating-row-3d button:hover { background: #383838; }
     .rating-row-3d button:disabled { opacity: 0.35; cursor: default; }
     .rating-row-3d button small {
-      display: block; font-size: 0.62rem; font-weight: normal;
-      color: #888; margin-top: 3px; line-height: 1.3;
+      display: block; font-size: 0.85rem; font-weight: normal;
+      color: var(--text); margin-top: 3px; line-height: 1.3;
     }
-    #study-trial-label-3d { font-size: 0.82rem; color: var(--dim); text-align: center;
+    #study-trial-label-3d { font-size: 1.4rem; font-weight: bold; color: var(--text); text-align: center;
                             letter-spacing: 0.08em; text-transform: uppercase; }
-    #calib-img-3d { max-width: 100%; border-radius: 4px; background: #2a2a2a;
-                    display: block; margin: 0 auto 14px; }
+    /* ── Calibration screen: instructions -> image -> button, no scroll ── */
+    #s3-cal {
+      display: flex; flex-direction: column; align-items: center;
+      max-height: calc(100vh - 48px);
+    }
+    #calibration-prompt-3d {
+      font-size: 1.7rem; font-weight: bold; text-align: center;
+      line-height: 1.35; margin-bottom: 14px;
+    }
+    #calib-img-3d { max-width: 100%; max-height: 42vh; width: auto; border-radius: 4px;
+                    background: #2a2a2a; display: block; margin: 0 auto 14px; object-fit: contain; }
     .study-context-3d {
-      color: #38bdf8; font-size: 0.66rem; line-height: 1.5; letter-spacing: 0.04em;
+      color: #7dd3fc; font-size: 0.9rem; line-height: 1.5; letter-spacing: 0.04em;
       text-align: center; padding-bottom: 14px; margin-bottom: 16px;
       border-bottom: 1px solid #333;
-    }
-    .axis-stats {
-      display: grid;
-      grid-template-columns: repeat(6, 1fr);
-      gap: 8px;
-    }
-    .axis-stat {
-      padding: 8px 6px;
-      border: 1px solid #333;
-      border-radius: 5px;
-      color: #f87171;
-      font-size: 0.7rem;
-      line-height: 1.5;
-      text-align: center;
-    }
-    .axis-stat.aligned {
-      border-color: #166534;
-      color: var(--success);
     }
   </style>
   <script type="importmap">
@@ -290,14 +281,13 @@
     <section class="card" id="study-card-3d">
       <div class="study-context-3d" id="study-context-3d"></div>
       <div class="study-phase-3d" id="s3-cal">
-        <div class="study-heading-3d">Study Mode — Calibrate</div>
+        <p class="study-prompt-3d" id="calibration-prompt-3d">Orient probe as shown in image and direct body towards X.</p>
         <img src="assets/calib_user_reference.png" id="calib-img-3d" alt="Calibration reference">
-        <p class="study-prompt-3d" id="calibration-prompt-3d">Orient probe as shown. Press Calibrate when ready.</p>
         <button class="study-card-btn-3d" id="btn-3d-calibrate">Calibrate</button>
       </div>
       <div class="study-phase-3d" id="s3-practice">
         <div class="study-heading-3d">Study Mode — Practice</div>
-        <p class="study-prompt-3d">Up to 1 minute of free practice. Move the probe freely.<br>Press Ready when comfortable.</p>
+        <p class="study-prompt-3d">Practice freely. Press Ready when done.</p>
         <button class="study-card-btn-3d" id="btn-3d-practice-done">Ready</button>
       </div>
       <div class="study-phase-3d" id="s3-trial">
@@ -352,17 +342,6 @@
       </div>
     </section>
 
-    <section class="card" style="padding: 12px 22px;">
-      <div class="axis-stats">
-        <div class="axis-stat" id="axis-x"><strong>X</strong><br><span>--</span></div>
-        <div class="axis-stat" id="axis-y"><strong>Y</strong><br><span>--</span></div>
-        <div class="axis-stat" id="axis-z"><strong>Z</strong><br><span>--</span></div>
-        <div class="axis-stat" id="axis-roll"><strong>ROLL</strong><br><span>--</span></div>
-        <div class="axis-stat" id="axis-pitch"><strong>PITCH</strong><br><span>--</span></div>
-        <div class="axis-stat" id="axis-yaw"><strong>YAW</strong><br><span>--</span></div>
-      </div>
-    </section>
-
     <section class="card controls">
       <div class="key-grid">
         <span><kbd>1</kbd>/<kbd>Q</kbd> X +/-</span>
@@ -397,7 +376,7 @@
     <button class="pause-overlay-btn" id="btn-3d-resume">Resume</button>
   </div>
 
-  <script src="experiment-session.js?v=92c0837f"></script>
+  <script src="experiment-session.js?v=6c5fb514"></script>
   <script type="module">
     import * as THREE from "three";
     import { OBJLoader } from "./vendor/OBJLoader.js";
@@ -405,17 +384,12 @@
 
     const WS_URL = "ws://localhost:8765";
     const MODEL_URL = "./assets/transducer.obj";
-    const AXES = ["x", "y", "z", "roll", "pitch", "yaw"];
     const _p3 = new URLSearchParams(window.location.search);
     const _isStudy3    = _p3.get("study") === "1";
     const _studyFrame3 = _p3.get("frame") || "transducer";
     const _pausable3d  = Boolean(window.ExperimentSession?.contextForLocation()?.session?.flags?.pausable);
     if (_isStudy3) {
       window.ExperimentSession.renderContext(document.getElementById("study-context-3d"));
-      document.getElementById("calibration-prompt-3d").textContent =
-        _studyFrame3 === "user"
-          ? "Place the transducer at the center of the chest, pointing forward and horizontal, then press Calibrate."
-          : "Orient probe as shown. Press Calibrate when ready.";
     }
     const MODEL_SCALE = 0.01; // The supplied OBJ is modeled in centimeters.
     const MODEL_Z_ROTATION = -Math.PI / 2; // Visual alignment only.
@@ -734,6 +708,9 @@
       } else if (act === "trial") {
         document.getElementById("s3-trial").style.display = "block";
         document.getElementById("btn-3d-pause").style.display = _pausable3d ? "block" : "none";
+        if (d.trial_index !== null && d.trial_index !== undefined) {
+          window.ExperimentSession.maybeRunTrialCountdown(d.trial_index);
+        }
         const total = d.n_trials ?? 3;
         const label = d.target_label ? ` (${d.target_label})` : "";
         document.getElementById("study-trial-label-3d").textContent =
@@ -765,22 +742,6 @@
         : d.linear != null
           ? `position error ${(d.linear * 100).toFixed(1)} cm | angle error ${d.angular.toFixed(1)} deg`
           : "";
-    }
-
-    function updateAxisStats(components, aligned) {
-      for (const name of AXES) {
-        const el = document.getElementById(`axis-${name}`);
-        if (!el) continue;
-        const isAligned = Boolean(aligned?.[name]);
-        el.className = `axis-stat${isAligned ? " aligned" : ""}`;
-        if (components?.[name] != null) {
-          const isTrans = name === "x" || name === "y" || name === "z";
-          const value   = isTrans ? components[name] * 100 : components[name];
-          el.querySelector("span").textContent = `${value.toFixed(1)} ${isTrans ? "cm" : "deg"}`;
-        } else {
-          el.querySelector("span").textContent = "--";
-        }
-      }
     }
 
     function updateBoxWireframe(data) {
@@ -923,7 +884,6 @@
             ? `position error ${(data.linear * 100).toFixed(1)} cm | angle error ${data.angular.toFixed(1)} deg`
             : "";
 
-        updateAxisStats(data.workspace_component_errors, data.workspace_component_aligned);
         updateBoxWireframe(data);
 
         // ── Mode-specific UI ─────────────────────────────────────────────────

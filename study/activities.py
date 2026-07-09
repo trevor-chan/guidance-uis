@@ -5,6 +5,7 @@ step() reads exactly one pose and returns plain data; the caller owns the loop.
 """
 
 from abc import ABC, abstractmethod
+import math
 import time
 import numpy as np
 
@@ -69,7 +70,7 @@ class TrialActivity(Activity):
 
     Finish conditions (whichever fires first):
       - hold_duration (default 1 s) of continuous match → achieved=True
-      - Trial's 60 s timeout                            → achieved=False
+      - Trial's 90 s timeout                            → achieved=False
 
     hold_progress (0.0–1.0) is reported every step so a renderer can show a
     fill bar without any extra bookkeeping outside this class.
@@ -183,13 +184,13 @@ class PreferenceActivity(Activity):
 class PracticeActivity(Activity):
     """Practice phase: live reticle with box-origin pose as target.
 
-    Ends when Trial's 60 s timeout fires OR when request_end() is called from
-    outside (e.g. the user presses Ready on the study UI).  Match is displayed
-    but does NOT end the phase — the user is encouraged to explore freely.
+    No timeout — runs indefinitely until request_end() is called from outside
+    (e.g. the user presses Ready on the study UI). Match is displayed but does
+    NOT end the phase — the user is encouraged to explore freely.
     """
 
     def __init__(self, fetcher: LivePoseFetcher, target_pose: np.ndarray) -> None:
-        self._trial = Trial(fetcher, target_pose)
+        self._trial = Trial(fetcher, target_pose, timeout_seconds=math.inf)
         self._end_requested = False
         self._done = False
 
@@ -216,7 +217,7 @@ class PracticeActivity(Activity):
                 "components": None,
             }
         state = self._trial.step()
-        if state["timed_out"] or self._end_requested:
+        if self._end_requested:
             self._done = True
         return {
             "done": self._done,

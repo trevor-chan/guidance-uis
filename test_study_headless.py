@@ -21,7 +21,7 @@ import numpy as np
 # instance in the session uses the patched constant.
 import trial as trial_module
 _REAL_TIMEOUT = trial_module.TIMEOUT_SECONDS
-trial_module.TIMEOUT_SECONDS = 1.5   # 1.5 s per trial instead of 60 s
+trial_module.TIMEOUT_SECONDS = 1.5   # 1.5 s per trial instead of 90 s
 
 from pose_fetcher import LivePoseFetcher
 from study.activities import CalibrationActivity, TrialActivity, PreferenceActivity
