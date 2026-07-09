@@ -23,6 +23,7 @@ from study.sequence import SequenceRunner, SequenceGenerator
 from study.archiver import NoOpArchiver
 from study.activities import CalibrationActivity, PreferenceActivity, PracticeActivity
 from study.storage import (
+    CATEGORIES,
     ConditionRecorder,
     ExperimentRepository,
     StorageConfig,
@@ -1141,8 +1142,9 @@ async def main(
             if mode == "study":
                 print(f"Launcher:  http://{HOST}:{HTTP_PORT}/launcher.html")
                 print(
-                    f"Data:      {data_store.config.layout} layout at "
-                    f"{data_store.config.experiment_root}"
+                    f"Data:      {data_store.config.layout} layout under "
+                    f"{data_store.config.root} "
+                    f"[{', '.join(CATEGORIES)}]/{{date}}/{{experiment}}"
                 )
             await asyncio.Future()
     finally:

@@ -3,3 +3,4 @@ __pycache__/
 data/
 .DS_Store
 study_data/
+analysis/plots/

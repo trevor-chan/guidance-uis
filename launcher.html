@@ -162,6 +162,44 @@
       margin-bottom: 8px;
     }
     .option-order { font-size: 0.92rem; color: var(--dim); line-height: 1.45; }
+    .category-grid {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 10px;
+      margin-top: 8px;
+    }
+    .category-btn {
+      text-align: center;
+      min-height: 60px;
+      border: 2px solid var(--line);
+      border-radius: 8px;
+      padding: 10px 6px;
+      background: var(--surface-2);
+      color: var(--text);
+      font-weight: bold;
+      letter-spacing: 0.06em;
+      text-transform: uppercase;
+      font-size: 0.95rem;
+    }
+    .category-btn:hover { border-color: var(--accent); }
+    .category-btn.selected[data-category="real"] {
+      border-color: var(--danger);
+      background: #3a1414;
+      color: #ffb4b4;
+      box-shadow: inset 0 0 0 1px var(--danger);
+    }
+    .category-btn.selected[data-category="practice"] {
+      border-color: var(--accent);
+      background: #102c39;
+      box-shadow: inset 0 0 0 1px var(--accent);
+    }
+    .category-btn.selected[data-category="trash"] {
+      border-color: var(--dim);
+      background: #22262c;
+      box-shadow: inset 0 0 0 1px var(--dim);
+    }
+    .category-helper { color: var(--dim); font-size: 0.85rem; margin-top: 8px; }
+    .category-helper.warn { color: var(--danger); font-weight: bold; }
     .setup-actions {
       display: flex;
       justify-content: flex-end;
@@ -375,6 +413,12 @@
               </select>
             </div>
 
+            <div class="setup-field">
+              <span class="field-label">Data category</span>
+              <div class="category-grid" id="category-grid"></div>
+              <p class="helper category-helper" id="category-helper">Practice data selected. Choose Real data only for an official protocol run.</p>
+            </div>
+
             <ul class="protocol-list">
               <li>Consent, IRB, and study documents complete</li>
               <li>Hardware line-of-sight and 50 cm workspace explained</li>
@@ -494,6 +538,8 @@
       MODALITIES,
       OPTION_ORDERS,
       EXPERIMENTS,
+      DATA_CATEGORIES,
+      DEFAULT_DATA_CATEGORY,
       participantOption,
       createSession,
       getSession,
@@ -520,6 +566,8 @@
     const optionGrid = document.getElementById("option-grid");
     const optionGridWrap = document.getElementById("option-grid-wrap");
     const participantHelper = document.getElementById("participant-helper");
+    const categoryGrid = document.getElementById("category-grid");
+    const categoryHelper = document.getElementById("category-helper");
     const prepareButton = document.getElementById("prepare-session-btn");
     const resumeButton = document.getElementById("resume-session-btn");
     const setupMessage = document.getElementById("setup-message");
@@ -527,6 +575,7 @@
     const setBoxButton = document.getElementById("btn-set-box");
     const setBoxStatus = document.getElementById("set-box-status");
     let selectedOption = null;
+    let selectedCategory = DEFAULT_DATA_CATEGORY;
 
     function requestStudyServer(message, expectedAck) {
       return new Promise((resolve, reject) => {
@@ -581,6 +630,37 @@
       return EXPERIMENTS[experimentConditionInput.value] || EXPERIMENTS.modality;
     }
 
+    const CATEGORY_LABELS = { real: "Real data", practice: "Practice data", trash: "Trash data" };
+    const CATEGORY_HELP = {
+      real: "Real data selected. This session counts toward the official dataset.",
+      practice: "Practice data selected. Choose Real data only for an official protocol run.",
+      trash: "Trash data selected. This session is disposable and excluded from analysis.",
+    };
+
+    function renderCategoryButtons() {
+      DATA_CATEGORIES.forEach(category => {
+        const button = document.createElement("button");
+        button.type = "button";
+        button.className = "category-btn";
+        button.dataset.category = category;
+        button.textContent = CATEGORY_LABELS[category] || category;
+        button.addEventListener("click", () => {
+          selectedCategory = category;
+          updateCategoryDisplay();
+        });
+        categoryGrid.appendChild(button);
+      });
+      updateCategoryDisplay();
+    }
+
+    function updateCategoryDisplay() {
+      document.querySelectorAll(".category-btn").forEach(button => {
+        button.classList.toggle("selected", button.dataset.category === selectedCategory);
+      });
+      categoryHelper.textContent = CATEGORY_HELP[selectedCategory] || "";
+      categoryHelper.classList.toggle("warn", selectedCategory === "real");
+    }
+
     function updateSetupState() {
       const experiment = currentExperiment();
       const usesMatrixOption = experiment.usesMatrixOption;
@@ -632,6 +712,7 @@
           participantName: participantNameInput.value,
           examinerName: examinerNameInput.value,
           experimentCondition: experimentConditionInput.value,
+          dataCategory: selectedCategory,
         });
         setupMessage.textContent = "Creating durable experiment record...";
         const response = await requestStudyServer({
@@ -835,6 +916,7 @@
     }
 
     renderOptionButtons();
+    renderCategoryButtons();
     participantInput.addEventListener("input", updateSetupState);
     experimentConditionInput.addEventListener("change", updateSetupState);
     prepareButton.addEventListener("click", prepareSession);

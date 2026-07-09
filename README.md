@@ -46,8 +46,9 @@ python server.py --study \
   --export-format none
 ```
 
-Data is grouped by collection date under
-`~/Documents/visualexperiment/YYYY-MM-DD/<experiment-id>/`. All layouts use the
+Data is grouped by the operator-selected data category (`real`, `practice`, or
+`trash`, chosen per session in the launcher) and then by collection date under
+`~/Documents/visualexperiment/<category>/YYYY-MM-DD/<experiment-id>/`. All layouts use the
 same logical schema. Completed trials are committed immediately, trajectory
 samples are flushed in small batches, condition reruns are retained as new
 attempts, and the dashboard can restore saved progress. New collection backends

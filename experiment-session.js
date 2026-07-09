@@ -2,6 +2,8 @@
   "use strict";
 
   const STORAGE_KEY = "poseGuidanceExperimentSession.v1";
+  const DATA_CATEGORIES = Object.freeze(["real", "practice", "trash"]);
+  const DEFAULT_DATA_CATEGORY = "practice";
 
   function newSessionId() {
     if (globalThis.crypto?.randomUUID) return globalThis.crypto.randomUUID();
@@ -244,6 +246,9 @@
     const normalizedId = String(participantId || "").trim().toUpperCase();
     if (!normalizedId) throw new Error("Enter a participant ID.");
 
+    const dataCategory = DATA_CATEGORIES.includes(metadata.dataCategory)
+      ? metadata.dataCategory
+      : DEFAULT_DATA_CATEGORY;
     const experimentCondition = metadata.experimentCondition || "modality";
     const experiment = EXPERIMENTS[experimentCondition];
     if (!experiment) throw new Error(`Unknown experiment condition: ${experimentCondition}`);
@@ -272,6 +277,7 @@
       participantName: String(metadata.participantName || "").trim(),
       examinerName: String(metadata.examinerName || "").trim(),
       experimentCondition,
+      dataCategory,
       option,
       flags: experiment.flags,
       conditions,
@@ -495,6 +501,7 @@
       examiner_name: session.examinerName,
       experiment_condition: session.experimentCondition,
       condition_option: session.option,
+      data_category: session.dataCategory || DEFAULT_DATA_CATEGORY,
       started_at: session.startedAt,
       metadata: {
         client_version: session.version,
@@ -707,6 +714,8 @@
     OPTION_ORDERS,
     EXPERIMENTS,
     LEARNING_CURVE_MODES,
+    DATA_CATEGORIES,
+    DEFAULT_DATA_CATEGORY,
     participantOption,
     buildConditions,
     createSession,

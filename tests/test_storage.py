@@ -60,15 +60,16 @@ class StorageLayoutTests(unittest.TestCase):
 
         self.assertEqual(
             session_config.database_path("abc", "P1"),
-            root / "2026-06-24" / "study" / "sessions" / "abc" / "experiment.sqlite",
+            root / "practice" / "2026-06-24" / "study" / "sessions" / "abc" / "experiment.sqlite",
         )
         self.assertEqual(
             participant_config.database_path("abc", "P1"),
-            root / "2026-06-24" / "study" / "participants" / "P1" / "experiment.sqlite",
+            root / "practice" / "2026-06-24" / "study" / "participants" / "P1" / "experiment.sqlite",
         )
         self.assertEqual(
             participant_config.database_path("abc", "P1", "Direct Identifier"),
             root
+            / "practice"
             / "2026-06-24"
             / "study"
             / "participants"
@@ -77,7 +78,11 @@ class StorageLayoutTests(unittest.TestCase):
         )
         self.assertEqual(
             experiment_config.database_path("abc", "P1"),
-            root / "2026-06-24" / "study" / "experiment.sqlite",
+            root / "practice" / "2026-06-24" / "study" / "experiment.sqlite",
+        )
+        self.assertEqual(
+            participant_config.database_path("abc", "P1", category="real"),
+            root / "real" / "2026-06-24" / "study" / "participants" / "P1" / "experiment.sqlite",
         )
 
     def test_all_layouts_store_the_same_logical_schema(self):
@@ -263,7 +268,7 @@ class RecordingAndExportTests(unittest.TestCase):
             second_recorder.save_preference_and_finish(2)
 
             patient_csv = (
-                config.experiment_root
+                config.experiment_root("practice")
                 / "exports"
                 / "by_patient"
                 / "Test-Participant_P2"
@@ -307,6 +312,119 @@ class RecordingAndExportTests(unittest.TestCase):
                     """
                 ).fetchall()
             self.assertEqual(attempts, [(1,), (2,)])
+
+
+class DataCategoryTests(unittest.TestCase):
+    def test_create_session_routes_by_category_and_persists_it(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            config = StorageConfig(
+                root=Path(temp_dir),
+                layout="participant",
+                experiment_id="study",
+                export_formats=("none",),
+                collection_date="2026-06-24",
+            )
+            store = create_data_store(config, Path.cwd())
+            payload = session_payload("session-real")
+            payload["data_category"] = "real"
+            state = store.create_session(payload)
+
+            database_path = Path(state["database_path"])
+            self.assertEqual(
+                database_path,
+                Path(temp_dir)
+                / "real"
+                / "2026-06-24"
+                / "study"
+                / "participants"
+                / "Test-Participant_P1"
+                / "experiment.sqlite",
+            )
+            self.assertEqual(state["session"]["data_category"], "real")
+
+    def test_missing_or_invalid_category_defaults_to_practice(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            config = StorageConfig(
+                root=Path(temp_dir),
+                layout="participant",
+                experiment_id="study",
+                export_formats=("none",),
+                collection_date="2026-06-24",
+            )
+            store = create_data_store(config, Path.cwd())
+            payload = session_payload("session-bogus")
+            payload["data_category"] = "not-a-real-category"
+            state = store.create_session(payload)
+            self.assertIn(
+                "practice",
+                Path(state["database_path"]).parts,
+            )
+            self.assertEqual(state["session"]["data_category"], "practice")
+
+    def test_resume_finds_session_regardless_of_category(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            config = StorageConfig(
+                root=Path(temp_dir),
+                layout="participant",
+                experiment_id="study",
+                export_formats=("none",),
+                collection_date="2026-06-24",
+            )
+            store = create_data_store(config, Path.cwd())
+            payload = session_payload("session-trash", participant_id="P9")
+            payload["data_category"] = "trash"
+            store.create_session(payload)
+
+            found = store.latest_session_for_participant("P9")
+            self.assertIsNotNone(found)
+            self.assertEqual(found["session"]["session_id"], "session-trash")
+
+    def test_legacy_sessions_table_without_data_category_column_is_migrated(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            db_path = Path(temp_dir) / "legacy.sqlite"
+            with sqlite3.connect(db_path) as connection:
+                connection.execute(
+                    """
+                    CREATE TABLE sessions (
+                        session_id TEXT PRIMARY KEY,
+                        experiment_id TEXT NOT NULL,
+                        participant_id TEXT NOT NULL,
+                        participant_name TEXT,
+                        examiner_name TEXT,
+                        experiment_condition TEXT NOT NULL,
+                        condition_option INTEGER,
+                        started_at TEXT NOT NULL,
+                        completed_at TEXT,
+                        status TEXT NOT NULL,
+                        git_commit TEXT,
+                        schema_version INTEGER NOT NULL,
+                        storage_layout TEXT NOT NULL,
+                        metadata_json TEXT NOT NULL
+                    )
+                    """
+                )
+                connection.execute(
+                    """
+                    INSERT INTO sessions VALUES (
+                        'old-session', 'study', 'P1', NULL, NULL, 'modality',
+                        1, '2025-01-01T00:00:00Z', NULL, 'in_progress', NULL,
+                        1, 'participant', '{}'
+                    )
+                    """
+                )
+
+            config = StorageConfig(
+                root=Path(temp_dir),
+                layout="participant",
+                experiment_id="study",
+                export_formats=("none",),
+            )
+            store = create_data_store(config, Path.cwd())
+            with store._connect(db_path) as connection:
+                row = connection.execute(
+                    "SELECT session_id, data_category FROM sessions WHERE session_id = 'old-session'"
+                ).fetchone()
+            self.assertEqual(row, ("old-session", None))
 
 
 if __name__ == "__main__":

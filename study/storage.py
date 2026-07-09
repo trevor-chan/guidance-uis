@@ -25,6 +25,8 @@ import numpy as np
 
 SCHEMA_VERSION = 1
 LAYOUTS = ("session", "participant", "experiment")
+CATEGORIES = ("real", "practice", "trash")
+DEFAULT_CATEGORY = "practice"
 
 
 def utc_now() -> str:
@@ -93,10 +95,10 @@ class StorageConfig:
             raise ValueError(f"Unknown data layout {self.layout!r}; choose from {LAYOUTS}.")
         object.__setattr__(self, "root", self.root.expanduser())
 
-    @property
-    def experiment_root(self) -> Path:
+    def experiment_root(self, category: str) -> Path:
         return (
             self.root
+            / _safe_name(category, DEFAULT_CATEGORY)
             / _safe_name(self.collection_date, "date")
             / _safe_name(self.experiment_id, "experiment")
         )
@@ -106,25 +108,31 @@ class StorageConfig:
         session_id: str,
         participant_id: str,
         direct_identifier: str | None = None,
+        category: str = DEFAULT_CATEGORY,
     ) -> Path:
+        root = self.experiment_root(category)
         if self.layout == "session":
             return (
-                self.experiment_root
+                root
                 / "sessions"
                 / _safe_name(session_id, "session")
                 / "experiment.sqlite"
             )
         if self.layout == "participant":
             return (
-                self.experiment_root
+                root
                 / "participants"
                 / _participant_file_stem(participant_id, direct_identifier)
                 / "experiment.sqlite"
             )
-        return self.experiment_root / "experiment.sqlite"
+        return root / "experiment.sqlite"
 
-    def export_root(self, session_id: str) -> Path:
-        return self.experiment_root / "exports" / _safe_name(session_id, "session")
+    def export_root(self, session_id: str, category: str = DEFAULT_CATEGORY) -> Path:
+        return (
+            self.experiment_root(category)
+            / "exports"
+            / _safe_name(session_id, "session")
+        )
 
 
 class DataExporter(ABC):
@@ -464,10 +472,14 @@ class SqliteExperimentRepository:
     def create_session(self, payload: dict) -> dict:
         session_id = str(payload["session_id"])
         participant_id = str(payload["participant_id"])
+        category = payload.get("data_category")
+        if category not in CATEGORIES:
+            category = DEFAULT_CATEGORY
         database_path = self.config.database_path(
             session_id,
             participant_id,
             payload.get("participant_name"),
+            category=category,
         )
         database_path.parent.mkdir(parents=True, exist_ok=True)
         self._session_locations[session_id] = (participant_id, database_path)
@@ -479,14 +491,15 @@ class SqliteExperimentRepository:
                 INSERT INTO sessions (
                     session_id, experiment_id, participant_id, participant_name,
                     examiner_name, experiment_condition, condition_option,
-                    started_at, status, git_commit, schema_version,
+                    data_category, started_at, status, git_commit, schema_version,
                     storage_layout, metadata_json
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'in_progress', ?, ?, ?, ?)
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'in_progress', ?, ?, ?, ?)
                 ON CONFLICT(session_id) DO UPDATE SET
                     participant_name = excluded.participant_name,
                     examiner_name = excluded.examiner_name,
                     experiment_condition = excluded.experiment_condition,
                     condition_option = excluded.condition_option,
+                    data_category = excluded.data_category,
                     metadata_json = excluded.metadata_json
                 """,
                 (
@@ -497,6 +510,7 @@ class SqliteExperimentRepository:
                     payload.get("examiner_name"),
                     payload.get("experiment_condition", "modality"),
                     payload.get("condition_option"),
+                    category,
                     now,
                     self.git_commit,
                     SCHEMA_VERSION,
@@ -612,24 +626,27 @@ class SqliteExperimentRepository:
 
     def latest_session_for_participant(self, participant_id: str) -> dict | None:
         candidates: list[tuple[str, Path]] = []
-        if self.config.layout == "participant":
-            candidates.extend(
-                (participant_id, path)
-                for path in self.config.experiment_root.glob(
-                    "participants/*/experiment.sqlite"
+        for category in CATEGORIES:
+            if self.config.layout == "participant":
+                candidates.extend(
+                    (participant_id, path)
+                    for path in self.config.experiment_root(category).glob(
+                        "participants/*/experiment.sqlite"
+                    )
                 )
-            )
-        elif self.config.layout == "experiment":
-            path = self.config.database_path("unused", participant_id)
-            if path.exists():
-                candidates.append((participant_id, path))
-        else:
-            candidates.extend(
-                (participant_id, path)
-                for path in self.config.experiment_root.glob(
-                    "sessions/*/experiment.sqlite"
+            elif self.config.layout == "experiment":
+                path = self.config.database_path(
+                    "unused", participant_id, category=category
                 )
-            )
+                if path.exists():
+                    candidates.append((participant_id, path))
+            else:
+                candidates.extend(
+                    (participant_id, path)
+                    for path in self.config.experiment_root(category).glob(
+                        "sessions/*/experiment.sqlite"
+                    )
+                )
 
         latest: tuple[str, str, Path] | None = None
         for _, path in candidates:
@@ -1006,16 +1023,23 @@ class SqliteExperimentRepository:
         database_path = self._locate_database(session_id)
         if database_path is None:
             return []
+        category = self._category_from_path(database_path)
         written: list[Path] = []
         for exporter in self._exporters:
             written.extend(
                 exporter.export_session(
                     database_path,
                     session_id,
-                    self.config.export_root(session_id) / exporter.name,
+                    self.config.export_root(session_id, category) / exporter.name,
                 )
             )
         return written
+
+    def _category_from_path(self, database_path: Path) -> str:
+        try:
+            return database_path.relative_to(self.config.root).parts[0]
+        except ValueError:
+            return DEFAULT_CATEGORY
 
     # -- SQLite helpers ----------------------------------------------------
 
@@ -1046,27 +1070,33 @@ class SqliteExperimentRepository:
         if cached:
             return cached[1]
         if participant_id:
-            path = self.config.database_path(session_id, participant_id)
-            if path.exists():
-                self._session_locations[session_id] = (participant_id, path)
-                return path
-        if self.config.layout == "experiment":
-            path = self.config.database_path(session_id, participant_id or "participant")
-            return path if path.exists() else None
-        if self.config.layout == "session":
-            path = self.config.database_path(session_id, participant_id or "participant")
-            return path if path.exists() else None
-        for path in self.config.experiment_root.glob(
-            "participants/*/experiment.sqlite"
-        ):
-            with self._connect(path) as connection:
-                row = connection.execute(
-                    "SELECT participant_id FROM sessions WHERE session_id = ?",
-                    (session_id,),
-                ).fetchone()
-                if row:
-                    self._session_locations[session_id] = (row[0], path)
+            for category in CATEGORIES:
+                path = self.config.database_path(
+                    session_id, participant_id, category=category
+                )
+                if path.exists():
+                    self._session_locations[session_id] = (participant_id, path)
                     return path
+        if self.config.layout in ("experiment", "session"):
+            for category in CATEGORIES:
+                path = self.config.database_path(
+                    session_id, participant_id or "participant", category=category
+                )
+                if path.exists():
+                    return path
+            return None
+        for category in CATEGORIES:
+            for path in self.config.experiment_root(category).glob(
+                "participants/*/experiment.sqlite"
+            ):
+                with self._connect(path) as connection:
+                    row = connection.execute(
+                        "SELECT participant_id FROM sessions WHERE session_id = ?",
+                        (session_id,),
+                    ).fetchone()
+                    if row:
+                        self._session_locations[session_id] = (row[0], path)
+                        return path
         return None
 
     def _require_database(self, session_id: str, participant_id: str) -> Path:
@@ -1079,19 +1109,15 @@ class SqliteExperimentRepository:
         cached = self._run_locations.get(run_id)
         if cached:
             return cached
-        paths: list[Path]
-        if self.config.layout == "experiment":
-            paths = [self.config.experiment_root / "experiment.sqlite"]
-        elif self.config.layout == "session":
-            paths = list(
-                self.config.experiment_root.glob("sessions/*/experiment.sqlite")
-            )
-        else:
-            paths = list(
-                self.config.experiment_root.glob(
-                    "participants/*/experiment.sqlite"
-                )
-            )
+        paths: list[Path] = []
+        for category in CATEGORIES:
+            root = self.config.experiment_root(category)
+            if self.config.layout == "experiment":
+                paths.append(root / "experiment.sqlite")
+            elif self.config.layout == "session":
+                paths.extend(root.glob("sessions/*/experiment.sqlite"))
+            else:
+                paths.extend(root.glob("participants/*/experiment.sqlite"))
         for database_path in paths:
             if not database_path.exists():
                 continue
@@ -1151,6 +1177,7 @@ class SqliteExperimentRepository:
                 examiner_name TEXT,
                 experiment_condition TEXT NOT NULL,
                 condition_option INTEGER,
+                data_category TEXT,
                 started_at TEXT NOT NULL,
                 completed_at TEXT,
                 status TEXT NOT NULL,
@@ -1286,6 +1313,13 @@ class SqliteExperimentRepository:
         for column in ("precision_linear_mm", "precision_angular_deg"):
             if column not in existing_columns:
                 connection.execute(f"ALTER TABLE conditions ADD COLUMN {column} REAL")
+
+        # Same idempotent pattern for sessions predating the data-category feature.
+        existing_session_columns = {
+            row[1] for row in connection.execute("PRAGMA table_info(sessions)")
+        }
+        if "data_category" not in existing_session_columns:
+            connection.execute("ALTER TABLE sessions ADD COLUMN data_category TEXT")
 
 
 @dataclass

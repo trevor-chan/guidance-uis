@@ -17,15 +17,21 @@ practice, preference, event, state-query, and export operations.
 ## File-layout policy
 
 `StorageConfig.layout` controls where the SQLite adapter resolves its database.
-By default, the root is `~/Documents/visualexperiment`, and each server run
-uses a dated experiment folder:
+By default, the root is `~/Documents/visualexperiment`. Every session also
+carries a `data_category` (`real`, `practice`, or `trash`) chosen by the
+operator at session creation — this is threaded per-request (it is not a
+server-startup flag) and is inserted as a folder above the dated experiment
+folder:
 
-- `session`: `<root>/YYYY-MM-DD/<experiment>/sessions/<session-id>/experiment.sqlite`
-- `participant`: `<root>/YYYY-MM-DD/<experiment>/participants/<participant-id>/experiment.sqlite`
-- `experiment`: `<root>/YYYY-MM-DD/<experiment>/experiment.sqlite`
+- `session`: `<root>/<category>/YYYY-MM-DD/<experiment>/sessions/<session-id>/experiment.sqlite`
+- `participant`: `<root>/<category>/YYYY-MM-DD/<experiment>/participants/<participant-id>/experiment.sqlite`
+- `experiment`: `<root>/<category>/YYYY-MM-DD/<experiment>/experiment.sqlite`
 
 The logical schema is identical in every layout. Therefore changing layout does
-not change collection code or downstream column definitions.
+not change collection code or downstream column definitions. Session lookups
+that only have a `session_id`/`participant_id` (resume, run-location) search
+across all three category folders since the category isn't known in advance;
+once a database file is resolved, its category is recovered from its path.
 
 ## Export adapters
 
@@ -34,9 +40,10 @@ currently implemented. Export failures are recorded as events and do not undo
 completed trial or condition records.
 
 The normalized CSV exports are session-scoped even when the source database is
-participant- or experiment-scoped:
+participant- or experiment-scoped, and live under the same category folder as
+the source database:
 
-`<root>/YYYY-MM-DD/<experiment>/exports/<session-id>/csv/`
+`<root>/<category>/YYYY-MM-DD/<experiment>/exports/<session-id>/csv/`
 
 The `patient_trials` export is analysis-oriented and grouped by participant:
 
