@@ -173,33 +173,49 @@
     .message.error { color: var(--danger); }
     .message.ok { color: var(--success); }
 
-    /* Set box: instructions -> image -> button, no scroll */
+    /* Set box: styled to match calibration screen (#s2-cal in index-2d.html) 1:1 —
+       instructions -> image -> button, no scroll. Colors/sizes are copied literally
+       (not via this file's --surface/--accent vars) so the two screens render identically. */
+    #box-screen .panel {
+      background: #1e1e1e;
+      border: none;
+      border-radius: 8px;
+      padding: 18px 22px;
+    }
     .box-layout {
       display: flex;
       flex-direction: column;
       align-items: center;
-      text-align: center;
-      gap: 16px;
-      max-height: calc(100vh - 140px);
+      max-height: calc(100vh - 48px);
     }
-    .box-copy h2 { margin-bottom: 4px; }
     .box-instructions {
       font-size: 1.7rem;
       font-weight: bold;
+      text-align: center;
       line-height: 1.35;
-      max-width: 640px;
+      margin-bottom: 14px;
     }
     #ref-image {
       max-width: 100%;
       max-height: 42vh;
       width: auto;
-      border-radius: 9px;
-      background: #252b33;
+      border-radius: 4px;
+      background: #2a2a2a;
       display: block;
+      margin: 0 auto 14px;
       object-fit: contain;
     }
-    #btn-set-box { display: block; width: 100%; padding: 18px 0; font-size: 1.35rem; }
-    #set-box-status { margin-top: 4px; font-size: 0.95rem; color: var(--dim); }
+    .box-card-btn {
+      display: block; width: 100%; padding: 18px 0;
+      background: #2a2a2a; color: #fafafa;
+      border: 1px solid #444; border-radius: 6px;
+      font: bold 1.3rem "Courier New", monospace;
+      letter-spacing: 0.08em; text-transform: uppercase; cursor: pointer;
+      transition: background 120ms; margin-top: 4px;
+    }
+    .box-card-btn:hover { background: #383838; }
+    .box-card-btn:disabled { opacity: 0.35; cursor: default; }
+    #set-box-status { margin-top: 10px; font-size: 0.95rem; color: #d4d4d4; }
     #set-box-status.error { color: var(--danger); }
 
     /* Dashboard */
@@ -381,13 +397,10 @@
 
     <section class="screen" id="box-screen">
       <div class="panel box-layout">
-        <div class="box-copy">
-          <h2>02 / Establish target workspace</h2>
-          <p class="box-instructions">Orient probe as shown in image.</p>
-        </div>
+        <p class="box-instructions">Orient probe as shown in image.</p>
         <img src="assets/setbox_reference.png" id="ref-image"
              alt="Orient probe with crystal face toward patient and cable facing away">
-        <button class="primary-btn" id="btn-set-box">Set box</button>
+        <button class="box-card-btn" id="btn-set-box">Set box</button>
         <div id="set-box-status">Ready to capture the workspace.</div>
       </div>
     </section>
