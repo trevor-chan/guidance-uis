@@ -510,8 +510,9 @@ class SqliteExperimentRepository:
                     INSERT INTO conditions (
                         session_id, condition_index, target_set, modality_id,
                         modality, frame, noise, latency_ms, perceived_ms,
-                        learning_curve, status
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending')
+                        learning_curve, precision_linear_mm, precision_angular_deg,
+                        status
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending')
                     ON CONFLICT(session_id, condition_index) DO UPDATE SET
                         target_set = excluded.target_set,
                         modality_id = excluded.modality_id,
@@ -520,7 +521,9 @@ class SqliteExperimentRepository:
                         noise = excluded.noise,
                         latency_ms = excluded.latency_ms,
                         perceived_ms = excluded.perceived_ms,
-                        learning_curve = excluded.learning_curve
+                        learning_curve = excluded.learning_curve,
+                        precision_linear_mm = excluded.precision_linear_mm,
+                        precision_angular_deg = excluded.precision_angular_deg
                     """,
                     (
                         session_id,
@@ -533,6 +536,8 @@ class SqliteExperimentRepository:
                         condition.get("latency_ms"),
                         condition.get("perceived_ms"),
                         condition.get("learning_curve"),
+                        condition.get("precision_linear_mm"),
+                        condition.get("precision_angular_deg"),
                     ),
                 )
             self._event(
@@ -1166,6 +1171,8 @@ class SqliteExperimentRepository:
                 latency_ms REAL,
                 perceived_ms REAL,
                 learning_curve TEXT,
+                precision_linear_mm REAL,
+                precision_angular_deg REAL,
                 status TEXT NOT NULL,
                 started_at TEXT,
                 completed_at TEXT,
@@ -1270,6 +1277,15 @@ class SqliteExperimentRepository:
                 ON events(session_id, occurred_at);
             """
         )
+        # CREATE TABLE IF NOT EXISTS above only shapes brand-new databases;
+        # existing .sqlite files predating the precision experiment need these
+        # columns added explicitly. Idempotent: skips columns already present.
+        existing_columns = {
+            row[1] for row in connection.execute("PRAGMA table_info(conditions)")
+        }
+        for column in ("precision_linear_mm", "precision_angular_deg"):
+            if column not in existing_columns:
+                connection.execute(f"ALTER TABLE conditions ADD COLUMN {column} REAL")
 
 
 @dataclass

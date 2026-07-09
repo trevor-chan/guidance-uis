@@ -64,6 +64,8 @@ class SequenceGenerator:
         target_set: str | None = None,
         include_preference: bool = True,
         include_practice: bool = True,
+        linear_tol: float | None = None,
+        angular_tol: float | None = None,
     ) -> Block:
         """Build a single study block seeded with a pre-set box origin.
 
@@ -86,6 +88,11 @@ class SequenceGenerator:
         rebuild a cancelled/paused trial as a fresh attempt (a new random
         target when the block draws random targets, the same fixed target
         otherwise).
+
+        linear_tol/angular_tol override the match threshold (meters/degrees)
+        for every trial in this block — used by the precision experiment's
+        per-condition ramp. None (the default, and every other experiment)
+        falls through to TrialActivity's own defaults (5mm/5deg).
         """
         needs_calibration = frame == "user"
         calibration = CalibrationActivity(self._fetcher) if needs_calibration else None
@@ -94,13 +101,20 @@ class SequenceGenerator:
         n       = n_trials
         fetcher = self._fetcher
         target_ids = TARGET_SETS.get(target_set) if target_set else None
+        tol_kwargs: dict = {}
+        if linear_tol is not None:
+            tol_kwargs["linear_tol"] = linear_tol
+        if angular_tol is not None:
+            tol_kwargs["angular_tol"] = angular_tol
 
         def _make_trial(trial_index: int) -> TrialActivity:
             # Always sample from the set-box pose; calibration sets camera only.
             if target_ids:
                 target_id = target_ids[trial_index]
-                return TrialActivity(fetcher, fixed_study_target(origin, target_id), label=target_id)
-            return TrialActivity(fetcher, random_study_target(origin))
+                return TrialActivity(
+                    fetcher, fixed_study_target(origin, target_id), label=target_id, **tol_kwargs
+                )
+            return TrialActivity(fetcher, random_study_target(origin), **tol_kwargs)
 
         def trial_factory(_effective_origin: np.ndarray) -> list[TrialActivity]:
             return [_make_trial(i) for i in range(n)]

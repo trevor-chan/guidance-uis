@@ -92,13 +92,13 @@
   // design shifts. IDs reference MODALITIES above (M3 = 2D/Patient,
   // M5 = 3D/User); order is fixed for every participant (no rotation).
   const LEARNING_CURVE_MODES = ["M3", "M5"];
-  const LEARNING_CURVE_TRIALS_PER_MODE = 25;
+  const LEARNING_CURVE_TRIALS_PER_MODE = 20;
 
   // TEMPORARY: NOISE mode list/order and magnitude ramp. Change here if the
   // study design shifts. M3 = 2D/Patient, M5 = 3D/User.
   const NOISE_MODES = ["M3", "M5"];
-  const NOISE_MAGNITUDES = [0, 1, 2, 4, 8];   // mm position AND degrees orientation
-  const NOISE_TRIALS_PER_MAGNITUDE = 5;
+  const NOISE_MAGNITUDES = [0, 1, 2, 4];   // mm position AND degrees orientation
+  const NOISE_TRIALS_PER_MAGNITUDE = 3;
 
   // TEMPORARY: LATENCY mode list/order and delay ramp. Change here if the
   // study design shifts. M3 = 2D/Patient, M5 = 3D/User.
@@ -106,9 +106,21 @@
   // Injected delay only; this is what the server buffers on top of the
   // ~75ms measured system baseline. See LATENCY_BASELINE_MS for the
   // perceived (injected + baseline) value that gets persisted alongside it.
-  const LATENCY_MS = [0, 75, 225, 525, 1125];
+  const LATENCY_MS = [0, 75, 225, 525];
   const LATENCY_BASELINE_MS = 75;
-  const LATENCY_TRIALS_PER_MAGNITUDE = 5;
+  const LATENCY_TRIALS_PER_MAGNITUDE = 3;
+
+  // TEMPORARY: PRECISION mode list/order and match-threshold ramp (easiest ->
+  // hardest per mode). Change here if the study design shifts. M3 = 2D/Patient,
+  // M5 = 3D/User.
+  const PRECISION_MODES = ["M3", "M5"];
+  const PRECISION_THRESHOLDS = [
+    { linearMm: 10, angularDeg: 10 },
+    { linearMm: 5,  angularDeg: 5  },
+    { linearMm: 3,  angularDeg: 3  },
+    { linearMm: 2,  angularDeg: 2  },
+  ];
+  const PRECISION_TRIALS_PER_THRESHOLD = 3;
 
   function participantOption(participantId) {
     const match = String(participantId || "").trim().match(/^p?([1-7])$/i);
@@ -174,6 +186,25 @@
     return conditions;
   }
 
+  function buildPrecisionConditions() {
+    const conditions = [];
+    PRECISION_MODES.forEach(modalityId => {
+      PRECISION_THRESHOLDS.forEach((threshold, thresholdIndex) => {
+        conditions.push({
+          index: conditions.length,
+          targetSet: null,
+          modalityId,
+          nTrials: PRECISION_TRIALS_PER_THRESHOLD,
+          precisionLinearMm: threshold.linearMm,
+          precisionAngularDeg: threshold.angularDeg,
+          includePractice: thresholdIndex === 0,
+          status: "pending",
+        });
+      });
+    });
+    return conditions;
+  }
+
   // Registry of experiment types. Each entry supplies a buildConditions()
   // function and the flags a session of that type runs with.
   const EXPERIMENTS = Object.freeze({
@@ -194,6 +225,11 @@
     },
     latency: {
       buildConditions: buildLatencyConditions,
+      flags: Object.freeze({ practice: true, preference: false, pausable: false }),
+      usesMatrixOption: false,
+    },
+    precision: {
+      buildConditions: buildPrecisionConditions,
       flags: Object.freeze({ practice: true, preference: false, pausable: false }),
       usesMatrixOption: false,
     },
@@ -337,6 +373,8 @@
       n_trials: String(details.nTrials || MODALITY_TRIALS_PER_CONDITION),
       noise_magnitude: details.noiseMagnitude != null ? String(details.noiseMagnitude) : "",
       latency_ms: details.latencyMs != null ? String(details.latencyMs) : "",
+      precision_linear_mm: details.precisionLinearMm != null ? String(details.precisionLinearMm) : "",
+      precision_angular_deg: details.precisionAngularDeg != null ? String(details.precisionAngularDeg) : "",
       include_practice: details.includePractice === false ? "0" : "1",
     });
     return `${details.modality.page}?${params.toString()}`;
@@ -357,6 +395,8 @@
       include_preference: flags.preference,
       noise_magnitude: context.noiseMagnitude,
       latency_ms: context.latencyMs,
+      precision_linear_mm: context.precisionLinearMm,
+      precision_angular_deg: context.precisionAngularDeg,
       include_practice: context.includePractice,
     };
   }
@@ -375,6 +415,8 @@
     const nTrialsParam = Number(params.get("n_trials"));
     const noiseMagnitudeParam = params.get("noise_magnitude");
     const latencyMsParam = params.get("latency_ms");
+    const precisionLinearMmParam = params.get("precision_linear_mm");
+    const precisionAngularDegParam = params.get("precision_angular_deg");
     return {
       session,
       participantId: params.get("participant") || session?.participantId || "",
@@ -393,6 +435,12 @@
       latencyMs: latencyMsParam !== null && latencyMsParam !== ""
         ? Number(latencyMsParam)
         : (condition?.latencyMs ?? null),
+      precisionLinearMm: precisionLinearMmParam !== null && precisionLinearMmParam !== ""
+        ? Number(precisionLinearMmParam)
+        : (condition?.precisionLinearMm ?? null),
+      precisionAngularDeg: precisionAngularDegParam !== null && precisionAngularDegParam !== ""
+        ? Number(precisionAngularDegParam)
+        : (condition?.precisionAngularDeg ?? null),
       includePractice: params.has("include_practice")
         ? params.get("include_practice") !== "0"
         : (condition?.includePractice ?? true),
@@ -463,6 +511,8 @@
           latency_ms: condition.latencyMs ?? null,
           perceived_ms: condition.perceivedMs ?? null,
           learning_curve: null,
+          precision_linear_mm: condition.precisionLinearMm ?? null,
+          precision_angular_deg: condition.precisionAngularDeg ?? null,
         };
       }),
     };
@@ -542,6 +592,12 @@
       perceivedMs: condition.status !== "pending"
         ? (condition.perceived_ms ?? template[index]?.perceivedMs ?? null)
         : (template[index]?.perceivedMs ?? condition.perceived_ms ?? null),
+      precisionLinearMm: condition.status !== "pending"
+        ? (condition.precision_linear_mm ?? template[index]?.precisionLinearMm ?? null)
+        : (template[index]?.precisionLinearMm ?? condition.precision_linear_mm ?? null),
+      precisionAngularDeg: condition.status !== "pending"
+        ? (condition.precision_angular_deg ?? template[index]?.precisionAngularDeg ?? null)
+        : (template[index]?.precisionAngularDeg ?? condition.precision_angular_deg ?? null),
       includePractice: template[index]?.includePractice ?? true,
       status: condition.status,
       completedTrials: Number(condition.completed_trials || 0),

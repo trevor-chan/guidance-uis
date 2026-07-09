@@ -73,7 +73,7 @@ def _apply_display_noise(pose: np.ndarray, magnitude: float | None) -> np.ndarra
     return noisy
 
 
-LATENCY_BUFFER_MAXLEN = 60  # 2s of history @ 30Hz — covers the 1125ms max condition with margin
+LATENCY_BUFFER_MAXLEN = 60  # 2s of history @ 30Hz — covers the 525ms max condition with margin
 
 
 def _apply_display_latency(
@@ -465,6 +465,10 @@ async def _new_study_handler(
         "noise_magnitude":       0,
         "latency_ms":            0,
         "latency_buffer":        None,
+        "precision_linear_mm":   None,
+        "precision_angular_deg": None,
+        "effective_linear_tol":  LINEAR_TOLERANCE,
+        "effective_angular_tol": 5.0,
         "modality_id":           None,
         "session_id":            None,
         "recorder":              None,
@@ -595,7 +599,8 @@ async def _new_study_handler(
                         )
                         state["workspace_component_aligned"] = {
                             name: abs(val) <= (
-                                LINEAR_TOLERANCE if name in ("x", "y", "z") else 5.0
+                                session["effective_linear_tol"] if name in ("x", "y", "z")
+                                else session["effective_angular_tol"]
                             )
                             for name, val in state["workspace_component_errors"].items()
                         }
@@ -741,6 +746,17 @@ async def _new_study_handler(
                     session["noise_magnitude"]        = data.get("noise_magnitude") or 0
                     session["latency_ms"]            = data.get("latency_ms") or 0
                     session["latency_buffer"]        = deque(maxlen=LATENCY_BUFFER_MAXLEN)
+                    precision_linear_mm  = data.get("precision_linear_mm")
+                    precision_angular_deg = data.get("precision_angular_deg")
+                    session["precision_linear_mm"]   = precision_linear_mm
+                    session["precision_angular_deg"] = precision_angular_deg
+                    # Per-condition match threshold: precision experiment overrides
+                    # the 5mm/5deg default for this block only; every other
+                    # experiment leaves these fields unset and gets the default.
+                    linear_tol  = (precision_linear_mm / 1000.0) if precision_linear_mm is not None else None
+                    angular_tol = precision_angular_deg if precision_angular_deg is not None else None
+                    session["effective_linear_tol"]  = linear_tol if linear_tol is not None else LINEAR_TOLERANCE
+                    session["effective_angular_tol"] = angular_tol if angular_tol is not None else 5.0
                     session["modality_id"]           = data.get("modality_id")
                     session["session_id"]            = requested_session_id
                     session["persistent_state"]      = None
@@ -761,6 +777,8 @@ async def _new_study_handler(
                         target_set=session["target_set"],
                         include_preference=include_preference,
                         include_practice=include_practice,
+                        linear_tol=linear_tol,
+                        angular_tol=angular_tol,
                     )
                     blk.start()
                     session["block"] = blk

@@ -371,6 +371,7 @@
                 <option value="noise">Noise</option>
                 <option value="latency">Latency</option>
                 <option value="learning_curve">Learning curve</option>
+                <option value="precision">Precision</option>
               </select>
             </div>
 
@@ -486,7 +487,7 @@
     </section>
   </div>
 
-  <script src="experiment-session.js?v=6c5fb514"></script>
+  <script src="experiment-session.js?v=a81858f0"></script>
   <script>
     const WS_URL = "ws://localhost:8765";
     const {
@@ -744,7 +745,9 @@
               ? condition.latencyMs === 0
                 ? `baseline (~${perceivedMs}ms) · ${index + 1}/${totalConditions}`
                 : `${perceivedMs}ms · ${index + 1}/${totalConditions}`
-              : `${index + 1}/${totalConditions}`;
+              : condition.precisionLinearMm != null
+                ? `${condition.precisionLinearMm}mm/${condition.precisionAngularDeg}deg · ${index + 1}/${totalConditions}`
+                : `${index + 1}/${totalConditions}`;
         card.innerHTML = `
           <div class="condition-step">${stepLabel}</div>
           <div class="condition-id">${condition.modalityId}</div>
@@ -788,9 +791,11 @@
         : "No separate reference-frame calibration is required.";
 
       const flags = session.flags || { preference: true, pausable: false };
+      const thresholdLinearMm = condition.precisionLinearMm ?? 5;
+      const thresholdAngularDeg = condition.precisionAngularDeg ?? 5;
       document.getElementById("data-collection-copy").textContent = flags.pausable
-        ? `Run ${condition.nTrials} target trials. Match within 5 mm and 5 degrees; each trial times out at 90 seconds. Press "Pause" during a trial to cancel it and restart with a fresh target.`
-        : `Run ${condition.nTrials} target trials. Match within 5 mm and 5 degrees; each trial times out at 90 seconds.`;
+        ? `Run ${condition.nTrials} target trials. Match within ${thresholdLinearMm} mm and ${thresholdAngularDeg} degrees; each trial times out at 90 seconds. Press "Pause" during a trial to cancel it and restart with a fresh target.`
+        : `Run ${condition.nTrials} target trials. Match within ${thresholdLinearMm} mm and ${thresholdAngularDeg} degrees; each trial times out at 90 seconds.`;
       document.getElementById("preference-step").style.display = flags.preference ? "" : "none";
 
       document.getElementById("start-condition-btn").onclick = () => {
