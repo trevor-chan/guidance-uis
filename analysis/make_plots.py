@@ -26,7 +26,13 @@ import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 
-# -- Palette (validated categorical order; see the dataviz skill) ----------
+# -- Palette ------------------------------------------------------------
+#
+# Family = data dimensionality: 1D gray, 2D blue, 3D green. Within the 2D and
+# 3D families, shades distinguish reference frame (user / patient /
+# transducer). M3 and M5 are the two-mode comparison plots' series, so their
+# shade doubles as that family's canonical tone — one color per mode
+# everywhere it appears.
 
 MODALITY_IDS = [f"M{i}" for i in range(1, 8)]
 MODALITY_LABELS = {
@@ -38,29 +44,60 @@ MODALITY_LABELS = {
     "M6": "M6\n3D/Patient",
     "M7": "M7\n3D/Transducer",
 }
-MODALITY_COLORS = dict(
-    zip(
-        MODALITY_IDS,
-        [
-            "#2a78d6",  # M1 blue
-            "#1baf7a",  # M2 aqua
-            "#eda100",  # M3 yellow
-            "#008300",  # M4 green
-            "#4a3aa7",  # M5 violet
-            "#e34948",  # M6 red
-            "#e87ba4",  # M7 magenta
-        ],
-    )
-)
+MODALITY_COLORS = {
+    "M1": "#7f7f7f",  # 1D — gray
+    "M2": "#9ecae1",  # 2D/User — light blue
+    "M3": "#1f77b4",  # 2D/Patient — blue
+    "M4": "#08519c",  # 2D/Transducer — dark blue
+    "M5": "#2ca02c",  # 3D/User — green
+    "M6": "#74c476",  # 3D/Patient — light green
+    "M7": "#005a32",  # 3D/Transducer — dark green
+}
 COMPARE_MODES = ["M3", "M5"]  # 2D/Patient vs 3D/User: the two-series plots
 COMPARE_LABELS = {"M3": "M3 (2D/Patient)", "M5": "M5 (3D/User)"}
+COMPARE_COLORS = {m: MODALITY_COLORS[m] for m in COMPARE_MODES}
 
-INK = "#0b0b0b"
-SECONDARY_INK = "#52514e"
-MUTED = "#898781"
-GRID = "#e1e0d9"
-AXIS = "#c3c2b7"
-SURFACE = "#fcfcfb"
+INK = "#1a1a1a"
+MUTED = "#8c8c8c"
+GRID_COLOR = "#cccccc"
+SPINE_COLOR = "#333333"
+
+FIGSIZE = (6, 4.5)
+
+plt.rcParams.update(
+    {
+        "font.family": "sans-serif",
+        "font.sans-serif": ["Arial", "Helvetica", "DejaVu Sans"],
+        "font.size": 10,
+        "axes.titlesize": 13,
+        "axes.labelsize": 11,
+        "xtick.labelsize": 10,
+        "ytick.labelsize": 10,
+        "legend.fontsize": 10,
+        "axes.spines.top": False,
+        "axes.spines.right": False,
+        "axes.linewidth": 0.8,
+        "axes.edgecolor": SPINE_COLOR,
+        "axes.labelcolor": INK,
+        "axes.titlecolor": INK,
+        "text.color": INK,
+        "xtick.color": SPINE_COLOR,
+        "ytick.color": SPINE_COLOR,
+        "axes.grid": True,
+        "axes.grid.axis": "y",
+        "axes.axisbelow": True,
+        "grid.color": GRID_COLOR,
+        "grid.linestyle": ":",
+        "grid.linewidth": 0.7,
+        "grid.alpha": 0.9,
+        "figure.figsize": FIGSIZE,
+        "figure.facecolor": "white",
+        "axes.facecolor": "white",
+        "savefig.facecolor": "white",
+        "savefig.dpi": 300,
+        "legend.frameon": False,
+    }
+)
 
 PLOTS_DIR = Path(__file__).resolve().parent / "plots"
 
@@ -173,19 +210,8 @@ def print_summary(trials: list[dict]) -> None:
 
 
 def style_axes(ax) -> None:
-    ax.set_facecolor(SURFACE)
-    ax.figure.set_facecolor(SURFACE)
-    for spine_name, spine in ax.spines.items():
-        if spine_name in ("top", "right"):
-            spine.set_visible(False)
-        else:
-            spine.set_color(AXIS)
-    ax.tick_params(colors=SECONDARY_INK, labelsize=10)
-    ax.yaxis.grid(True, color=GRID, linewidth=0.9)
     ax.set_axisbelow(True)
-    ax.title.set_color(INK)
-    ax.xaxis.label.set_color(SECONDARY_INK)
-    ax.yaxis.label.set_color(SECONDARY_INK)
+    ax.grid(axis="y", zorder=0)
 
 
 def style_box(bp, color: str) -> None:
@@ -193,14 +219,14 @@ def style_box(bp, color: str) -> None:
         box.set_facecolor(color)
         box.set_alpha(0.55)
         box.set_edgecolor(color)
-        box.set_linewidth(1.4)
+        box.set_linewidth(1.2)
     for element in ("whiskers", "caps"):
         for artist in bp[element]:
             artist.set_color(MUTED)
-            artist.set_linewidth(1.2)
+            artist.set_linewidth(1.0)
     for median in bp["medians"]:
         median.set_color(INK)
-        median.set_linewidth(1.8)
+        median.set_linewidth(1.5)
     for flier in bp["fliers"]:
         flier.set_markeredgecolor(color)
         flier.set_markerfacecolor(color)
@@ -212,7 +238,7 @@ def save(fig, name: str) -> None:
     PLOTS_DIR.mkdir(parents=True, exist_ok=True)
     out_path = PLOTS_DIR / name
     fig.tight_layout()
-    fig.savefig(out_path, dpi=150)
+    fig.savefig(out_path)
     plt.close(fig)
     print(f"  wrote {out_path}")
 
@@ -277,7 +303,7 @@ def plot_modality_time(trials: list[dict]) -> None:
     modalities = present_modalities(rows)
     data = [[r["elapsed_s"] for r in rows if r["modality_id"] == m] for m in modalities]
 
-    fig, ax = plt.subplots(figsize=(8, 5))
+    fig, ax = plt.subplots()
     bp = ax.boxplot(data, patch_artist=True, widths=0.55)
     style_box(bp, INK)
     for i, m in enumerate(modalities):
@@ -286,8 +312,8 @@ def plot_modality_time(trials: list[dict]) -> None:
         bp["boxes"][i].set_alpha(0.6)
     ax.set_xticks(range(1, len(modalities) + 1))
     ax.set_xticklabels([MODALITY_LABELS[m] for m in modalities], fontsize=9)
-    ax.set_ylabel("Time (s)")
-    ax.set_title("Modality: completion time by modality", fontsize=13)
+    ax.set_ylabel("Time to match (s)")
+    ax.set_title("Modality: time to match by modality")
     style_axes(ax)
     save(fig, "modality_time.png")
 
@@ -295,12 +321,12 @@ def plot_modality_time(trials: list[dict]) -> None:
 def bar_with_ci(ax, modalities: list[str], means: list[float], los: list[float], his: list[float]) -> None:
     xs = list(range(1, len(modalities) + 1))
     colors = [MODALITY_COLORS[m] for m in modalities]
-    ax.bar(xs, means, width=0.6, color=colors, alpha=0.75, edgecolor=colors, linewidth=1.2, zorder=2)
+    ax.bar(xs, means, width=0.62, color=colors, alpha=0.85, edgecolor=INK, linewidth=0.8, zorder=2)
     lo_err = [m - lo for m, lo in zip(means, los)]
     hi_err = [hi - m for m, hi in zip(means, his)]
     ax.errorbar(
         xs, means, yerr=[lo_err, hi_err],
-        fmt="none", ecolor=INK, elinewidth=1.6, capsize=5, zorder=3,
+        fmt="none", ecolor=INK, elinewidth=1.2, capsize=4, capthick=1.2, zorder=3,
     )
     ax.set_xticks(xs)
     ax.set_xticklabels([MODALITY_LABELS[m] for m in modalities], fontsize=9)
@@ -319,12 +345,12 @@ def plot_modality_preference(preferences: list[dict]) -> None:
         los.append(lo)
         his.append(hi)
 
-    fig, ax = plt.subplots(figsize=(8, 5))
+    fig, ax = plt.subplots()
     bar_with_ci(ax, modalities, means, los, his)
     ax.set_ylim(1, 5)
     ax.set_yticks([1, 2, 3, 4, 5])
     ax.set_ylabel("Preference rating (1-5)")
-    ax.set_title("Modality: preference rating by modality (mean ± 95% CI)", fontsize=13)
+    ax.set_title("Modality: preference rating by modality (mean ± 95% CI)")
     style_axes(ax)
     save(fig, "modality_preference.png")
 
@@ -343,11 +369,11 @@ def plot_modality_success(trials: list[dict]) -> None:
         los.append(lo)
         his.append(hi)
 
-    fig, ax = plt.subplots(figsize=(8, 5))
+    fig, ax = plt.subplots()
     bar_with_ci(ax, modalities, means, los, his)
     ax.set_ylim(0, 1)
-    ax.set_ylabel("Fraction achieved")
-    ax.set_title("Modality: success rate by modality (mean ± 95% CI)", fontsize=13)
+    ax.set_ylabel("Success rate")
+    ax.set_title("Modality: success rate by modality (mean ± 95% CI)")
     style_axes(ax)
     save(fig, "modality_success.png")
 
@@ -361,8 +387,9 @@ def point_range_by_group(
     series_colors: dict,
     series_labels: dict,
 ) -> None:
-    """Mean ± 95% CI point-range per group. All series share the same x
-    position (no dodge) — overlap is expected, color differentiates."""
+    """Mean line with 95% CI point-range per group. All series share the same
+    x position (no dodge) — overlap is expected, color differentiates. A line
+    threads through each series' mean markers."""
     for s in series:
         xs, means, lo_err, hi_err = [], [], [], []
         for i, g in enumerate(groups):
@@ -376,16 +403,18 @@ def point_range_by_group(
             hi_err.append(hi - m)
         if not xs:
             continue
+        color = series_colors[s]
+        ax.plot(xs, means, "-", color=color, linewidth=1.4, zorder=2)
         ax.errorbar(
             xs, means, yerr=[lo_err, hi_err],
-            fmt="o", color=series_colors[s], ecolor=series_colors[s],
-            elinewidth=2.2, capsize=0, markersize=7,
-            markeredgecolor=INK, markeredgewidth=0.6,
+            fmt="o", color=color, ecolor=color,
+            elinewidth=1.2, capsize=4, capthick=1.2, markersize=6,
+            markeredgecolor="white", markeredgewidth=0.6,
             label=series_labels[s], zorder=3,
         )
     ax.set_xticks(range(1, len(groups) + 1))
     ax.set_xticklabels(group_labels)
-    ax.legend(frameon=False, labelcolor=INK, fontsize=10)
+    ax.legend(loc="best")
 
 
 def plot_learning_curve_time(trials: list[dict]) -> None:
@@ -404,19 +433,19 @@ def plot_learning_curve_time(trials: list[dict]) -> None:
     for r in rows:
         values[(r["trial_index"] + 1, r["modality_id"])].append(r["elapsed_s"])
 
-    fig, ax = plt.subplots(figsize=(9, 5.5))
+    fig, ax = plt.subplots()
     point_range_by_group(
         ax,
         groups=trial_numbers,
         group_labels=[str(n) for n in trial_numbers],
         series=COMPARE_MODES,
         values=values,
-        series_colors=MODALITY_COLORS,
+        series_colors=COMPARE_COLORS,
         series_labels=COMPARE_LABELS,
     )
     ax.set_xlabel("Trial number")
-    ax.set_ylabel("Time (s)")
-    ax.set_title("Learning curve: time per trial (mean ± 95% CI)", fontsize=13)
+    ax.set_ylabel("Time to match (s)")
+    ax.set_title("Learning curve: time per trial (mean ± 95% CI)")
     style_axes(ax)
     save(fig, "learning_curve_time.png")
 
@@ -438,19 +467,19 @@ def plot_noise_time(trials: list[dict]) -> None:
     for r in rows:
         values[(r["noise"], r["modality_id"])].append(r["elapsed_s"])
 
-    fig, ax = plt.subplots(figsize=(9, 5.5))
+    fig, ax = plt.subplots()
     point_range_by_group(
         ax,
         groups=magnitudes,
         group_labels=[f"{m:g}" for m in magnitudes],
         series=COMPARE_MODES,
         values=values,
-        series_colors=MODALITY_COLORS,
+        series_colors=COMPARE_COLORS,
         series_labels=COMPARE_LABELS,
     )
     ax.set_xlabel("Noise magnitude (mm / deg)")
-    ax.set_ylabel("Time (s)")
-    ax.set_title("Noise: completion time by magnitude (mean ± 95% CI)", fontsize=13)
+    ax.set_ylabel("Time to match (s)")
+    ax.set_title("Noise: completion time by magnitude (mean ± 95% CI)")
     style_axes(ax)
     save(fig, "noise_time.png")
 
@@ -472,19 +501,19 @@ def plot_latency_time(trials: list[dict]) -> None:
     for r in rows:
         values[(r["perceived_ms"], r["modality_id"])].append(r["elapsed_s"])
 
-    fig, ax = plt.subplots(figsize=(9, 5.5))
+    fig, ax = plt.subplots()
     point_range_by_group(
         ax,
         groups=latencies,
         group_labels=[f"{l:g}" for l in latencies],
         series=COMPARE_MODES,
         values=values,
-        series_colors=MODALITY_COLORS,
+        series_colors=COMPARE_COLORS,
         series_labels=COMPARE_LABELS,
     )
     ax.set_xlabel("Perceived latency (ms)")
-    ax.set_ylabel("Time (s)")
-    ax.set_title("Latency: completion time by perceived latency (mean ± 95% CI)", fontsize=13)
+    ax.set_ylabel("Time to match (s)")
+    ax.set_title("Latency: completion time by perceived latency (mean ± 95% CI)")
     style_axes(ax)
     save(fig, "latency_time.png")
 
@@ -521,19 +550,19 @@ def plot_precision_time(trials: list[dict]) -> None:
     for r in rows:
         values[(precision_key(r), r["modality_id"])].append(r["elapsed_s"])
 
-    fig, ax = plt.subplots(figsize=(9, 5.5))
+    fig, ax = plt.subplots()
     point_range_by_group(
         ax,
         groups=groups,
         group_labels=[precision_label(g) for g in groups],
         series=COMPARE_MODES,
         values=values,
-        series_colors=MODALITY_COLORS,
+        series_colors=COMPARE_COLORS,
         series_labels=COMPARE_LABELS,
     )
-    ax.set_xlabel("Match threshold (easiest -> hardest)")
-    ax.set_ylabel("Time (s)")
-    ax.set_title("Precision: completion time by threshold (mean ± 95% CI)", fontsize=13)
+    ax.set_xlabel("Precision threshold (mm / deg)")
+    ax.set_ylabel("Time to match (s)")
+    ax.set_title("Precision: completion time by threshold (mean ± 95% CI)")
     style_axes(ax)
     save(fig, "precision_time.png")
 
