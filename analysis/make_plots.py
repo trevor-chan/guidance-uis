@@ -4,6 +4,8 @@
 Usage:
     python3 analysis/make_plots.py <folder>
     python3 analysis/make_plots.py <folder> --participant P3
+    python3 analysis/make_plots.py <folder> --threshold 10 10
+    python3 analysis/make_plots.py <folder> --participant P3 --threshold 10 10
 
 <folder> is scanned recursively for files named experiment.sqlite (e.g. point
 it at a data-category bin such as .../visualexperiment/real or .../practice).
@@ -15,6 +17,13 @@ the study configuration do not silently break these plots.
 --participant <ID> restricts the pool to sessions whose participant_id
 matches <ID> (case-insensitive, exact match). Plot filenames get a
 _<ID> suffix so they don't overwrite the pooled plots.
+
+--threshold <linear_mm> <angular_deg> re-derives each trial's time-to-match
+from its recorded trajectory under this threshold instead of the one the
+trial actually ran with (see apply_threshold_override / derive_match).
+Affects modality_time, noise_time, latency_time, precision_time,
+learning_curve_time, and modality_success; modality_preference is unaffected.
+Plot filenames get a _thr<linear>x<angular> suffix.
 """
 
 from __future__ import annotations
@@ -149,6 +158,13 @@ PLOTS_DIR = Path(__file__).resolve().parent / "plots"
 
 EXPERIMENTS = ["modality", "noise", "latency", "learning_curve", "precision"]
 
+# Continuous-hold duration required to register a match, mirroring
+# core.HOLD_DURATION / study/activities.py TrialActivity. Not imported
+# directly since core.py sits outside analysis/ on a different sys.path
+# root; this script already re-derives everything else from the sqlite data
+# rather than importing study code, so a mirrored constant fits that pattern.
+HOLD_S = 1.0
+
 # Deterministic horizontal jitter for dot clouds: a fixed seed keeps repeated
 # runs over the same data visually stable instead of reshuffling each time.
 _JITTER_RNG = random.Random(20260709)
@@ -257,6 +273,122 @@ def load_data(paths: list[Path]) -> tuple[list[dict], list[dict]]:
         finally:
             connection.close()
     return trials, preferences
+
+
+# -- Threshold override (re-derive time-to-match from trajectories) --------
+#
+# --threshold re-plays each trial's recorded trajectory_samples against a
+# different (linear_mm, angular_deg) pair than the one the trial actually ran
+# with, reproducing the live continuous-hold rule (study/activities.py
+# TrialActivity.step / trial.py Trial.step): a match is registered once the
+# pose stays within tolerance for HOLD_S seconds straight.
+
+TRAJECTORY_QUERY = """
+SELECT run_id, trial_index, elapsed_s, linear_m, angular_deg
+FROM trajectory_samples
+ORDER BY run_id, trial_index, sample_index
+"""
+
+
+def load_trajectories(paths: list[Path]) -> dict[tuple[str, int], list[tuple[float, float, float]]]:
+    """One query per file, grouped by (run_id, trial_index) in memory.
+
+    run_id is a uuid4 (study/storage.py start_condition), so keys are unique
+    across every file pooled, no source_file disambiguation needed. Rows are
+    already ordered by sample_index (capture order) within each trial, which
+    is what the derivation needs — elapsed_s spacing isn't perfectly uniform.
+    """
+    trajectories: dict[tuple[str, int], list[tuple[float, float, float]]] = defaultdict(list)
+    for path in paths:
+        try:
+            connection = sqlite3.connect(f"file:{path}?mode=ro", uri=True)
+            with connection:
+                for run_id, trial_index, elapsed_s, linear_m, angular_deg in connection.execute(TRAJECTORY_QUERY):
+                    if elapsed_s is None or linear_m is None or angular_deg is None:
+                        continue
+                    trajectories[(run_id, trial_index)].append((elapsed_s, linear_m, angular_deg))
+        except sqlite3.DatabaseError as exc:
+            print(f"  ! skipping trajectories in {path}: {exc}")
+        finally:
+            connection.close()
+    return trajectories
+
+
+def derive_match(
+    samples: list[tuple[float, float, float]],
+    linear_mm: float,
+    angular_deg_thr: float,
+    hold_s: float = HOLD_S,
+) -> tuple[float | None, bool]:
+    """Re-derive time-to-match for one trial under an overridden threshold.
+
+    samples: (elapsed_s, linear_m, angular_deg) triples in capture order.
+    Finds the earliest T such that every sample with elapsed_s in
+    [T, T+hold_s] is within (linear_mm, angular_deg_thr), i.e. the trajectory
+    holds continuously through a full hold_s window starting at T. Returns
+    (T + hold_s, True) — the moment the hold completes — for the earliest
+    such T, or (None, False) if no window is confirmed by the recorded data
+    (a derived timeout; the caller falls back to the trial's recorded
+    elapsed_s).
+
+    A window is only confirmed if a sample exists at or past its end — a
+    window whose tail runs past the last recorded sample (e.g. because
+    recording stopped when the *original*, looser threshold matched first)
+    is not counted, since there's no data confirming the hold actually
+    continued that far.
+    """
+    n = len(samples)
+    if n == 0:
+        return None, False
+
+    ok = [lin_m * 1000.0 <= linear_mm and ang <= angular_deg_thr for _, lin_m, ang in samples]
+
+    # next_bad[i]: index of the first sample at/after i that violates the
+    # threshold, or n if it holds through the end of the trajectory.
+    next_bad = [n] * (n + 1)
+    for i in range(n - 1, -1, -1):
+        next_bad[i] = i if not ok[i] else next_bad[i + 1]
+
+    cover = 0  # first index with elapsed_s >= current window end; monotonic
+    for i in range(n):
+        if not ok[i]:
+            continue
+        end = samples[i][0] + hold_s
+        while cover < n and samples[cover][0] < end:
+            cover += 1
+        if cover == n:
+            # Trajectory doesn't reach this window's end, nor any later one
+            # (elapsed_s only grows with i) -- no confirmable window exists.
+            break
+        if next_bad[i] == n or samples[next_bad[i]][0] > end:
+            return end, True
+    return None, False
+
+
+def apply_threshold_override(
+    trials: list[dict],
+    trajectories: dict[tuple[str, int], list[tuple[float, float, float]]],
+    linear_mm: float,
+    angular_deg_thr: float,
+) -> tuple[list[dict], int, int]:
+    """Replace elapsed_s/achieved on every trial with threshold-derived
+    values. Returns (derived_trials, n_newly_matched, n_newly_timed_out)
+    relative to each trial's recorded outcome."""
+    derived: list[dict] = []
+    n_newly_matched = 0
+    n_newly_timed_out = 0
+    for t in trials:
+        samples = trajectories.get((t["run_id"], t["trial_index"]), [])
+        match_time, achieved = derive_match(samples, linear_mm, angular_deg_thr)
+        record = dict(t)
+        record["elapsed_s"] = match_time if achieved else t["elapsed_s"]
+        record["achieved"] = achieved
+        derived.append(record)
+        if achieved and not t["achieved"]:
+            n_newly_matched += 1
+        elif not achieved and t["achieved"]:
+            n_newly_timed_out += 1
+    return derived, n_newly_matched, n_newly_timed_out
 
 
 # -- Summary -------------------------------------------------------------
@@ -729,6 +861,20 @@ def parse_args() -> argparse.Namespace:
         "--participant",
         help="Only include sessions whose participant_id matches this value (case-insensitive)",
     )
+    parser.add_argument(
+        "--threshold",
+        nargs=2,
+        type=float,
+        metavar=("LINEAR_MM", "ANGULAR_DEG"),
+        help=(
+            "Re-derive time-to-match from recorded trajectories under this "
+            "(linear_mm, angular_deg) threshold instead of the threshold each "
+            "trial actually ran with, using the live 1.0s continuous-hold "
+            "rule. Affects all time plots and modality_success; "
+            "modality_preference is unaffected. Output filenames get a "
+            "_thrLINEARxANGULAR suffix."
+        ),
+    )
     return parser.parse_args()
 
 
@@ -762,6 +908,20 @@ def main() -> None:
         trials = [t for t in trials if t["participant_id"] and t["participant_id"].lower() in matches]
         preferences = [p for p in preferences if p["participant_id"] and p["participant_id"].lower() in matches]
         suffix = args.participant
+
+    if args.threshold:
+        linear_mm, angular_deg_thr = args.threshold
+        trajectories = load_trajectories(paths)
+        trials, n_matched, n_timed_out = apply_threshold_override(
+            trials, trajectories, linear_mm, angular_deg_thr
+        )
+        print(
+            f"\nRe-derived at threshold {linear_mm:g}mm/{angular_deg_thr:g}deg, "
+            f"hold {HOLD_S:g}s: {n_matched} newly matched, {n_timed_out} newly "
+            f"timed out (of {len(trials)} trials)."
+        )
+        threshold_suffix = f"thr{linear_mm:g}x{angular_deg_thr:g}"
+        suffix = "_".join(s for s in (suffix, threshold_suffix) if s)
 
     print_summary(trials, participant=args.participant)
 
