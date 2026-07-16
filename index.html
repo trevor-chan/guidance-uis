@@ -5,14 +5,13 @@
   <title>Trial Monitor</title>
   <style>
     :root {
-      /* TEMP: flipped light for manuscript figures, revert to the original
-         dark values (--bg:#0a0a0a --surface:#1e1e1e --text:#fafafa --dim:#d4d4d4)
-         after. --track unchanged: the bar-track fill's own colors already read
-         fine on light. */
+      /* TEMP: --bg white for manuscript figures, revert to #0a0a0a after.
+         Everything else (cards/bars/badges) stays the original dark values —
+         only the page background outside the cards changes. */
       --bg: #ffffff;
-      --surface: #f0f0f0;
-      --text: #171717;
-      --dim: #525252;
+      --surface: #1e1e1e;
+      --text: #fafafa;
+      --dim: #d4d4d4;
       --track: #2a2a2a;
     }
     * { box-sizing: border-box; margin: 0; padding: 0; }
@@ -28,7 +27,7 @@
       gap: 24px;
       padding: 32px;
     }
-    h1 { font-size: 1.4rem; letter-spacing: 0.15em; color: var(--text); }
+    h1 { font-size: 1.4rem; letter-spacing: 0.15em; color: #171717; } /* TEMP: hardcoded dark, was var(--text) - sits directly on white body, not a card */
 
     .card {
       background: var(--surface);
@@ -89,13 +88,13 @@
       font-weight: bold;
       letter-spacing: 0.08em;
     }
-    .badge-running  { background: #2a2a2a; color: #fafafa; } /* TEMP: hardcoded, was var(--text) - bg stays dark */
+    .badge-running  { background: #2a2a2a; color: var(--text); }
     .badge-matched  { background: #14532d; color: #4ade80; }
     .badge-timeout  { background: #450a0a; color: #f87171; }
 
     #ws-status {
       font-size: 1rem;
-      color: var(--text);
+      color: #171717; /* TEMP: hardcoded dark, was var(--text) - sits directly on white body, not a card */
       letter-spacing: 0.05em;
     }
     .ws-ok  { color: #4ade80 !important; }
@@ -140,7 +139,7 @@
       flex: 1;
       padding: 16px 0;
       background: #2a2a2a;
-      color: #fafafa; /* TEMP: hardcoded, was var(--text) - bg stays dark */
+      color: var(--text);
       border: 1px solid #444;
       border-radius: 6px;
       font-family: 'Courier New', monospace;
@@ -155,7 +154,7 @@
 
     .badge-comp-active { background: #14532d; color: #4ade80; }
     .badge-comp-over   { background: #450a0a; color: #f87171; }
-    .badge-comp-idle   { background: #2a2a2a; color: #d4d4d4; } /* TEMP: hardcoded, was var(--dim) - bg stays dark */
+    .badge-comp-idle   { background: #2a2a2a; color: var(--dim); }
 
     /* ── Hold indicator: green fill rising from bottom ── */
     #hold-bg {
@@ -197,7 +196,7 @@
       padding: 14px 6px;
       flex: 1;
       background: #2a2a2a;
-      color: #fafafa; /* TEMP: hardcoded, was var(--text) - bg stays dark */
+      color: var(--text);
       border: 1px solid #444;
       border-radius: 6px;
       font-family: 'Courier New', monospace;
