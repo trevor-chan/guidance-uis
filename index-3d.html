@@ -1211,11 +1211,8 @@
         // txWorldGroup gets makeTranslation(-tx,-ty,-tz): cancels probe position so it
         // stays centred, but rotation is NOT inverted — both probe and world share the
         // same fixed-orientation reference frame and the probe visibly rotates on screen.
-        // liveGroup gets the rotation-only part of _lastLiveMatrix (translation zeroed),
-        // then the same DISPLAY_FRAME_MATRIX_INV (R_d⁻¹) correction as txWorldGroup:
-        // liveGroup is a scene-root sibling, not a child, so it doesn't inherit that
-        // correction automatically. R_d⁻¹·(R_d·R_rel)=R_rel — probe sits at scene
-        // origin, constant R_d cancelled, live device rotation R_rel untouched.
+        // liveGroup gets the rotation-only part of _lastLiveMatrix (translation zeroed):
+        // probe sits at scene origin but shows its actual orientation.
         //
         // Ghost alignment at true match: T(-t)×DFM×(ref⁻¹×target)=T(-t)×M=[R|0]=liveGroup ✓
         // Cached-pose pattern mirrors transducer to avoid stale-frame flicker.
@@ -1249,11 +1246,6 @@
           liveGroup.matrix.elements[12] = 0;
           liveGroup.matrix.elements[13] = 0;
           liveGroup.matrix.elements[14] = 0;
-          // liveGroup is a scene-root sibling of txWorldGroup, not its child, so it
-          // does not inherit the DISPLAY_FRAME_MATRIX_INV correction above. Apply the
-          // same constant-R_d cancellation here: R_d⁻¹·(R_d·R_rel) = R_rel, leaving the
-          // live device rotation untouched while matching the now-raw-space world.
-          liveGroup.matrix.premultiply(DISPLAY_FRAME_MATRIX_INV);
           liveGroup.matrixWorldNeedsUpdate = true;
         }
       } else {
