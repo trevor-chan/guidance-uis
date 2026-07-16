@@ -1199,11 +1199,15 @@
       if (!boxOriginPose || !calibMat) return;
 
       const calibRel = boxOriginPose.clone().invert().multiply(calibMat);
-      const calibFwd = new THREE.Vector3().setFromMatrixColumn(calibRel, 0).normalize();
+      // col0 of a tip-frame pose is the transducer's own local X — per core.py's
+      // box-basis convention (bZ = −X_t, "away from tip") that axis already points
+      // AWAY from the patient, back toward the probe body/cable/operator, so the
+      // eye must sit along +col0 (not −col0) to land above/behind the probe.
+      const calibBack = new THREE.Vector3().setFromMatrixColumn(calibRel, 0).normalize();
       const worldUp = new THREE.Vector3(0, 0, 1);
       const origin = new THREE.Vector3(0, 0, 0);
       const eye = origin.clone()
-        .addScaledVector(calibFwd, -HYBRID_CAM_DIST)
+        .addScaledVector(calibBack, HYBRID_CAM_DIST)
         .addScaledVector(worldUp, HYBRID_CAM_HEIGHT);
 
       activeCamera.position.copy(eye);
