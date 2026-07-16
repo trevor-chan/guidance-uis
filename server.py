@@ -4,10 +4,13 @@ import argparse
 import asyncio
 from collections import deque
 from functools import partial
+import hashlib
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
+import io
 import json
 import math
 from pathlib import Path
+import re
 import threading
 import time
 import numpy as np
@@ -1065,20 +1068,57 @@ async def _study_handler(websocket, fetcher, runner):
         pass
 
 
+_JS_VERSION_RE = re.compile(rb'(experiment-session\.js)\?v=[0-9a-fA-F]+')
+
+
+def _experiment_session_hash(root: Path) -> str:
+    """8-char sha256 of experiment-session.js's current bytes, recomputed per call.
+
+    HTML pages hardcode this in their ?v= query string as a cache-buster;
+    computing it fresh (rather than caching it at startup) means an edit to
+    experiment-session.js can never again leave a stale ?v= behind, even if
+    the server process outlives the edit.
+    """
+    data = (root / "experiment-session.js").read_bytes()
+    return hashlib.sha256(data).hexdigest()[:8]
+
+
 class _NoCacheHTMLRequestHandler(SimpleHTTPRequestHandler):
     """Static file handler that forces revalidation of .html pages.
 
-    The JS these pages load is already cache-busted via a content-hash
-    query string, but the HTML itself was being served stale from the
-    browser's HTTP cache on the rig — a new launcher.html/setbox.html
-    deploy silently kept showing the old page until an incognito reload.
-    HTML pages are tiny, so always revalidating them costs nothing.
+    The JS these pages load is cache-busted via a content-hash query string
+    that this handler rewrites on every request (see _rewrite_js_version),
+    so ?v= can never drift from the file it's meant to bust — the class of
+    bug that shipped the hybrid experiment with a stale cached JS on the rig.
+    HTML pages are tiny, so always revalidating and rewriting them costs
+    nothing.
     """
 
     def end_headers(self):
         if self.path.split("?", 1)[0].endswith(".html"):
             self.send_header("Cache-Control", "no-cache")
         super().end_headers()
+
+    def send_head(self):
+        if self.path.split("?", 1)[0].endswith(".html"):
+            return self._rewrite_js_version()
+        return super().send_head()
+
+    def _rewrite_js_version(self):
+        path = self.translate_path(self.path)
+        try:
+            with open(path, "rb") as f:
+                body = f.read()
+        except OSError:
+            self.send_error(404, "File not found")
+            return None
+        digest = _experiment_session_hash(Path(self.directory))
+        body = _JS_VERSION_RE.sub(rb'\1?v=' + digest.encode(), body)
+        self.send_response(200)
+        self.send_header("Content-Type", "text/html")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        return io.BytesIO(body)
 
 
 # ── Transport layer ────────────────────────────────────────────────────────────
