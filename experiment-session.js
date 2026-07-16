@@ -81,9 +81,9 @@
       label: "3D - Hybrid reference frame",
       shortLabel: "3D / Hybrid",
       page: "index-3d.html",
-      // Hybrid's camera is fixed like transducer's (no calibrated viewpoint
-      // to capture) — see study/sequence.py needs_calibration = frame == "user".
-      needsCalibration: false,
+      // Hybrid's camera is the calibrated user viewpoint (position-locked,
+      // live rotation) — see study/sequence.py needs_calibration.
+      needsCalibration: true,
     }),
   });
 
@@ -136,8 +136,9 @@
   const PRECISION_TRIALS_PER_THRESHOLD = 3;
 
   // TEMPORARY: HYBRID mode list and trial count. Change here if the study
-  // design shifts. M8 = 3D/Hybrid (position-locked camera, live rotation —
-  // see index-3d.html:1202-1239).
+  // design shifts. M8 = 3D/Hybrid (calibrated user-viewpoint camera; world
+  // translation-locked, probe free-rotating — see index-3d.html's animate()
+  // hybrid branch).
   const HYBRID_MODES = ["M8"];
   const HYBRID_TRIALS = 20; // placeholder — easy to change
 
