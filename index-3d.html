@@ -809,18 +809,32 @@
     // calibration; the camera itself stays the hardcoded fixed view (see animate()'s
     // 'hybrid' branch) and is never touched here.
     function updateHybridCalibrationAxis(data) {
-      if (!data.box_origin || !data.calibration_origin) return;
-      const boxMat = matrixFromRows(data.box_origin);
+      if (!data.box_origin || !data.calibration_origin || !data.reference_pose) return;
+      const boxMat   = matrixFromRows(data.box_origin);
+      const refMat   = matrixFromRows(data.reference_pose);
       const calibMat = matrixFromRows(data.calibration_origin);
-      if (!boxMat || !calibMat) return;
+      if (!boxMat || !refMat || !calibMat) return;
 
-      const calibRel = boxMat.clone().invert().multiply(calibMat);
-      // col0 of calibRel: box-space direction, per core.py's bZ = −col0 convention
-      // already pointing AWAY from the patient, toward the operator side.
-      const axisBox = new THREE.Vector3().setFromMatrixColumn(calibRel, 0).normalize();
-      // Rotate into the same raw space txWorldGroup/liveGroup render in (see
-      // DISPLAY_FRAME_MATRIX_INV's other use in animate()'s hybrid branch).
-      const axisRender = axisBox.clone().transformDirection(DISPLAY_FRAME_MATRIX_INV).normalize();
+      // Literally initStudyCamera's user-branch chain (known correct on the rig):
+      // box and calibration both expressed relative to the calibration (refMat⁻¹
+      // — reference_pose IS the calibration pose post-calibration), then placed
+      // into scene space (× DISPLAY_FRAME_MATRIX). eye/target here mirror that
+      // function's local variables exactly.
+      const boxScene   = DISPLAY_FRAME_MATRIX.clone().multiply(refMat.clone().invert().multiply(boxMat));
+      const calibScene = DISPLAY_FRAME_MATRIX.clone().multiply(refMat.clone().invert().multiply(calibMat));
+      const bZ = new THREE.Vector3().setFromMatrixColumn(boxScene, 0).negate(); // −col0 = depth
+      const target = new THREE.Vector3().setFromMatrixPosition(boxScene).addScaledVector(bZ, 0.07);
+      const eye = new THREE.Vector3().setFromMatrixPosition(calibScene).addScaledVector(new THREE.Vector3(0, 0, 1), 0.3);
+
+      // Direction out of the patient, toward the operator (eye − target), in the
+      // same scene space initStudyCamera computes it in.
+      const dirScene = eye.clone().sub(target);
+
+      // Hybrid's render space = scene space with DISPLAY_FRAME_MATRIX_INV
+      // premultiplied (same cancellation animate()'s hybrid branch applies to
+      // txWorldGroup/liveGroup). transformDirection applies only the rotation
+      // part and normalizes.
+      const axisRender = dirScene.clone().transformDirection(DISPLAY_FRAME_MATRIX_INV);
 
       const tip = axisRender.clone().multiplyScalar(HYBRID_AXIS_LENGTH);
       const pos = hybridAxisLine.geometry.attributes.position.array;
