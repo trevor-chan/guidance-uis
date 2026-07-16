@@ -81,9 +81,11 @@
       label: "3D - Hybrid reference frame",
       shortLabel: "3D / Hybrid",
       page: "index-3d.html",
-      // Hybrid's camera is fixed like transducer's (no calibrated viewpoint
-      // to capture) — see study/sequence.py needs_calibration = frame == "user".
-      needsCalibration: false,
+      // Hybrid's camera stays fixed like transducer's — calibration is only used
+      // to draw the calibrated-view-axis line in the scene, not to move the camera.
+      // See study/sequence.py needs_calibration and index-3d.html's
+      // updateHybridCalibrationAxis.
+      needsCalibration: true,
     }),
   });
 

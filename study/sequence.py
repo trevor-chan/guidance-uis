@@ -68,7 +68,7 @@ class SequenceGenerator:
     ) -> Block:
         """Build a single study block seeded with a pre-set box origin.
 
-        Calibration is included only for user frames, where the camera
+        Calibration is included for user and hybrid frames, where the camera
         reference pose must be captured from the live tracker. Patient,
         transducer, and 1D blocks use the pre-set box origin directly.
 
@@ -97,7 +97,7 @@ class SequenceGenerator:
         see the "scramble trials within each mode" design. None (every other
         experiment) leaves every trial at TrialActivity's defaults.
         """
-        needs_calibration = frame == "user"
+        needs_calibration = frame in ("user", "hybrid")
         calibration = CalibrationActivity(self._fetcher) if needs_calibration else None
         practice    = PracticeActivity(self._fetcher, origin) if include_practice else None
         preference  = PreferenceActivity() if include_preference else None

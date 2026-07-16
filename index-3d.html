@@ -591,6 +591,22 @@
     ghostDropLine.visible = false;
     scene.add(liveDropLine, ghostDropLine);
 
+    // Hybrid calibration axis: a purely visual line from the pinned probe origin
+    // along the calibrated view direction (see updateHybridCalibrationAxis). Added
+    // to the scene root, NOT txWorldGroup, so it never translates with the world —
+    // it marks a fixed direction from the origin, same space liveGroup renders in.
+    const HYBRID_AXIS_LENGTH = 0.6;
+    const HYBRID_AXIS_MARKER_DIST = 0.4;
+    const hybridAxisLine = createDropLine(0xff00ff);
+    hybridAxisLine.material.opacity = 1.0;
+    hybridAxisLine.visible = false;
+    const hybridAxisMarker = new THREE.Mesh(
+      new THREE.SphereGeometry(0.012, 16, 12),
+      new THREE.MeshBasicMaterial({ color: 0xff00ff })
+    );
+    hybridAxisMarker.visible = false;
+    scene.add(hybridAxisLine, hybridAxisMarker);
+
     function centeredModel(object, material) {
       const bounds = new THREE.Box3().setFromObject(object);
       const center = bounds.getCenter(new THREE.Vector3());
@@ -707,7 +723,7 @@
       if (act === "calibration") {
         document.getElementById("s3-cal").style.display = "block";
         document.getElementById("calib-img-3d").style.display =
-          (_studyFrame3 === "user") ? "block" : "none";
+          (_studyFrame3 === "user" || _studyFrame3 === "hybrid") ? "block" : "none";
       } else if (act === "practice") {
         document.getElementById("s3-practice").style.display = "block";
       } else if (act === "trial") {
@@ -786,6 +802,37 @@
       patientSilhouettePage.visible = true;
     }
 
+    // Hybrid calibration axis: purely visual, does not touch the camera. Computes
+    // the calibrated view direction and draws it as a line from the pinned probe
+    // origin (0,0,0), with a marker at the distance the camera would eventually
+    // sit if hybrid's camera were ever made calibrated. Recomputed on each fresh
+    // calibration; the camera itself stays the hardcoded fixed view (see animate()'s
+    // 'hybrid' branch) and is never touched here.
+    function updateHybridCalibrationAxis(data) {
+      if (!data.box_origin || !data.calibration_origin) return;
+      const boxMat = matrixFromRows(data.box_origin);
+      const calibMat = matrixFromRows(data.calibration_origin);
+      if (!boxMat || !calibMat) return;
+
+      const calibRel = boxMat.clone().invert().multiply(calibMat);
+      // col0 of calibRel: box-space direction, per core.py's bZ = −col0 convention
+      // already pointing AWAY from the patient, toward the operator side.
+      const axisBox = new THREE.Vector3().setFromMatrixColumn(calibRel, 0).normalize();
+      // Rotate into the same raw space txWorldGroup/liveGroup render in (see
+      // DISPLAY_FRAME_MATRIX_INV's other use in animate()'s hybrid branch).
+      const axisRender = axisBox.clone().transformDirection(DISPLAY_FRAME_MATRIX_INV).normalize();
+
+      const tip = axisRender.clone().multiplyScalar(HYBRID_AXIS_LENGTH);
+      const pos = hybridAxisLine.geometry.attributes.position.array;
+      pos[0] = 0; pos[1] = 0; pos[2] = 0;
+      pos[3] = tip.x; pos[4] = tip.y; pos[5] = tip.z;
+      hybridAxisLine.geometry.attributes.position.needsUpdate = true;
+      hybridAxisLine.visible = true;
+
+      hybridAxisMarker.position.copy(axisRender.clone().multiplyScalar(HYBRID_AXIS_MARKER_DIST));
+      hybridAxisMarker.visible = true;
+    }
+
     function connect() {
       socket = new WebSocket(WS_URL);
 
@@ -834,8 +881,17 @@
           }
           frameNeedsInit = false;
         }
+        if (justCalibrated && referenceFrame === 'hybrid') {
+          // Purely visual — does not set frameNeedsInit or touch the camera;
+          // hybrid's fixed camera is placed unconditionally in animate().
+          updateHybridCalibrationAxis(data);
+        }
         if (justReset) {
           frameNeedsInit = true; // re-lock next calibration
+          if (referenceFrame === 'hybrid') {
+            hybridAxisLine.visible = false;
+            hybridAxisMarker.visible = false;
+          }
         }
 
         // Detect viewpoint_pose changes: null→set, re-set, or set→null (on reset).
