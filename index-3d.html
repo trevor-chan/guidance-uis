@@ -467,6 +467,11 @@
     txWorldGroup.add(displayFrame);
     displayFrame.updateMatrix();
     const DISPLAY_FRAME_MATRIX = displayFrame.matrix.clone();
+    // Constant inverse (pure rotation, zero translation — DISPLAY_FRAME_MATRIX has no
+    // position component). Hybrid's txWorldGroup only cancels translation each frame,
+    // leaving DISPLAY_FRAME_MATRIX's rotation baked into the world/silhouette; this
+    // premultiplies it away without depending on the live probe pose.
+    const DISPLAY_FRAME_MATRIX_INV = DISPLAY_FRAME_MATRIX.clone().invert();
 
     const cubeGeometry = new THREE.BoxGeometry(0.5, 0.5, 0.5);
     const cubeEdges = new THREE.LineSegments(
@@ -1230,6 +1235,12 @@
           const ty = _lastLiveMatrix.elements[13];
           const tz = _lastLiveMatrix.elements[14];
           txWorldGroup.matrix.makeTranslation(-tx, -ty, -tz);
+          // Cancel the constant DISPLAY_FRAME_MATRIX rotation (R_d) that would
+          // otherwise stay baked into the world/silhouette — transducer removes
+          // it via a full pose inverse, hybrid needs the same correction but
+          // only the constant part, since translation must stay dynamic and
+          // rotation must stay untouched by the live probe pose.
+          txWorldGroup.matrix.premultiply(DISPLAY_FRAME_MATRIX_INV);
           txWorldGroup.matrixWorldNeedsUpdate = true;
           liveGroup.matrix.copy(_lastLiveMatrix);
           liveGroup.matrix.elements[12] = 0;
