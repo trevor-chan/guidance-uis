@@ -845,6 +845,17 @@
 
       hybridAxisMarker.position.copy(axisRender.clone().multiplyScalar(HYBRID_AXIS_MARKER_DIST));
       hybridAxisMarker.visible = true;
+
+      // TEMP DIAGNOSTIC ---------------------------------------------------
+      const _ndc = hybridAxisMarker.position.clone().project(activeCamera);
+      console.log('[hybrid-axis-diag] marker.position (world):', hybridAxisMarker.position.toArray());
+      console.log('[hybrid-axis-diag] marker NDC (project via activeCamera):', _ndc.toArray());
+      console.log('[hybrid-axis-diag] marker in frustum (|x|,|y|,|z| <= 1):',
+        Math.abs(_ndc.x) <= 1 && Math.abs(_ndc.y) <= 1 && Math.abs(_ndc.z) <= 1);
+      console.log('[hybrid-axis-diag] marker.visible:', hybridAxisMarker.visible);
+      console.log('[hybrid-axis-diag] marker.parent:', hybridAxisMarker.parent && hybridAxisMarker.parent.type,
+        '(in scene graph:', hybridAxisMarker.parent === scene, ')');
+      // ---------------------------------------------------------------------
     }
 
     function connect() {
