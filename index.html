@@ -5,10 +5,14 @@
   <title>Trial Monitor</title>
   <style>
     :root {
-      --bg: #0a0a0a;
-      --surface: #1e1e1e;
-      --text: #fafafa;
-      --dim: #d4d4d4;
+      /* TEMP: flipped light for manuscript figures, revert to the original
+         dark values (--bg:#0a0a0a --surface:#1e1e1e --text:#fafafa --dim:#d4d4d4)
+         after. --track unchanged: the bar-track fill's own colors already read
+         fine on light. */
+      --bg: #ffffff;
+      --surface: #f0f0f0;
+      --text: #171717;
+      --dim: #525252;
       --track: #2a2a2a;
     }
     * { box-sizing: border-box; margin: 0; padding: 0; }
@@ -85,7 +89,7 @@
       font-weight: bold;
       letter-spacing: 0.08em;
     }
-    .badge-running  { background: #2a2a2a; color: var(--text); }
+    .badge-running  { background: #2a2a2a; color: #fafafa; } /* TEMP: hardcoded, was var(--text) - bg stays dark */
     .badge-matched  { background: #14532d; color: #4ade80; }
     .badge-timeout  { background: #450a0a; color: #f87171; }
 
@@ -136,7 +140,7 @@
       flex: 1;
       padding: 16px 0;
       background: #2a2a2a;
-      color: var(--text);
+      color: #fafafa; /* TEMP: hardcoded, was var(--text) - bg stays dark */
       border: 1px solid #444;
       border-radius: 6px;
       font-family: 'Courier New', monospace;
@@ -151,7 +155,7 @@
 
     .badge-comp-active { background: #14532d; color: #4ade80; }
     .badge-comp-over   { background: #450a0a; color: #f87171; }
-    .badge-comp-idle   { background: #2a2a2a; color: var(--dim); }
+    .badge-comp-idle   { background: #2a2a2a; color: #d4d4d4; } /* TEMP: hardcoded, was var(--dim) - bg stays dark */
 
     /* ── Hold indicator: green fill rising from bottom ── */
     #hold-bg {
@@ -193,7 +197,7 @@
       padding: 14px 6px;
       flex: 1;
       background: #2a2a2a;
-      color: var(--text);
+      color: #fafafa; /* TEMP: hardcoded, was var(--text) - bg stays dark */
       border: 1px solid #444;
       border-radius: 6px;
       font-family: 'Courier New', monospace;

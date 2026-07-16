@@ -411,7 +411,7 @@
     const swayBtn = document.getElementById("sway-toggle");
 
     const scene = new THREE.Scene();
-    scene.background = new THREE.Color(0x151515);
+    scene.background = new THREE.Color(0xffffff); // TEMP: white for manuscript figures, revert after
 
     const camera = new THREE.PerspectiveCamera(42, 1, 0.01, 10);
     camera.position.set(0.72, 0.42, 0.72);
