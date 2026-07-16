@@ -74,6 +74,17 @@
       page: "index-3d.html",
       needsCalibration: false,
     }),
+    M8: Object.freeze({
+      id: "M8",
+      display: "3D",
+      frame: "hybrid",
+      label: "3D - Hybrid reference frame",
+      shortLabel: "3D / Hybrid",
+      page: "index-3d.html",
+      // Hybrid's camera is fixed like transducer's (no calibrated viewpoint
+      // to capture) — see study/sequence.py needs_calibration = frame == "user".
+      needsCalibration: false,
+    }),
   });
 
   // Rows P1-P7 from the protocol's condition matrix. Each position is the
@@ -123,6 +134,12 @@
     { linearMm: 1,  angularDeg: 1  },
   ];
   const PRECISION_TRIALS_PER_THRESHOLD = 3;
+
+  // TEMPORARY: HYBRID mode list and trial count. Change here if the study
+  // design shifts. M8 = 3D/Hybrid (position-locked camera, live rotation —
+  // see index-3d.html:1202-1239).
+  const HYBRID_MODES = ["M8"];
+  const HYBRID_TRIALS = 20; // placeholder — easy to change
 
   function participantOption(participantId) {
     const match = String(participantId || "").trim().match(/^p?([1-7])$/i);
@@ -229,6 +246,17 @@
     });
   }
 
+  function buildHybridConditions() {
+    return HYBRID_MODES.map((modalityId, index) => ({
+      index,
+      targetSet: null,
+      modalityId,
+      nTrials: HYBRID_TRIALS,
+      includePractice: true,
+      status: "pending",
+    }));
+  }
+
   // Registry of experiment types. Each entry supplies a buildConditions()
   // function and the flags a session of that type runs with.
   const EXPERIMENTS = Object.freeze({
@@ -254,6 +282,11 @@
     },
     precision: {
       buildConditions: buildPrecisionConditions,
+      flags: Object.freeze({ practice: true, preference: false, pausable: true }),
+      usesMatrixOption: false,
+    },
+    hybrid: {
+      buildConditions: buildHybridConditions,
       flags: Object.freeze({ practice: true, preference: false, pausable: true }),
       usesMatrixOption: false,
     },
@@ -683,6 +716,7 @@
     OPTION_ORDERS,
     EXPERIMENTS,
     LEARNING_CURVE_MODES,
+    HYBRID_MODES,
     DATA_CATEGORIES,
     DEFAULT_DATA_CATEGORY,
     participantOption,
