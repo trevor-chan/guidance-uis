@@ -3,6 +3,7 @@
 
 Usage:
     python3 analysis/make_plots.py <folder>
+    python3 analysis/make_plots.py <folder> --participant P3
 
 <folder> is scanned recursively for files named experiment.sqlite (e.g. point
 it at a data-category bin such as .../visualexperiment/real or .../practice).
@@ -10,10 +11,15 @@ Every trial is pooled across every file found, grouped by each session's
 experiment_condition. Axis values (magnitudes, thresholds, latencies, trial
 counts) are always read from the data itself, never hardcoded, so changes to
 the study configuration do not silently break these plots.
+
+--participant <ID> restricts the pool to sessions whose participant_id
+matches <ID> (case-insensitive, exact match). Plot filenames get a
+_<ID> suffix so they don't overwrite the pooled plots.
 """
 
 from __future__ import annotations
 
+import argparse
 import random
 import sqlite3
 import sys
@@ -256,8 +262,11 @@ def load_data(paths: list[Path]) -> tuple[list[dict], list[dict]]:
 # -- Summary -------------------------------------------------------------
 
 
-def print_summary(trials: list[dict]) -> None:
-    print("\nSummary by experiment_condition:")
+def print_summary(trials: list[dict], participant: str | None = None) -> None:
+    if participant:
+        print(f"\nSummary by experiment_condition (filtered to participant {participant}):")
+    else:
+        print("\nSummary by experiment_condition:")
     for experiment in EXPERIMENTS:
         rows = [t for t in trials if t["experiment_condition"] == experiment]
         if not rows:
@@ -279,8 +288,11 @@ def style_axes(ax) -> None:
     ax.grid(axis="y", zorder=0)
 
 
-def save(fig, name: str) -> None:
+def save(fig, name: str, suffix: str = "") -> None:
     PLOTS_DIR.mkdir(parents=True, exist_ok=True)
+    if suffix:
+        stem, ext = name.rsplit(".", 1)
+        name = f"{stem}_{suffix}.{ext}"
     out_path = PLOTS_DIR / name
     fig.tight_layout()
     fig.savefig(out_path)
@@ -487,7 +499,7 @@ def point_range_by_group(
 # -- Individual plots --------------------------------------------------
 
 
-def plot_modality_time(trials: list[dict]) -> None:
+def plot_modality_time(trials: list[dict], suffix: str = "") -> None:
     rows = [t for t in trials if t["experiment_condition"] == "modality" and t["elapsed_s"] is not None]
     if not rows:
         print("  modality_time: no data, skipping")
@@ -503,10 +515,10 @@ def plot_modality_time(trials: list[dict]) -> None:
     ax.set_ylabel("Time to match (s)")
     ax.set_title("Modality: time to match by modality")
     style_axes(ax)
-    save(fig, "modality_time.png")
+    save(fig, "modality_time.png", suffix)
 
 
-def plot_modality_preference(preferences: list[dict]) -> None:
+def plot_modality_preference(preferences: list[dict], suffix: str = "") -> None:
     if not preferences:
         print("  modality_preference: no data, skipping")
         return
@@ -523,10 +535,10 @@ def plot_modality_preference(preferences: list[dict]) -> None:
     ax.set_ylabel("Preference rating (1-5)")
     ax.set_title("Modality: preference rating by modality (mean ± 95% CI)")
     style_axes(ax)
-    save(fig, "modality_preference.png")
+    save(fig, "modality_preference.png", suffix)
 
 
-def plot_modality_success(trials: list[dict]) -> None:
+def plot_modality_success(trials: list[dict], suffix: str = "") -> None:
     rows = [t for t in trials if t["experiment_condition"] == "modality" and t["achieved"] is not None]
     if not rows:
         print("  modality_success: no data, skipping")
@@ -551,10 +563,10 @@ def plot_modality_success(trials: list[dict]) -> None:
     ax.set_ylabel("Success rate")
     ax.set_title("Modality: success rate by modality (mean ± 95% CI)")
     style_axes(ax)
-    save(fig, "modality_success.png")
+    save(fig, "modality_success.png", suffix)
 
 
-def plot_learning_curve_time(trials: list[dict]) -> None:
+def plot_learning_curve_time(trials: list[dict], suffix: str = "") -> None:
     rows = [
         t
         for t in trials
@@ -585,10 +597,10 @@ def plot_learning_curve_time(trials: list[dict]) -> None:
     ax.set_ylabel("Time to match (s)")
     ax.set_title("Learning curve: time per trial (mean ± 95% CI)")
     style_axes(ax)
-    save(fig, "learning_curve_time.png")
+    save(fig, "learning_curve_time.png", suffix)
 
 
-def plot_noise_time(trials: list[dict]) -> None:
+def plot_noise_time(trials: list[dict], suffix: str = "") -> None:
     rows = [
         t
         for t in trials
@@ -620,10 +632,10 @@ def plot_noise_time(trials: list[dict]) -> None:
     ax.set_ylabel("Time to match (s)")
     ax.set_title("Noise: completion time by magnitude (mean ± 95% CI)")
     style_axes(ax)
-    save(fig, "noise_time.png")
+    save(fig, "noise_time.png", suffix)
 
 
-def plot_latency_time(trials: list[dict]) -> None:
+def plot_latency_time(trials: list[dict], suffix: str = "") -> None:
     rows = [
         t
         for t in trials
@@ -655,7 +667,7 @@ def plot_latency_time(trials: list[dict]) -> None:
     ax.set_ylabel("Time to match (s)")
     ax.set_title("Latency: completion time by perceived latency (mean ± 95% CI)")
     style_axes(ax)
-    save(fig, "latency_time.png")
+    save(fig, "latency_time.png", suffix)
 
 
 def precision_key(row: dict):
@@ -673,7 +685,7 @@ def precision_label(key: tuple[float, float]) -> str:
     return f"{mm:g}mm/{deg:g}deg"
 
 
-def plot_precision_time(trials: list[dict]) -> None:
+def plot_precision_time(trials: list[dict], suffix: str = "") -> None:
     rows = [
         t
         for t in trials
@@ -705,15 +717,25 @@ def plot_precision_time(trials: list[dict]) -> None:
     ax.set_ylabel("Time to match (s)")
     ax.set_title("Precision: completion time by threshold (mean ± 95% CI)")
     style_axes(ax)
-    save(fig, "precision_time.png")
+    save(fig, "precision_time.png", suffix)
+
+
+def parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(
+        description="Pool experiment.sqlite files under a folder and render summary plots."
+    )
+    parser.add_argument("folder", help="Folder to scan recursively for experiment.sqlite files")
+    parser.add_argument(
+        "--participant",
+        help="Only include sessions whose participant_id matches this value (case-insensitive)",
+    )
+    return parser.parse_args()
 
 
 def main() -> None:
-    if len(sys.argv) != 2:
-        print(f"Usage: python3 {sys.argv[0]} <folder>")
-        sys.exit(1)
+    args = parse_args()
 
-    folder = Path(sys.argv[1]).expanduser()
+    folder = Path(args.folder).expanduser()
     if not folder.is_dir():
         print(f"Not a directory: {folder}")
         sys.exit(1)
@@ -725,16 +747,32 @@ def main() -> None:
         return
 
     trials, preferences = load_data(paths)
-    print_summary(trials)
+
+    suffix = ""
+    if args.participant:
+        available = sorted({t["participant_id"] for t in trials if t["participant_id"]})
+        matches = {p.lower() for p in available if p.lower() == args.participant.lower()}
+        if not matches:
+            print(f"\nNo sessions found for participant '{args.participant}'.")
+            if available:
+                print(f"Available participant IDs: {', '.join(available)}")
+            else:
+                print("No participant IDs found in this folder.")
+            return
+        trials = [t for t in trials if t["participant_id"] and t["participant_id"].lower() in matches]
+        preferences = [p for p in preferences if p["participant_id"] and p["participant_id"].lower() in matches]
+        suffix = args.participant
+
+    print_summary(trials, participant=args.participant)
 
     print("\nPlots:")
-    plot_modality_time(trials)
-    plot_modality_preference(preferences)
-    plot_modality_success(trials)
-    plot_learning_curve_time(trials)
-    plot_noise_time(trials)
-    plot_latency_time(trials)
-    plot_precision_time(trials)
+    plot_modality_time(trials, suffix)
+    plot_modality_preference(preferences, suffix)
+    plot_modality_success(trials, suffix)
+    plot_learning_curve_time(trials, suffix)
+    plot_noise_time(trials, suffix)
+    plot_latency_time(trials, suffix)
+    plot_precision_time(trials, suffix)
 
 
 if __name__ == "__main__":
