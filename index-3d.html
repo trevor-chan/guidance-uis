@@ -802,12 +802,13 @@
       patientSilhouettePage.visible = true;
     }
 
-    // Hybrid calibration axis: purely visual, does not touch the camera. Computes
-    // the calibrated view direction and draws it as a line from the pinned probe
-    // origin (0,0,0), with a marker at the distance the camera would eventually
-    // sit if hybrid's camera were ever made calibrated. Recomputed on each fresh
-    // calibration; the camera itself stays the hardcoded fixed view (see animate()'s
-    // 'hybrid' branch) and is never touched here.
+    // Hybrid calibration axis: computes the calibrated view direction and draws
+    // it as a line from the pinned probe origin (0,0,0), with a marker at
+    // HYBRID_AXIS_MARKER_DIST — the same point the camera is placed at (see the
+    // justCalibrated/'hybrid' block in the message handler, which uses this
+    // function's returned axisRender directly rather than rederiving it).
+    // Recomputed on each fresh calibration. Returns the render-space axis unit
+    // vector, or undefined if the required pose data isn't present yet.
     function updateHybridCalibrationAxis(data) {
       if (!data.box_origin || !data.calibration_origin || !data.reference_pose) return;
       const boxMat   = matrixFromRows(data.box_origin);
@@ -846,16 +847,7 @@
       hybridAxisMarker.position.copy(axisRender.clone().multiplyScalar(HYBRID_AXIS_MARKER_DIST));
       hybridAxisMarker.visible = true;
 
-      // TEMP DIAGNOSTIC ---------------------------------------------------
-      const _ndc = hybridAxisMarker.position.clone().project(activeCamera);
-      console.log('[hybrid-axis-diag] marker.position (world):', hybridAxisMarker.position.toArray());
-      console.log('[hybrid-axis-diag] marker NDC (project via activeCamera):', _ndc.toArray());
-      console.log('[hybrid-axis-diag] marker in frustum (|x|,|y|,|z| <= 1):',
-        Math.abs(_ndc.x) <= 1 && Math.abs(_ndc.y) <= 1 && Math.abs(_ndc.z) <= 1);
-      console.log('[hybrid-axis-diag] marker.visible:', hybridAxisMarker.visible);
-      console.log('[hybrid-axis-diag] marker.parent:', hybridAxisMarker.parent && hybridAxisMarker.parent.type,
-        '(in scene graph:', hybridAxisMarker.parent === scene, ')');
-      // ---------------------------------------------------------------------
+      return axisRender;
     }
 
     function connect() {
@@ -885,6 +877,7 @@
         if (data.reference_frame && data.reference_frame !== referenceFrame) {
           referenceFrame = data.reference_frame;
           frameNeedsInit = true;
+          hybridCameraCalibrated = false; // fresh frame: fall back to the default camera
           document.getElementById("set-viewpoint").style.display =
             (referenceFrame === 'user' || referenceFrame === 'patient') ? '' : 'none';
         }
@@ -907,15 +900,35 @@
           frameNeedsInit = false;
         }
         if (justCalibrated && referenceFrame === 'hybrid') {
-          // Purely visual — does not set frameNeedsInit or touch the camera;
-          // hybrid's fixed camera is placed unconditionally in animate().
-          updateHybridCalibrationAxis(data);
+          // Camera set ONCE here, at calibration, from the SAME axisRender vector
+          // the axis marker uses (returned by updateHybridCalibrationAxis, not
+          // rederived) — never touched again. animate()'s hybrid branch only ever
+          // applies its hardcoded default camera pre-calibration; hybridCameraCalibrated
+          // gates that off once this fires. Same fixed-camera pattern as transducer's
+          // frameNeedsInit block: position/up/lookAt set on both activeCamera and
+          // the inactive perspective/ortho camera, controls disabled, sway anchored.
+          const axisRender = updateHybridCalibrationAxis(data);
+          if (axisRender) {
+            const eye = axisRender.clone().multiplyScalar(HYBRID_AXIS_MARKER_DIST);
+            controls.enabled = false;
+            activeCamera.position.copy(eye);
+            activeCamera.up.set(0, 0, 1);
+            activeCamera.lookAt(0, 0, 0);
+            const otherCam = isPerspective ? orthoCamera : camera;
+            otherCam.position.copy(eye);
+            otherCam.up.set(0, 0, 1);
+            otherCam.lookAt(0, 0, 0);
+            _swayBase.copy(eye);
+            hybridCameraCalibrated = true;
+            frameNeedsInit = false;
+          }
         }
         if (justReset) {
           frameNeedsInit = true; // re-lock next calibration
           if (referenceFrame === 'hybrid') {
             hybridAxisLine.visible = false;
             hybridAxisMarker.visible = false;
+            hybridCameraCalibrated = false; // fall back to the default camera until recalibrated
           }
         }
 
@@ -1147,6 +1160,7 @@
     // user / patient: camera locked at calibration pose world position.
     let referenceFrame = null;
     let frameNeedsInit = true;   // cleared after first camera placement
+    let hybridCameraCalibrated = false; // gates animate()'s hybrid default camera off once calibration has placed it
     let prevCalibrated = false;  // edge-detect comp_calibrated transitions
     let rawViewpointRows = null;      // rows of last captured viewpoint_pose (null until set_viewpoint)
     let prevViewpointPoseJson = null; // JSON string for change detection
@@ -1301,7 +1315,10 @@
         // Ghost alignment at true match: T(-t)×DFM×(ref⁻¹×target)=T(-t)×M=[R|0]=liveGroup ✓
         // Cached-pose pattern mirrors transducer to avoid stale-frame flicker.
         controls.enabled = false;
-        if (frameNeedsInit) {
+        // Pre-calibration default only — once hybridCameraCalibrated is set (by the
+        // justCalibrated/'hybrid' block in the message handler), this never fires
+        // again; the calibrated camera set there is never overwritten here.
+        if (frameNeedsInit && !hybridCameraCalibrated) {
           activeCamera.position.set(-0.40, 0, 0.10);
           activeCamera.up.set(0, 0, 1);
           activeCamera.lookAt(0, 0, 0);
