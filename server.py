@@ -651,7 +651,7 @@ async def _new_study_handler(
                         }
                     if BOX_ORIGIN is not None:
                         state["box_origin"] = BOX_ORIGIN.tolist()
-                    if frame in ("user", "hybrid") and block.origin is not None:
+                    if frame == "user" and block.origin is not None:
                         state["calibration_origin"] = block.origin.tolist()
 
                 await websocket.send(json.dumps(state))

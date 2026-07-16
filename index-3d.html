@@ -470,9 +470,7 @@
     // Constant inverse (pure rotation, zero translation — DISPLAY_FRAME_MATRIX has no
     // position component). Hybrid's txWorldGroup only cancels translation each frame,
     // leaving DISPLAY_FRAME_MATRIX's rotation baked into the world/silhouette; this
-    // premultiplies it away without depending on the live probe pose. Also used to
-    // rotate the calibrated camera (computed in display space) into hybrid's raw
-    // rendering space — see initHybridCamera.
+    // premultiplies it away without depending on the live probe pose.
     const DISPLAY_FRAME_MATRIX_INV = DISPLAY_FRAME_MATRIX.clone().invert();
 
     const cubeGeometry = new THREE.BoxGeometry(0.5, 0.5, 0.5);
@@ -709,7 +707,7 @@
       if (act === "calibration") {
         document.getElementById("s3-cal").style.display = "block";
         document.getElementById("calib-img-3d").style.display =
-          (_studyFrame3 === "user" || _studyFrame3 === "hybrid") ? "block" : "none";
+          (_studyFrame3 === "user") ? "block" : "none";
       } else if (act === "practice") {
         document.getElementById("s3-practice").style.display = "block";
       } else if (act === "trial") {
@@ -757,10 +755,7 @@
         patientSilhouettePage.visible = false;
         return;
       }
-      // Hybrid anchors box/silhouette to box_origin itself (not calibration) so they
-      // stay translation-locked and head-forward regardless of where calibration was
-      // captured — calibration only ever relocates the camera for this frame.
-      const refMat = matrixFromRows(referenceFrame === 'hybrid' ? data.box_origin : data.reference_pose);
+      const refMat = matrixFromRows(data.reference_pose);
       const boxMat = matrixFromRows(data.box_origin);
       if (!refMat || !boxMat) {
         boxWireframeGroup.visible = false;
@@ -839,14 +834,6 @@
           }
           frameNeedsInit = false;
         }
-        // Hybrid: kept entirely separate from the user/patient branch above — hybrid's
-        // world renders in raw space (see animate()'s hybrid branch) and needs its own
-        // camera placement math (initHybridCamera), not the viewpoint-capture flow.
-        // Hybrid only ever runs in study mode.
-        if (justCalibrated && referenceFrame === 'hybrid' && data.mode === 'study') {
-          initHybridCamera(data);
-          frameNeedsInit = false;
-        }
         if (justReset) {
           frameNeedsInit = true; // re-lock next calibration
         }
@@ -875,14 +862,9 @@
           trackerHelp.style.display = isTracker ? "block" : "none";
         }
 
-        // Hybrid renders live/ghost relative to box_origin (not calibration) — same
-        // anchor as updateBoxWireframe — so probe, ghost, and box/silhouette all agree.
-        // Calibration only ever places the camera for this frame (see initHybridCamera).
-        const liveRefRows = referenceFrame === 'hybrid' ? data.box_origin : data.reference_pose;
-
         {
           const livePose = matrixFromRows(data.live_pose);
-          const refPose  = matrixFromRows(liveRefRows);
+          const refPose  = matrixFromRows(data.reference_pose);
           if (livePose && refPose) {
             _liveRelMatrix.copy(refPose).invert().multiply(livePose);
             liveGroup.matrix.copy(DISPLAY_FRAME_MATRIX).multiply(_liveRelMatrix);
@@ -895,7 +877,7 @@
         }
 
         if (data.comp_calibrated && data.target_pose) {
-          setRelativePose(ghostGroup, data.target_pose, liveRefRows);
+          setRelativePose(ghostGroup, data.target_pose, data.reference_pose);
           ghostGroup.visible = Boolean(ghostGroup.children.length);
         } else {
           ghostGroup.visible = false;
@@ -1177,103 +1159,6 @@
       controls.update();
     }
 
-    // Place hybrid's camera once, at calibration — never touched again (same static-
-    // camera pattern as the transducer frame in animate(), see below). The probe
-    // (liveGroup) always renders pinned at scene origin (box-anchored translation
-    // lock in animate()'s hybrid branch), so the camera looks at (0,0,0) and sits
-    // HYBRID_CAM_DIST behind it along the calibrated forward direction.
-    //
-    // calibRel's columns are box-space vectors (box_origin's own rotation divided
-    // out), NOT render-space vectors — everything hybrid actually renders
-    // (txWorldGroup, liveGroup) has DISPLAY_FRAME_MATRIX_INV applied on top of
-    // box space (see animate()'s hybrid branch), so the camera direction must get
-    // the same DISPLAY_FRAME_MATRIX_INV rotation or it ends up aimed in the wrong
-    // space relative to what's on screen.
-    const HYBRID_CAM_DIST = 0.40;
-    // TEMP DIAGNOSTIC: dump raw column vectors of a THREE.Matrix4 for console logging.
-    function _colsOf(m) {
-      return {
-        col0_X: new THREE.Vector3().setFromMatrixColumn(m, 0).toArray(),
-        col1_Y: new THREE.Vector3().setFromMatrixColumn(m, 1).toArray(),
-        col2_Z: new THREE.Vector3().setFromMatrixColumn(m, 2).toArray(),
-        pos:    new THREE.Vector3().setFromMatrixPosition(m).toArray(),
-      };
-    }
-    function initHybridCamera(data) {
-      if (!data.box_origin || !data.calibration_origin) return;
-      const boxOriginPose = matrixFromRows(data.box_origin);
-      const calibMat = matrixFromRows(data.calibration_origin);
-      if (!boxOriginPose || !calibMat) return;
-
-      // TEMP DIAGNOSTIC ---------------------------------------------------
-      console.log('[hybrid-cam-diag] 1. calibration_origin raw rows:', data.calibration_origin);
-      console.log('[hybrid-cam-diag] 1. calibration_origin rotation columns:', _colsOf(calibMat));
-      console.log('[hybrid-cam-diag] 2. box_origin raw rows:', data.box_origin);
-      console.log('[hybrid-cam-diag] 2. box_origin rotation columns:', _colsOf(boxOriginPose));
-      // ---------------------------------------------------------------------
-
-      const calibRel = boxOriginPose.clone().invert().multiply(calibMat);
-
-      // TEMP DIAGNOSTIC ---------------------------------------------------
-      console.log('[hybrid-cam-diag] 3. calibRel (box_origin^-1 * calibration_origin) columns:', _colsOf(calibRel));
-      // ---------------------------------------------------------------------
-
-      // STEP 1: remembered view direction, in the space things render in.
-      // col0 of a tip-frame pose is the transducer's own local X — per core.py's
-      // box-basis convention (bZ = −col0, "away from tip") that axis already
-      // points AWAY from the patient, back toward the probe body/cable/operator,
-      // so the eye sits along +col0 (not −col0). col0 of calibRel is that
-      // direction expressed in box space; rotate it by RAW to land in the space
-      // txWorldGroup/liveGroup actually render in.
-      const viewDirBox = new THREE.Vector3().setFromMatrixColumn(calibRel, 0).normalize();
-      const viewDirRender = viewDirBox.clone().transformDirection(DISPLAY_FRAME_MATRIX_INV).normalize();
-
-      // STEP 2: camera placement — the probe (liveGroup) renders pinned at the origin.
-      const origin = new THREE.Vector3(0, 0, 0);
-      const eye = viewDirRender.clone().multiplyScalar(HYBRID_CAM_DIST);
-
-      // Box "up" in box space is NOT (0,0,1): core.py's convention is
-      // bY = −box_origin[:3,2] (elevation = −local Z), so relative to box_origin's
-      // own frame (the frame calibRel's columns live in, box_origin's rotation
-      // divided out) the up direction is local (0,0,−1). Rotate that into render
-      // space with the same RAW used for the view direction, not world (0,0,1).
-      const upBox = new THREE.Vector3(0, 0, -1);
-      const up = upBox.clone().transformDirection(DISPLAY_FRAME_MATRIX_INV).normalize();
-
-      // TEMP DIAGNOSTIC ---------------------------------------------------
-      console.log('[hybrid-cam-diag] 4. view_dir_box (col0 of calibRel, normalized):', viewDirBox.toArray());
-      console.log('[hybrid-cam-diag] 4. view_dir_render (view_dir_box after RAW/DISPLAY_FRAME_MATRIX_INV):', viewDirRender.toArray());
-      console.log('[hybrid-cam-diag] 4. eye (view_dir_render * HYBRID_CAM_DIST=' + HYBRID_CAM_DIST + '):', eye.toArray());
-      console.log('[hybrid-cam-diag] 4. up_box (hardcoded 0,0,-1):', upBox.toArray());
-      console.log('[hybrid-cam-diag] 4. up (up_box after RAW/DISPLAY_FRAME_MATRIX_INV):', up.toArray());
-
-      if (data.live_pose) {
-        const firstLivePose = matrixFromRows(data.live_pose);
-        console.log('[hybrid-cam-diag] 5. FIRST live_pose after calibration, raw rows:', data.live_pose);
-        console.log('[hybrid-cam-diag] 5. FIRST live_pose after calibration, rotation columns:', _colsOf(firstLivePose));
-      } else {
-        console.log('[hybrid-cam-diag] 5. FIRST live_pose after calibration: data.live_pose not present on this message');
-      }
-
-      // For reference: the KNOWN-GOOD transducer-frame fixed camera uses these
-      // hardcoded values directly (see animate()'s 'transducer' branch, frameNeedsInit block).
-      console.log('[hybrid-cam-diag] REF. known-good transducer-frame eye (hardcoded):', [-0.40, 0, 0.10]);
-      console.log('[hybrid-cam-diag] REF. known-good transducer-frame up (hardcoded):', [0, 0, 1]);
-      // ---------------------------------------------------------------------
-
-      // STEP 3: set once, never again — no OrbitControls, no per-frame updates
-      // (animate()'s hybrid branch only touches txWorldGroup/liveGroup matrices).
-      controls.enabled = false;
-      activeCamera.position.copy(eye);
-      activeCamera.up.copy(up);
-      activeCamera.lookAt(origin);
-      const otherCam = isPerspective ? orthoCamera : camera;
-      otherCam.position.copy(eye);
-      otherCam.up.copy(up);
-      otherCam.lookAt(origin);
-      _swayBase.copy(eye);
-    }
-
     // ±0.5 deg azimuth, 5 s period — barely-perceptible breathing motion
     const SWAY_H_AMP = 0.5 * (Math.PI / 180);
     const SWAY_PERIOD = 5.0;
@@ -1321,13 +1206,8 @@
         }
       } else if (referenceFrame === 'hybrid') {
         // Hybrid: translation-only inverse on world; probe renders at origin with live rotation.
-        // Camera is placed ONCE at calibration by initHybridCamera (called from the
-        // message handler on justCalibrated) and never touched here — no OrbitControls,
-        // no sway, matching transducer's static-camera pattern.
         //
-        // _lastLiveMatrix = DISPLAY_FRAME_MATRIX × (box_origin⁻¹ × livePose) = [R | t]
-        // (liveRefRows in the message handler resolves to box_origin for hybrid, not
-        // calibration — calibration only ever places the camera, see initHybridCamera.)
+        // _lastLiveMatrix = DISPLAY_FRAME_MATRIX × (refPose⁻¹ × livePose) = [R | t]
         // txWorldGroup gets makeTranslation(-tx,-ty,-tz): cancels probe position so it
         // stays centred, but rotation is NOT inverted — both probe and world share the
         // same fixed-orientation reference frame and the probe visibly rotates on screen.
@@ -1340,6 +1220,18 @@
         // Ghost alignment at true match: T(-t)×DFM×(ref⁻¹×target)=T(-t)×M=[R|0]=liveGroup ✓
         // Cached-pose pattern mirrors transducer to avoid stale-frame flicker.
         controls.enabled = false;
+        if (frameNeedsInit) {
+          activeCamera.position.set(-0.40, 0, 0.10);
+          activeCamera.up.set(0, 0, 1);
+          activeCamera.lookAt(0, 0, 0);
+          const otherCam = isPerspective ? orthoCamera : camera;
+          otherCam.position.set(-0.40, 0, 0.10);
+          otherCam.up.set(0, 0, 1);
+          otherCam.lookAt(0, 0, 0);
+          _swayBase.set(-0.40, 0, 0.10);
+          controls.target.set(0, 0, 0);
+          frameNeedsInit = false;
+        }
         if (liveGroup.visible) {
           // In Three.js column-major Matrix4, elements[12..14] hold the translation.
           const tx = _lastLiveMatrix.elements[12];
