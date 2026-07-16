@@ -1181,17 +1181,15 @@
     // camera pattern as the transducer frame in animate(), see below). The probe
     // (liveGroup) always renders pinned at scene origin (box-anchored translation
     // lock in animate()'s hybrid branch), so the camera looks at (0,0,0) and sits
-    // HYBRID_CAM_DIST behind it along the calibrated forward direction — the only
-    // difference from the old hardcoded (-0.25,0,0.10) fixed camera is that this
-    // direction is read from calibration instead of being a fixed axis.
+    // HYBRID_CAM_DIST behind it along the calibrated forward direction.
     //
-    // calibFwd is extracted the same way liveGroup's rotation ends up rendered:
-    // DISPLAY_FRAME_MATRIX and its inverse cancel exactly (both pure rotations, no
-    // translation), so the rendered/world direction is simply the rotation part of
-    // box_origin⁻¹ × calibration_origin — box_origin, not calibration, is the shared
-    // anchor for everything hybrid renders (see updateBoxWireframe / liveRefRows).
+    // calibRel's columns are box-space vectors (box_origin's own rotation divided
+    // out), NOT render-space vectors — everything hybrid actually renders
+    // (txWorldGroup, liveGroup) has DISPLAY_FRAME_MATRIX_INV applied on top of
+    // box space (see animate()'s hybrid branch), so the camera direction must get
+    // the same DISPLAY_FRAME_MATRIX_INV rotation or it ends up aimed in the wrong
+    // space relative to what's on screen.
     const HYBRID_CAM_DIST = 0.40;
-    const HYBRID_CAM_HEIGHT = 0.10;
     function initHybridCamera(data) {
       if (!data.box_origin || !data.calibration_origin) return;
       const boxOriginPose = matrixFromRows(data.box_origin);
@@ -1199,23 +1197,38 @@
       if (!boxOriginPose || !calibMat) return;
 
       const calibRel = boxOriginPose.clone().invert().multiply(calibMat);
-      // col0 of a tip-frame pose is the transducer's own local X — per core.py's
-      // box-basis convention (bZ = −X_t, "away from tip") that axis already points
-      // AWAY from the patient, back toward the probe body/cable/operator, so the
-      // eye must sit along +col0 (not −col0) to land above/behind the probe.
-      const calibBack = new THREE.Vector3().setFromMatrixColumn(calibRel, 0).normalize();
-      const worldUp = new THREE.Vector3(0, 0, 1);
-      const origin = new THREE.Vector3(0, 0, 0);
-      const eye = origin.clone()
-        .addScaledVector(calibBack, HYBRID_CAM_DIST)
-        .addScaledVector(worldUp, HYBRID_CAM_HEIGHT);
 
+      // STEP 1: remembered view direction, in the space things render in.
+      // col0 of a tip-frame pose is the transducer's own local X — per core.py's
+      // box-basis convention (bZ = −col0, "away from tip") that axis already
+      // points AWAY from the patient, back toward the probe body/cable/operator,
+      // so the eye sits along +col0 (not −col0). col0 of calibRel is that
+      // direction expressed in box space; rotate it by RAW to land in the space
+      // txWorldGroup/liveGroup actually render in.
+      const viewDirBox = new THREE.Vector3().setFromMatrixColumn(calibRel, 0).normalize();
+      const viewDirRender = viewDirBox.clone().transformDirection(DISPLAY_FRAME_MATRIX_INV).normalize();
+
+      // STEP 2: camera placement — the probe (liveGroup) renders pinned at the origin.
+      const origin = new THREE.Vector3(0, 0, 0);
+      const eye = viewDirRender.clone().multiplyScalar(HYBRID_CAM_DIST);
+
+      // Box "up" in box space is NOT (0,0,1): core.py's convention is
+      // bY = −box_origin[:3,2] (elevation = −local Z), so relative to box_origin's
+      // own frame (the frame calibRel's columns live in, box_origin's rotation
+      // divided out) the up direction is local (0,0,−1). Rotate that into render
+      // space with the same RAW used for the view direction, not world (0,0,1).
+      const upBox = new THREE.Vector3(0, 0, -1);
+      const up = upBox.clone().transformDirection(DISPLAY_FRAME_MATRIX_INV).normalize();
+
+      // STEP 3: set once, never again — no OrbitControls, no per-frame updates
+      // (animate()'s hybrid branch only touches txWorldGroup/liveGroup matrices).
+      controls.enabled = false;
       activeCamera.position.copy(eye);
-      activeCamera.up.copy(worldUp);
+      activeCamera.up.copy(up);
       activeCamera.lookAt(origin);
       const otherCam = isPerspective ? orthoCamera : camera;
       otherCam.position.copy(eye);
-      otherCam.up.copy(worldUp);
+      otherCam.up.copy(up);
       otherCam.lookAt(origin);
       _swayBase.copy(eye);
     }
