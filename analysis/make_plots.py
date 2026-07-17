@@ -487,8 +487,21 @@ def mean_ci95(
     bounds, if given, clips (lower, upper) to [bounds[0], bounds[1]]. The
     t-based interval is a theoretical range and can extend past values that
     are physically impossible for the quantity being measured (e.g. negative
-    time, a rating below 1) — this clips that away without touching the mean,
-    which by construction already lies within bounds for real data.
+    time, a rating below 1) — this clips that away without touching the mean.
+
+    The mean itself is NOT guaranteed to lie within bounds: bounds describe
+    the idealized valid range, but individual recorded values can land just
+    past it (e.g. a trial's timeout check is elapsed >= 90.0 against an
+    unclamped elapsed = time.perf_counter() - start_time, so a timed-out
+    trial's elapsed_s is routinely a hair over 90, not exactly 90 — see
+    trial.py Trial.step). If every value in a category is such a near-miss
+    timeout, the raw mean can itself exceed bounds[1]. Clipping lo/hi to
+    bounds alone would then put the clipped bound on the wrong side of the
+    mean (e.g. hi < m), producing a negative errorbar distance downstream.
+    So lo/hi are also clamped against the mean after the bounds clip,
+    guaranteeing lo <= m <= hi always: the CI degenerates to a point on
+    whichever side has no room left within the valid range, which is the
+    correct behavior rather than a crash.
     """
     n = len(values)
     m = mean(values)
@@ -499,8 +512,8 @@ def mean_ci95(
         half = t_critical_975(n - 1) * se
         lo, hi = m - half, m + half
     if bounds is not None:
-        lo = max(lo, bounds[0])
-        hi = min(hi, bounds[1])
+        lo = min(max(lo, bounds[0]), m)
+        hi = max(min(hi, bounds[1]), m)
     return m, lo, hi
 
 
@@ -513,15 +526,21 @@ def wilson_ci95(successes: float, n: int) -> tuple[float, float, float]:
     valid inputs) — but at phat=0 or phat=1, center and half are each derived
     from the same z**2/(2n) term via a different arithmetic path (one through
     sqrt), so floating-point rounding can make their difference land a hair
-    outside [0, 1] (e.g. -2.8e-17 for n=7, k=0 — confirmed empirically).
-    Clipped defensively; the true bound is exact 0 or 1 in those cases."""
+    outside [0, 1] (e.g. -2.8e-17 for n=7, k=0 — confirmed empirically) or, at
+    phat=1 exactly (a 100% success rate, a routine real result for an easy
+    condition), can round DOWN to 0.9999999999999999 — below phat itself
+    (confirmed empirically: n=4, k=4). Both are clipped, and lo/hi are then
+    also clamped against phat so lo <= phat <= hi always holds even after
+    clipping — the same reasoning as mean_ci95's bounds clamp, and for the
+    same reason: callers subtract (phat - lo) and (hi - phat) to build
+    matplotlib errorbar distances, which raise on a negative result."""
     z = _Z_975
     phat = successes / n
     denom = 1 + z**2 / n
     center = (phat + z**2 / (2 * n)) / denom
     half = (z * sqrt(phat * (1 - phat) / n + z**2 / (4 * n**2))) / denom
-    lo = max(0.0, center - half)
-    hi = min(1.0, center + half)
+    lo = min(max(0.0, center - half), phat)
+    hi = max(min(1.0, center + half), phat)
     return phat, lo, hi
 
 
