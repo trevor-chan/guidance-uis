@@ -165,6 +165,14 @@ EXPERIMENTS = ["modality", "noise", "latency", "learning_curve", "precision"]
 # rather than importing study code, so a mirrored constant fits that pattern.
 HOLD_S = 1.0
 
+# Valid ranges for CI clipping (see mean_ci95's bounds param): a t-based CI is
+# a theoretical range and can extend past values the underlying quantity can
+# never actually take. Trial timeout mirrors the 90s cap in index*.html's
+# study UI; preference ratings are the fixed 1-5 scale (see
+# experiment-session.js rating buttons).
+TIME_BOUNDS = (0.0, 90.0)
+PREFERENCE_BOUNDS = (1.0, 5.0)
+
 # Deterministic horizontal jitter for dot clouds: a fixed seed keeps repeated
 # runs over the same data visually stable instead of reshuffling each time.
 _JITTER_RNG = random.Random(20260709)
@@ -471,25 +479,50 @@ def t_critical_975(df: int) -> float:
     return z + (z**3 + z) / (4 * df) + (5 * z**5 + 16 * z**3 + 3 * z) / (96 * df**2)
 
 
-def mean_ci95(values: list[float]) -> tuple[float, float, float]:
-    """t-based 95% CI of the mean. Returns (mean, lower, upper); lower==upper==mean if n==1."""
+def mean_ci95(
+    values: list[float], bounds: tuple[float, float] | None = None
+) -> tuple[float, float, float]:
+    """t-based 95% CI of the mean. Returns (mean, lower, upper); lower==upper==mean if n==1.
+
+    bounds, if given, clips (lower, upper) to [bounds[0], bounds[1]]. The
+    t-based interval is a theoretical range and can extend past values that
+    are physically impossible for the quantity being measured (e.g. negative
+    time, a rating below 1) — this clips that away without touching the mean,
+    which by construction already lies within bounds for real data.
+    """
     n = len(values)
     m = mean(values)
     if n <= 1:
-        return m, m, m
-    se = stdev(values) / sqrt(n)
-    half = t_critical_975(n - 1) * se
-    return m, m - half, m + half
+        lo = hi = m
+    else:
+        se = stdev(values) / sqrt(n)
+        half = t_critical_975(n - 1) * se
+        lo, hi = m - half, m + half
+    if bounds is not None:
+        lo = max(lo, bounds[0])
+        hi = min(hi, bounds[1])
+    return m, lo, hi
 
 
 def wilson_ci95(successes: float, n: int) -> tuple[float, float, float]:
-    """Wilson score 95% CI for a binomial proportion. Returns (phat, lower, upper)."""
+    """Wilson score 95% CI for a binomial proportion. Returns (phat, lower, upper).
+
+    Unlike the t-based interval, Wilson's bounds are mathematically within
+    [0, 1] for any phat in [0, 1] in exact arithmetic (center is a convex
+    combination of phat and 0.5, and half <= center - 0 / 1 - center for all
+    valid inputs) — but at phat=0 or phat=1, center and half are each derived
+    from the same z**2/(2n) term via a different arithmetic path (one through
+    sqrt), so floating-point rounding can make their difference land a hair
+    outside [0, 1] (e.g. -2.8e-17 for n=7, k=0 — confirmed empirically).
+    Clipped defensively; the true bound is exact 0 or 1 in those cases."""
     z = _Z_975
     phat = successes / n
     denom = 1 + z**2 / n
     center = (phat + z**2 / (2 * n)) / denom
     half = (z * sqrt(phat * (1 - phat) / n + z**2 / (4 * n**2))) / denom
-    return phat, center - half, center + half
+    lo = max(0.0, center - half)
+    hi = min(1.0, center + half)
+    return phat, lo, hi
 
 
 # -- Summary-with-dots primitives -------------------------------------------
@@ -521,18 +554,22 @@ def point_range_by_category(
     los: list[float] | None = None,
     his: list[float] | None = None,
     dot_colors: dict[str, str] | None = None,
+    bounds: tuple[float, float] | None = None,
 ) -> None:
     """Single-series mean ± 95% CI point-range, one point per category (no
     connecting line — categories here are unordered groups, not a swept
     variable). If raw_values is given, an underlying jittered dot cloud is
-    drawn per category, in that category's (lighter) color."""
+    drawn per category, in that category's (lighter) color. bounds, when
+    raw_values is given, clips each category's CI to a physically valid range
+    (see mean_ci95); ignored when means/los/his are passed in precomputed
+    (e.g. Wilson CIs, already bounded)."""
     xs = list(range(1, len(categories) + 1))
     if raw_values is not None:
         for x, cat in zip(xs, categories):
             draw_dot_cloud(ax, x, raw_values[cat], (dot_colors or colors)[cat], width=0.13, zorder=1)
         means, los, his = [], [], []
         for cat in categories:
-            m, lo, hi = mean_ci95(raw_values[cat])
+            m, lo, hi = mean_ci95(raw_values[cat], bounds=bounds)
             means.append(m)
             los.append(lo)
             his.append(hi)
@@ -560,14 +597,16 @@ def bar_with_ci(
     los: list[float] | None = None,
     his: list[float] | None = None,
     dot_colors: dict[str, str] | None = None,
+    bounds: tuple[float, float] | None = None,
 ) -> None:
     """Bar to the mean, with an optional jittered dot cloud of raw values
-    layered on top of the bar, and the 95% CI drawn above both."""
+    layered on top of the bar, and the 95% CI drawn above both. bounds clips
+    each category's CI to a physically valid range (see mean_ci95)."""
     xs = list(range(1, len(categories) + 1))
     if raw_values is not None:
         means, los, his = [], [], []
         for cat in categories:
-            m, lo, hi = mean_ci95(raw_values[cat])
+            m, lo, hi = mean_ci95(raw_values[cat], bounds=bounds)
             means.append(m)
             los.append(lo)
             his.append(hi)
@@ -594,11 +633,16 @@ def point_range_by_group(
     series_colors: dict,
     series_labels: dict,
     dot_colors: dict | None = None,
+    bounds: tuple[float, float] | None = None,
+    show_ci: bool = True,
 ) -> None:
-    """Mean line with 95% CI point-range per group, plus a jittered raw-value
-    dot cloud per (group, series). All series share the same x position (no
-    dodge) — overlap is expected, color differentiates. A thin line threads
-    through each series' mean markers, drawn under the markers."""
+    """Mean line with (by default) a 95% CI point-range per group, plus a
+    jittered raw-value dot cloud per (group, series). All series share the
+    same x position (no dodge) — overlap is expected, color differentiates. A
+    thin line threads through each series' mean markers, drawn under the
+    markers. bounds clips each CI to a physically valid range (see
+    mean_ci95); ignored when show_ci=False. show_ci=False draws just the mean
+    markers (no whiskers) — same line/dot-cloud otherwise."""
     for s in series:
         color = series_colors[s]
         dot_color = (dot_colors or series_colors)[s]
@@ -609,21 +653,31 @@ def point_range_by_group(
                 continue
             x = i + 1
             draw_dot_cloud(ax, x, vals, dot_color, width=0.15, zorder=1)
-            m, lo, hi = mean_ci95(vals)
             xs.append(x)
+            if show_ci:
+                m, lo, hi = mean_ci95(vals, bounds=bounds)
+                lo_err.append(m - lo)
+                hi_err.append(hi - m)
+            else:
+                m = mean(vals)
             means.append(m)
-            lo_err.append(m - lo)
-            hi_err.append(hi - m)
         if not xs:
             continue
         ax.plot(xs, means, "-", color=color, linewidth=1.5, zorder=2)
-        ax.errorbar(
-            xs, means, yerr=[lo_err, hi_err],
-            fmt="o", color=color, ecolor=color,
-            elinewidth=1.3, capsize=4, capthick=1.3, markersize=6.5,
-            markeredgecolor="white", markeredgewidth=0.7,
-            label=series_labels[s], zorder=3,
-        )
+        if show_ci:
+            ax.errorbar(
+                xs, means, yerr=[lo_err, hi_err],
+                fmt="o", color=color, ecolor=color,
+                elinewidth=1.3, capsize=4, capthick=1.3, markersize=6.5,
+                markeredgecolor="white", markeredgewidth=0.7,
+                label=series_labels[s], zorder=3,
+            )
+        else:
+            ax.plot(
+                xs, means, "o", color=color, markersize=6.5,
+                markeredgecolor="white", markeredgewidth=0.7,
+                label=series_labels[s], zorder=3,
+            )
     apply_category_ticklabels(ax, list(range(1, len(groups) + 1)), group_labels)
     ax.legend(loc="best")
 
@@ -642,7 +696,7 @@ def plot_modality_time(trials: list[dict], suffix: str = "") -> None:
     fig, ax = plt.subplots()
     point_range_by_category(
         ax, modalities, MODALITY_COLORS, MODALITY_LABELS,
-        raw_values=raw_values, dot_colors=MODALITY_DOT_COLORS,
+        raw_values=raw_values, dot_colors=MODALITY_DOT_COLORS, bounds=TIME_BOUNDS,
     )
     ax.set_ylabel("Time to match (s)")
     ax.set_title("Modality: time to match by modality")
@@ -660,7 +714,7 @@ def plot_modality_preference(preferences: list[dict], suffix: str = "") -> None:
     fig, ax = plt.subplots()
     bar_with_ci(
         ax, modalities, MODALITY_COLORS, MODALITY_LABELS,
-        raw_values=raw_values, dot_colors=MODALITY_DOT_COLORS,
+        raw_values=raw_values, dot_colors=MODALITY_DOT_COLORS, bounds=PREFERENCE_BOUNDS,
     )
     ax.set_ylim(0.7, 5.3)
     ax.set_yticks([1, 2, 3, 4, 5])
@@ -724,10 +778,11 @@ def plot_learning_curve_time(trials: list[dict], suffix: str = "") -> None:
         series_colors=COMPARE_COLORS,
         series_labels=COMPARE_LABELS,
         dot_colors=COMPARE_DOT_COLORS,
+        show_ci=False,
     )
     ax.set_xlabel("Trial number")
     ax.set_ylabel("Time to match (s)")
-    ax.set_title("Learning curve: time per trial (mean ± 95% CI)")
+    ax.set_title("Learning curve: time per trial (mean)")
     style_axes(ax)
     save(fig, "learning_curve_time.png", suffix)
 
@@ -759,6 +814,7 @@ def plot_noise_time(trials: list[dict], suffix: str = "") -> None:
         series_colors=COMPARE_COLORS,
         series_labels=COMPARE_LABELS,
         dot_colors=COMPARE_DOT_COLORS,
+        bounds=TIME_BOUNDS,
     )
     ax.set_xlabel("Noise magnitude (mm / deg)")
     ax.set_ylabel("Time to match (s)")
@@ -794,6 +850,7 @@ def plot_latency_time(trials: list[dict], suffix: str = "") -> None:
         series_colors=COMPARE_COLORS,
         series_labels=COMPARE_LABELS,
         dot_colors=COMPARE_DOT_COLORS,
+        bounds=TIME_BOUNDS,
     )
     ax.set_xlabel("Perceived latency (ms)")
     ax.set_ylabel("Time to match (s)")
@@ -844,6 +901,7 @@ def plot_precision_time(trials: list[dict], suffix: str = "") -> None:
         series_colors=COMPARE_COLORS,
         series_labels=COMPARE_LABELS,
         dot_colors=COMPARE_DOT_COLORS,
+        bounds=TIME_BOUNDS,
     )
     ax.set_xlabel("Precision threshold (mm / deg)")
     ax.set_ylabel("Time to match (s)")
