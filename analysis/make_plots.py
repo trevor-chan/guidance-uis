@@ -970,7 +970,7 @@ def plot_modality_figure(trials: list[dict], preferences: list[dict], suffix: st
         )
     ax_pref.set_ylim(0, 5.25)  # 5% headroom above 5 so no CI cap gets clipped
     ax_pref.set_yticks([1, 2, 3, 4, 5])
-    ax_pref.set_ylabel("Preference (1-5)", fontsize=15)
+    ax_pref.set_ylabel("Preference (1 = worst, 5 = best)", fontsize=15)
     ax_pref.set_xticks(xs)
     ax_pref.set_xticklabels(tick_labels, rotation=90, fontsize=13)
     style_axes(ax_pref)
