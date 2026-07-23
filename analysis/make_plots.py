@@ -1076,7 +1076,7 @@ def plot_conditions_figure(trials: list[dict], suffix: str = "") -> None:
     series_markers = {"M3": "^", "M5": "s"}
     series_zorder = {"M3": 2, "M5": 3}
 
-    def draw_panel(ax, rows, magnitude_key, magnitude_values, show_legend=False, show_ylabel=False):
+    def draw_panel(ax, rows, magnitude_key, magnitude_values, show_legend=False):
         for s in COMPARE_MODES:
             color = FIGURE_COLORS[s]
             z = series_zorder[s]
@@ -1106,22 +1106,19 @@ def plot_conditions_figure(trials: list[dict], suffix: str = "") -> None:
             ax.errorbar(
                 xs_ser, means, yerr=[lo_err, hi_err],
                 fmt=series_markers[s], color=color, ecolor=color,
-                elinewidth=1.8, capsize=5, capthick=1.8, markersize=13,
+                elinewidth=1.8, capsize=5, capthick=1.8, markersize=10,
                 markeredgecolor=color, markeredgewidth=1.8, zorder=z, label=FIGURE_LABELS[s],
             )
         ax.axhline(90, color="black", linestyle="--", linewidth=1.0, alpha=0.5, zorder=1)
         ax.set_ylim(0, 94.5)  # 5% headroom above the 90s cap, matching plot_modality_figure
-        if show_ylabel:
-            ax.set_ylabel("Time to match (s)", fontsize=15)
-        else:
-            ax.tick_params(axis="y", labelleft=False)
+        ax.set_ylabel("Time to match (s)", fontsize=15)
         if show_legend:
             ax.legend(loc="best", fontsize=12, numpoints=1)
 
     fig, (ax_noise, ax_latency, ax_precision) = plt.subplots(1, 3, figsize=(15, 5.5))
 
     noise_values = sorted({r["noise"] for r in noise_rows})
-    draw_panel(ax_noise, noise_rows, "noise", noise_values, show_legend=True, show_ylabel=True)
+    draw_panel(ax_noise, noise_rows, "noise", noise_values, show_legend=True)
     ax_noise.set_xticks(noise_values)
     ax_noise.set_xticklabels([f"{v:g}" for v in noise_values])
     ax_noise.set_xlabel("Noise (mm / deg)", fontsize=15)
@@ -1130,7 +1127,7 @@ def plot_conditions_figure(trials: list[dict], suffix: str = "") -> None:
     draw_panel(ax_latency, latency_rows, "perceived_ms", latency_values)
     ax_latency.set_xticks(latency_values)
     ax_latency.set_xticklabels([f"{v:g}" for v in latency_values])
-    ax_latency.set_xlabel("Perceived latency (ms)", fontsize=15)
+    ax_latency.set_xlabel("Latency (ms)", fontsize=15)
 
     # Ascending sort already puts the tightest threshold (smallest mm) on the
     # left and loosest (largest mm) on the right -- no reversal needed.
@@ -1146,10 +1143,10 @@ def plot_conditions_figure(trials: list[dict], suffix: str = "") -> None:
         ax.spines["bottom"].set_linewidth(1.6)
         style_axes(ax)
 
-    # Middle/right panels carry no y tick labels, so they need less breathing
-    # room than plot_modality_figure's wspace=0.4 -- panels sit closer together.
+    # Same tight_layout-then-subplots_adjust sequencing and wspace as
+    # plot_modality_figure, so the two figures share consistent proportions.
     fig.tight_layout()
-    fig.subplots_adjust(wspace=0.15)
+    fig.subplots_adjust(wspace=0.4)
     save(fig, "conditions_figure.png", suffix, tight=False)
 
 
