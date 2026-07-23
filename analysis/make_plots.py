@@ -1076,7 +1076,7 @@ def plot_conditions_figure(trials: list[dict], suffix: str = "") -> None:
     series_markers = {"M3": "^", "M5": "s"}
     series_zorder = {"M3": 2, "M5": 3}
 
-    def draw_panel(ax, rows, magnitude_key, magnitude_values, show_legend=False):
+    def draw_panel(ax, rows, magnitude_key, magnitude_values):
         for s in COMPARE_MODES:
             color = FIGURE_COLORS[s]
             z = series_zorder[s]
@@ -1107,18 +1107,15 @@ def plot_conditions_figure(trials: list[dict], suffix: str = "") -> None:
                 xs_ser, means, yerr=[lo_err, hi_err],
                 fmt=series_markers[s], color=color, ecolor=color,
                 elinewidth=1.8, capsize=5, capthick=1.8, markersize=10,
-                markeredgecolor=color, markeredgewidth=1.8, zorder=z, label=FIGURE_LABELS[s],
+                markeredgecolor=color, markeredgewidth=1.8, zorder=z,
             )
-        ax.axhline(90, color="black", linestyle="--", linewidth=1.0, alpha=0.5, zorder=1)
-        ax.set_ylim(0, 94.5)  # 5% headroom above the 90s cap, matching plot_modality_figure
+        ax.set_ylim(0, 80)  # y=90 timeout line no longer fits this range, so it's dropped below
         ax.set_ylabel("Time to match (s)", fontsize=15)
-        if show_legend:
-            ax.legend(loc="best", fontsize=12, numpoints=1)
 
     fig, (ax_noise, ax_latency, ax_precision) = plt.subplots(1, 3, figsize=(15, 5.5))
 
     noise_values = sorted({r["noise"] for r in noise_rows})
-    draw_panel(ax_noise, noise_rows, "noise", noise_values, show_legend=True)
+    draw_panel(ax_noise, noise_rows, "noise", noise_values)
     ax_noise.set_xticks(noise_values)
     ax_noise.set_xticklabels([f"{v:g}" for v in noise_values])
     ax_noise.set_xlabel("Noise (mm / deg)", fontsize=15)
@@ -1142,6 +1139,24 @@ def plot_conditions_figure(trials: list[dict], suffix: str = "") -> None:
         ax.spines["left"].set_linewidth(1.6)
         ax.spines["bottom"].set_linewidth(1.6)
         style_axes(ax)
+
+    # Explicit proxy handles, not the errorbar artists themselves -- an
+    # errorbar's legend entry otherwise reuses its connecting line, drawing a
+    # line through the marker. linestyle="none" gives a clean marker-only
+    # legend. Figure-level legend (not tied to one axes) anchored at the
+    # figure's own top-right corner, clear of every panel's data.
+    legend_handles = [
+        Line2D(
+            [], [], marker=series_markers[s], color=FIGURE_COLORS[s], linestyle="none",
+            markersize=10, markeredgecolor=FIGURE_COLORS[s], markeredgewidth=1.8,
+            label=FIGURE_LABELS[s],
+        )
+        for s in COMPARE_MODES
+    ]
+    fig.legend(
+        handles=legend_handles, loc="upper right", bbox_to_anchor=(0.99, 0.97),
+        fontsize=12, numpoints=1,
+    )
 
     # Same tight_layout-then-subplots_adjust sequencing and wspace as
     # plot_modality_figure, so the two figures share consistent proportions.
