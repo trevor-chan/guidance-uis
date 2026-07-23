@@ -140,7 +140,7 @@ COMPARE_DOT_COLORS = {m: MODALITY_DOT_COLORS[m] for m in COMPARE_MODES}
 # grouped left-to-right (1D, then 2D transducer/user/patient, then 3D
 # transducer/user/patient), independent of MODALITY_COLORS/MODALITY_LABELS
 # above (those serve the individual per-metric plots and order by M-number).
-FIGURE_ORDER = ["M1", "M4", "M2", "M3", "M7", "M5", "M6"]
+FIGURE_ORDER = ["M1", "M4", "M7", "M2", "M5", "M3", "M6"]
 FIGURE_LABELS = {
     "M1": "1D",
     "M4": "2D Transducer",
