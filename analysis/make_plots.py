@@ -54,7 +54,6 @@ import matplotlib
 
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
-import matplotlib.ticker
 from matplotlib.lines import Line2D
 
 # -- Palette ------------------------------------------------------------
@@ -1042,7 +1041,12 @@ def plot_conditions_figure(trials: list[dict], suffix: str = "") -> None:
         print(f"  conditions_figure: no data for {', '.join(missing)}, skipping")
         return
 
-    def draw_panel(ax, rows, magnitude_key, magnitude_values, show_legend=False):
+    # M3 (2D/Patient) is always drawn before M5 (3D/User) -- COMPARE_MODES is
+    # already ["M3", "M5"] -- so M5's artists land on top wherever the two
+    # series overlap, consistently across all three panels.
+    series_markers = {"M3": "^", "M5": "s"}
+
+    def draw_panel(ax, rows, magnitude_key, magnitude_values, show_legend=False, show_ylabel=False):
         for s in COMPARE_MODES:
             color = FIGURE_COLORS[s]
             xs_ser, means, lo_err, hi_err = [], [], [], []
@@ -1062,41 +1066,39 @@ def plot_conditions_figure(trials: list[dict], suffix: str = "") -> None:
             # only, on both the marker and its CI line/caps.
             ax.errorbar(
                 xs_ser, means, yerr=[lo_err, hi_err],
-                fmt="o", color=color, ecolor=color,
-                elinewidth=1.8, capsize=5, capthick=1.8, markersize=8,
+                fmt=series_markers[s], color=color, ecolor=color,
+                elinewidth=1.8, capsize=5, capthick=1.8, markersize=9,
                 markeredgewidth=0, zorder=3, label=FIGURE_LABELS[s],
             )
         ax.axhline(90, color="black", linestyle="--", linewidth=1.0, alpha=0.5, zorder=1)
         ax.set_ylim(0, 94.5)  # 5% headroom above the 90s cap, matching plot_modality_figure
-        ax.set_ylabel("Time to match (s)", fontsize=15)
+        if show_ylabel:
+            ax.set_ylabel("Time to match (s)", fontsize=15)
+        else:
+            ax.tick_params(axis="y", labelleft=False)
         if show_legend:
             ax.legend(loc="best", fontsize=12, numpoints=1)
 
     fig, (ax_noise, ax_latency, ax_precision) = plt.subplots(1, 3, figsize=(15, 5.5))
 
     noise_values = sorted({r["noise"] for r in noise_rows})
-    draw_panel(ax_noise, noise_rows, "noise", noise_values, show_legend=True)
-    ax_noise.set_xscale("symlog", linthresh=1)  # 0 is a valid magnitude, invalid on a plain log axis
+    draw_panel(ax_noise, noise_rows, "noise", noise_values, show_legend=True, show_ylabel=True)
     ax_noise.set_xticks(noise_values)
     ax_noise.set_xticklabels([f"{v:g}" for v in noise_values])
     ax_noise.set_xlabel("Noise (mm / deg)", fontsize=15)
 
     latency_values = sorted({r["perceived_ms"] for r in latency_rows})
     draw_panel(ax_latency, latency_rows, "perceived_ms", latency_values)
-    ax_latency.set_xscale("log")
     ax_latency.set_xticks(latency_values)
     ax_latency.set_xticklabels([f"{v:g}" for v in latency_values])
-    ax_latency.xaxis.set_minor_locator(matplotlib.ticker.NullLocator())
     ax_latency.set_xlabel("Perceived latency (ms)", fontsize=15)
 
     # Ascending sort already puts the tightest threshold (smallest mm) on the
     # left and loosest (largest mm) on the right -- no reversal needed.
     precision_values = sorted({r["precision_linear_mm"] for r in precision_rows})
     draw_panel(ax_precision, precision_rows, "precision_linear_mm", precision_values)
-    ax_precision.set_xscale("log")
     ax_precision.set_xticks(precision_values)
     ax_precision.set_xticklabels([f"{v:g}" for v in precision_values])
-    ax_precision.xaxis.set_minor_locator(matplotlib.ticker.NullLocator())
     ax_precision.set_xlabel("Precision threshold (mm / deg)", fontsize=15)
 
     for ax in (ax_noise, ax_latency, ax_precision):
@@ -1105,8 +1107,10 @@ def plot_conditions_figure(trials: list[dict], suffix: str = "") -> None:
         ax.spines["bottom"].set_linewidth(1.6)
         style_axes(ax)
 
+    # Middle/right panels carry no y tick labels, so they need less breathing
+    # room than plot_modality_figure's wspace=0.4 -- panels sit closer together.
     fig.tight_layout()
-    fig.subplots_adjust(wspace=0.4)
+    fig.subplots_adjust(wspace=0.15)
     save(fig, "conditions_figure.png", suffix, tight=False)
 
 
