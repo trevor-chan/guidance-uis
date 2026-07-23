@@ -127,7 +127,7 @@ FIGURE_LABELS = {
     "M6": "3D Patient",
 }
 FIGURE_COLORS = {
-    "M1": "#ACACAC",
+    "M1": "#C4C4C4",
     "M4": "#C1F5DF",
     "M2": "#89EEBF",
     "M3": "#5CC588",
@@ -856,19 +856,27 @@ def plot_modality_figure(trials: list[dict], preferences: list[dict], suffix: st
         if timed_out:
             any_timeout = True
             jx = jittered_xs(x, len(timed_out), 0.12)
-            ax_time.plot(jx, timed_out, "x", color="black", markersize=8, markeredgewidth=1.8, alpha=0.7, zorder=3)
-    ax_time.set_ylim(bottom=0)
+            # Timed-out trials sit right at (or a hair past) the 90s cap, i.e.
+            # the axis top below -- clip_on=False keeps them from being
+            # half-cut by the axis edge instead of drawn in full.
+            ax_time.plot(
+                jx, timed_out, "o", color="red", markersize=5, alpha=0.45, markeredgewidth=0,
+                zorder=3, clip_on=False,
+            )
+    ax_time.axhline(90, color="black", linestyle="--", linewidth=1.0, alpha=0.5, zorder=1)
+    ax_time.set_ylim(0, 90)
     if any_timeout:
-        # Timed-out trials cluster right at the data max (the timeout cap),
-        # so a legend placed inside the axes there would overlap that row of
-        # x markers -- headroom above the tallest whisker/marker keeps it clear.
-        top = ax_time.get_ylim()[1]
-        ax_time.set_ylim(0, top * 1.18)
         timeout_handle = Line2D(
-            [], [], marker="x", color="black", linestyle="None",
-            markersize=9, markeredgewidth=1.8, label="x = timeout",
+            [], [], marker="o", color="red", linestyle="None",
+            markersize=7, alpha=0.7, label="Timeout",
         )
-        ax_time.legend(handles=[timeout_handle], loc="upper right", fontsize=12)
+        # Bottom-left of this panel always has box/dot data near it (every
+        # category's bulk sits low), so the legend needs its own opaque
+        # backing to stay legible instead of blending into that clutter.
+        ax_time.legend(
+            handles=[timeout_handle], loc="lower left", fontsize=12, numpoints=1, markerscale=1.0,
+            frameon=True, framealpha=0.9, facecolor="white", edgecolor="none",
+        )
     ax_time.set_ylabel("Time to match (s)", fontsize=15)
     ax_time.set_xticks(xs)
     ax_time.set_xticklabels(tick_labels, rotation=90, fontsize=13)
@@ -883,9 +891,21 @@ def plot_modality_figure(trials: list[dict], preferences: list[dict], suffix: st
         los.append(lo)
         his.append(hi)
     ax_success.bar(xs, means, width=0.6, color=colors, alpha=1.0, edgecolor="black", linewidth=1.6, zorder=2)
+    for x, m in zip(xs, modalities):
+        participant_outcomes = defaultdict(list)
+        for r in rows:
+            if r["modality_id"] == m:
+                participant_outcomes[r["participant_id"]].append(r["achieved"])
+        participant_rates = [mean(v) for v in participant_outcomes.values()]
+        if participant_rates:
+            jx = jittered_xs(x, len(participant_rates), 0.16)
+            ax_success.plot(
+                jx, participant_rates, "o", color="black", markersize=5, alpha=0.45,
+                markeredgewidth=0, zorder=3,
+            )
     ax_success.errorbar(
         xs, means, yerr=[[m - lo for m, lo in zip(means, los)], [hi - m for m, hi in zip(means, his)]],
-        fmt="none", ecolor="black", elinewidth=1.8, capsize=5, capthick=1.8, zorder=3,
+        fmt="none", ecolor="black", elinewidth=1.8, capsize=5, capthick=1.8, zorder=4,
     )
     ax_success.set_ylim(0, 1.0)
     ax_success.set_ylabel("Success rate", fontsize=15)
@@ -905,9 +925,21 @@ def plot_modality_figure(trials: list[dict], preferences: list[dict], suffix: st
         los.append(lo)
         his.append(hi)
     ax_pref.bar(xs, means, width=0.6, color=colors, alpha=1.0, edgecolor="black", linewidth=1.6, zorder=2)
+    for x, m in zip(xs, modalities):
+        participant_ratings = defaultdict(list)
+        for p in preferences:
+            if p["modality_id"] == m:
+                participant_ratings[p["participant_id"]].append(p["rating"])
+        participant_means = [mean(v) for v in participant_ratings.values()]
+        if participant_means:
+            jx = jittered_xs(x, len(participant_means), 0.16)
+            ax_pref.plot(
+                jx, participant_means, "o", color="black", markersize=5, alpha=0.45,
+                markeredgewidth=0, zorder=3,
+            )
     ax_pref.errorbar(
         xs, means, yerr=[[m - lo for m, lo in zip(means, los)], [hi - m for m, hi in zip(means, his)]],
-        fmt="none", ecolor="black", elinewidth=1.8, capsize=5, capthick=1.8, zorder=3,
+        fmt="none", ecolor="black", elinewidth=1.8, capsize=5, capthick=1.8, zorder=4,
     )
     ax_pref.set_ylim(0, 5)
     ax_pref.set_yticks([1, 2, 3, 4, 5])
