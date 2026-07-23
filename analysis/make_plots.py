@@ -246,6 +246,28 @@ def find_sqlite_files(folder: Path) -> list[Path]:
     return sorted(folder.rglob("experiment.sqlite"))
 
 
+# Data bins as laid out by study/storage.py's StorageConfig: {root}/{category}
+# siblings, category in ("real", "practice", "trash"). This script otherwise
+# treats <folder> as an opaque tree to rglob (see find_sqlite_files above),
+# but conditions_figure.png specifically pools practice + real (never trash)
+# regardless of which single folder the user pointed the CLI at.
+DATA_BIN_NAMES = ("real", "practice", "trash")
+CONDITIONS_FIGURE_BINS = ("practice", "real")
+
+
+def conditions_figure_search_roots(folder: Path) -> list[Path]:
+    """Folders to pool for conditions_figure.png's practice+real data.
+
+    If `folder` IS itself a bin (its name matches one of DATA_BIN_NAMES,
+    e.g. .../visualexperiment/real), its parent is treated as the data root
+    -- so passing any one bin still pulls in both practice and real, not
+    just the one named. Otherwise `folder` itself is treated as the data
+    root. Only bins that actually exist on disk are returned; trash is never
+    included."""
+    root = folder.parent if folder.name in DATA_BIN_NAMES else folder
+    return [p for name in CONDITIONS_FIGURE_BINS if (p := root / name).is_dir()]
+
+
 # Columns added by idempotent ALTER TABLE migrations (see study/storage.py
 # _ensure_schema) may be absent from .sqlite files predating that migration.
 # This script opens files read-only and must not mutate study data to add
@@ -1006,11 +1028,14 @@ def plot_conditions_figure(trials: list[dict], suffix: str = "") -> None:
     plot_modality_figure -- see that function's comments for why tight_layout
     and subplots_adjust are sequenced the way they are below.
 
-    `trials` must be the RAW, non-threshold-derived trial list (see main()) --
-    this is the one plot in the file that intentionally skips both
-    FIGURE_THRESHOLD and any --threshold override, so noise/latency reflect
-    the live 5mm/5deg rule they actually ran under and precision reflects
-    each trial's own per-trial threshold, exactly as recorded."""
+    `trials` must be the RAW, non-threshold-derived trial list, ALREADY
+    pooled from the practice + real data bins by main() (see
+    conditions_figure_search_roots) -- this is the one plot in the file that
+    (a) draws from both bins regardless of which single folder the CLI was
+    pointed at, and (b) intentionally skips both FIGURE_THRESHOLD and any
+    --threshold override, so noise/latency reflect the live 5mm/5deg rule
+    they actually ran under and precision reflects each trial's own
+    per-trial threshold, exactly as recorded."""
     noise_rows = [
         t for t in trials
         if t["experiment_condition"] == "noise"
@@ -1050,16 +1075,10 @@ def plot_conditions_figure(trials: list[dict], suffix: str = "") -> None:
     # the returned ErrorbarContainer.
     series_markers = {"M3": "^", "M5": "s"}
     series_zorder = {"M3": 2, "M5": 3}
-    # Marker outline and CI caps both take the same darkened shade of each
-    # series' fill (same treatment as plot_modality_figure's box/bar
-    # outlines) -- see the errorbar() call below for why one property drives
-    # both.
-    series_outline = {s: darken_hsl(FIGURE_COLORS[s], 0.40) for s in COMPARE_MODES}
 
     def draw_panel(ax, rows, magnitude_key, magnitude_values, show_legend=False, show_ylabel=False):
         for s in COMPARE_MODES:
             color = FIGURE_COLORS[s]
-            outline = series_outline[s]
             z = series_zorder[s]
             xs_ser, means, lo_err, hi_err = [], [], [], []
             for xv in magnitude_values:
@@ -1074,21 +1093,21 @@ def plot_conditions_figure(trials: list[dict], suffix: str = "") -> None:
             if not xs_ser:
                 continue
             ax.plot(xs_ser, means, "-", color=color, linewidth=1.5, zorder=z)
-            # errorbar() reuses ONE markeredgewidth for both the data
-            # marker's edge and the cap tick thickness (confirmed by
-            # inspection -- an explicit markeredgewidth always wins over
-            # capthick when both are given), and cap COLOR comes from
-            # ecolor, not markeredgecolor/color -- also confirmed by
-            # inspection (rendered pixel color at a cap matched ecolor, not
-            # the marker's color/markeredgecolor). So: markeredgecolor=
-            # outline colors the marker's own edge, ecolor=outline colors
-            # the CI line + caps, and markeredgewidth=1.8 sets a visible,
-            # shared, non-zero thickness for both the marker edge and caps.
+            # Single light fill color everywhere for this series: no
+            # darkened outline (markeredgecolor=color, matching the fill) and
+            # no darkened CI (ecolor=color too). markeredgewidth must still
+            # be kept non-zero -- errorbar() reuses this ONE property for
+            # both the marker's own edge thickness AND the cap tick
+            # thickness (confirmed by inspection: an explicit
+            # markeredgewidth always wins over capthick when both are
+            # given), so markeredgewidth=0 would silently kill the caps
+            # even though the marker itself would look fine (a
+            # same-color edge is invisible either way).
             ax.errorbar(
                 xs_ser, means, yerr=[lo_err, hi_err],
-                fmt=series_markers[s], color=color, ecolor=outline,
-                elinewidth=1.8, capsize=5, capthick=1.8, markersize=20,
-                markeredgecolor=outline, markeredgewidth=1.8, zorder=z, label=FIGURE_LABELS[s],
+                fmt=series_markers[s], color=color, ecolor=color,
+                elinewidth=1.8, capsize=5, capthick=1.8, markersize=13,
+                markeredgecolor=color, markeredgewidth=1.8, zorder=z, label=FIGURE_LABELS[s],
             )
         ax.axhline(90, color="black", linestyle="--", linewidth=1.0, alpha=0.5, zorder=1)
         ax.set_ylim(0, 94.5)  # 5% headroom above the 90s cap, matching plot_modality_figure
@@ -1350,11 +1369,39 @@ def main() -> None:
         suffix = args.participant
 
     participant_suffix = suffix
-    # conditions_figure.png uses the trials exactly as recorded -- no
-    # FIGURE_THRESHOLD re-derivation (that's modality_figure-only) and no
-    # --threshold override either (apply_threshold_override always returns a
-    # new list, so rebinding `trials` below doesn't touch this reference).
-    raw_trials = trials
+
+    # conditions_figure.png pools practice + real bins (never trash) instead
+    # of just the folder passed on the command line -- every other plot
+    # below still only uses `trials` from that folder. It also uses the
+    # trials exactly as recorded: no FIGURE_THRESHOLD re-derivation (that's
+    # modality_figure-only) and no --threshold override either, so this is a
+    # wholly separate load_data() call, never touched by
+    # apply_threshold_override.
+    conditions_roots = conditions_figure_search_roots(folder)
+    conditions_paths = sorted({p for root in conditions_roots for p in find_sqlite_files(root)})
+    conditions_trials, _ = load_data(conditions_paths) if conditions_paths else ([], [])
+    if args.participant:
+        conditions_trials = [
+            t for t in conditions_trials
+            if t["participant_id"] and t["participant_id"].lower() == args.participant.lower()
+        ]
+    print("\nconditions_figure data pool (practice + real bins, never trash):")
+    if conditions_roots:
+        for root in conditions_roots:
+            print(f"  root: {root}")
+        for p in conditions_paths:
+            print(f"    file: {p}")
+    else:
+        print(f"  no practice/real bin found as a sibling of, or under, {folder}")
+    for experiment in ("noise", "latency", "precision"):
+        rows = [t for t in conditions_trials if t["experiment_condition"] == experiment]
+        if not rows:
+            print(f"  {experiment:<10} no data found")
+            continue
+        n_files = len({t["source_file"] for t in rows})
+        n_participants = len({t["participant_id"] for t in rows})
+        print(f"  {experiment:<10} files={n_files:<4} participants={n_participants:<4} trials={len(rows)}")
+
     trajectories = load_trajectories(paths)
 
     # modality_figure.png always renders at FIGURE_THRESHOLD (10mm/10deg),
@@ -1392,7 +1439,7 @@ def main() -> None:
     plot_noise_time(trials, suffix)
     plot_latency_time(trials, suffix)
     plot_precision_time(trials, suffix)
-    plot_conditions_figure(raw_trials, participant_suffix)
+    plot_conditions_figure(conditions_trials, participant_suffix)
 
 
 if __name__ == "__main__":
