@@ -127,13 +127,13 @@ FIGURE_LABELS = {
     "M6": "3D Patient",
 }
 FIGURE_COLORS = {
-    "M1": "#9E9E9E",
-    "M4": "#A8DEC4",
-    "M2": "#52C08A",
-    "M3": "#1B8A5A",
-    "M7": "#AECBEB",
-    "M5": "#5B9BD5",
-    "M6": "#1F5C99",
+    "M1": "#ACACAC",
+    "M4": "#C1F5DF",
+    "M2": "#89EEBF",
+    "M3": "#5CC588",
+    "M7": "#C8DCF5",
+    "M5": "#6097F0",
+    "M6": "#2D65D2",
 }
 FIGURE_THRESHOLD = (10.0, 10.0)  # hardcoded for modality_figure.png, see plot_modality_figure
 
@@ -810,7 +810,8 @@ def plot_modality_success(trials: list[dict], suffix: str = "") -> None:
 
 def plot_modality_figure(trials: list[dict], preferences: list[dict], suffix: str = "") -> None:
     """Combined publication figure: time (box+dots) / success / preference,
-    three panels stacked on a shared, dimension-grouped x-axis. `trials` must
+    three panels side by side on a dimension-grouped x-axis (each panel keeps
+    its own x tick labels since they no longer share an axis). `trials` must
     already be re-derived at FIGURE_THRESHOLD by the caller (see main()) —
     this function does not re-derive anything itself, it only renders."""
     rows = [
@@ -826,21 +827,19 @@ def plot_modality_figure(trials: list[dict], preferences: list[dict], suffix: st
     modalities = figure_modalities(rows)
     xs = list(range(1, len(modalities) + 1))
     colors = [FIGURE_COLORS[m] for m in modalities]
+    tick_labels = [FIGURE_LABELS[m] for m in modalities]
 
-    fig, (ax_time, ax_success, ax_pref) = plt.subplots(
-        3, 1, figsize=(7, 10), sharex=True,
-        gridspec_kw={"height_ratios": [1.8, 1.0, 1.0]},
-    )
+    fig, (ax_time, ax_success, ax_pref) = plt.subplots(1, 3, figsize=(13, 5.5))
 
     # -- Panel A: time to match (conventional box-and-whisker + raw dots) --
     time_data = [[r["elapsed_s"] for r in rows if r["modality_id"] == m] for m in modalities]
     bp = ax_time.boxplot(
         time_data, positions=xs, widths=0.6, whis=1.5,
         patch_artist=True, showfliers=False,
-        medianprops=dict(color="black", linewidth=1.5),
-        boxprops=dict(edgecolor="black", linewidth=1.0),
-        whiskerprops=dict(color="black", linewidth=1.0),
-        capprops=dict(color="black", linewidth=1.0),
+        medianprops=dict(color="black", linewidth=1.6),
+        boxprops=dict(edgecolor="black", linewidth=1.6),
+        whiskerprops=dict(color="black", linewidth=1.6),
+        capprops=dict(color="black", linewidth=1.6),
         zorder=2,
     )
     for patch, m in zip(bp["boxes"], modalities):
@@ -853,11 +852,11 @@ def plot_modality_figure(trials: list[dict], preferences: list[dict], suffix: st
         timed_out = [r["elapsed_s"] for r in rows if r["modality_id"] == m and not r["achieved"]]
         if matched:
             jx = jittered_xs(x, len(matched), 0.12)
-            ax_time.plot(jx, matched, "o", color="black", markersize=3, alpha=0.45, markeredgewidth=0, zorder=3)
+            ax_time.plot(jx, matched, "o", color="black", markersize=5, alpha=0.45, markeredgewidth=0, zorder=3)
         if timed_out:
             any_timeout = True
             jx = jittered_xs(x, len(timed_out), 0.12)
-            ax_time.plot(jx, timed_out, "x", color="black", markersize=5, markeredgewidth=1.3, alpha=0.7, zorder=3)
+            ax_time.plot(jx, timed_out, "x", color="black", markersize=8, markeredgewidth=1.8, alpha=0.7, zorder=3)
     ax_time.set_ylim(bottom=0)
     if any_timeout:
         # Timed-out trials cluster right at the data max (the timeout cap),
@@ -867,10 +866,12 @@ def plot_modality_figure(trials: list[dict], preferences: list[dict], suffix: st
         ax_time.set_ylim(0, top * 1.18)
         timeout_handle = Line2D(
             [], [], marker="x", color="black", linestyle="None",
-            markersize=6, markeredgewidth=1.3, label="x = timeout",
+            markersize=9, markeredgewidth=1.8, label="x = timeout",
         )
-        ax_time.legend(handles=[timeout_handle], loc="upper right")
-    ax_time.set_ylabel("Time to match (s)")
+        ax_time.legend(handles=[timeout_handle], loc="upper right", fontsize=12)
+    ax_time.set_ylabel("Time to match (s)", fontsize=15)
+    ax_time.set_xticks(xs)
+    ax_time.set_xticklabels(tick_labels, rotation=90, fontsize=13)
     style_axes(ax_time)
 
     # -- Panel B: success rate (bar to mean + Wilson 95% CI) --
@@ -881,13 +882,15 @@ def plot_modality_figure(trials: list[dict], preferences: list[dict], suffix: st
         means.append(phat)
         los.append(lo)
         his.append(hi)
-    ax_success.bar(xs, means, width=0.6, color=colors, alpha=1.0, edgecolor="black", linewidth=1.0, zorder=2)
+    ax_success.bar(xs, means, width=0.6, color=colors, alpha=1.0, edgecolor="black", linewidth=1.6, zorder=2)
     ax_success.errorbar(
         xs, means, yerr=[[m - lo for m, lo in zip(means, los)], [hi - m for m, hi in zip(means, his)]],
-        fmt="none", ecolor="black", elinewidth=1.3, capsize=4, capthick=1.3, zorder=3,
+        fmt="none", ecolor="black", elinewidth=1.8, capsize=5, capthick=1.8, zorder=3,
     )
     ax_success.set_ylim(0, 1.0)
-    ax_success.set_ylabel("Success rate")
+    ax_success.set_ylabel("Success rate", fontsize=15)
+    ax_success.set_xticks(xs)
+    ax_success.set_xticklabels(tick_labels, rotation=90, fontsize=13)
     style_axes(ax_success)
 
     # -- Panel C: preference (bar to mean + 95% CI) --
@@ -901,26 +904,23 @@ def plot_modality_figure(trials: list[dict], preferences: list[dict], suffix: st
         means.append(mn)
         los.append(lo)
         his.append(hi)
-    ax_pref.bar(xs, means, width=0.6, color=colors, alpha=1.0, edgecolor="black", linewidth=1.0, zorder=2)
+    ax_pref.bar(xs, means, width=0.6, color=colors, alpha=1.0, edgecolor="black", linewidth=1.6, zorder=2)
     ax_pref.errorbar(
         xs, means, yerr=[[m - lo for m, lo in zip(means, los)], [hi - m for m, hi in zip(means, his)]],
-        fmt="none", ecolor="black", elinewidth=1.3, capsize=4, capthick=1.3, zorder=3,
+        fmt="none", ecolor="black", elinewidth=1.8, capsize=5, capthick=1.8, zorder=3,
     )
-    ax_pref.set_ylim(1, 5)
+    ax_pref.set_ylim(0, 5)
     ax_pref.set_yticks([1, 2, 3, 4, 5])
-    ax_pref.set_ylabel("Preference (1-5)")
+    ax_pref.set_ylabel("Preference (1-5)", fontsize=15)
+    ax_pref.set_xticks(xs)
+    ax_pref.set_xticklabels(tick_labels, rotation=90, fontsize=13)
     style_axes(ax_pref)
 
-    # Only the bottom panel carries x tick labels; alignment across panels
-    # comes from the shared xs / sharex=True above.
-    ax_time.tick_params(axis="x", labelbottom=False)
-    ax_success.tick_params(axis="x", labelbottom=False)
-    ax_pref.set_xticks(xs)
-    ax_pref.set_xticklabels([FIGURE_LABELS[m] for m in modalities], rotation=90)
+    for ax in (ax_time, ax_success, ax_pref):
+        ax.tick_params(axis="y", labelsize=13)
+        ax.spines["left"].set_linewidth(1.6)
+        ax.spines["bottom"].set_linewidth(1.6)
 
-    linear_mm, angular_deg = FIGURE_THRESHOLD
-    ax_time.set_title(f"Modality comparison (re-derived @ {linear_mm:g}mm / {angular_deg:g}deg threshold)")
-    fig.align_ylabels([ax_time, ax_success, ax_pref])
     save(fig, "modality_figure.png", suffix)
 
 
