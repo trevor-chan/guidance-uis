@@ -654,11 +654,12 @@ def point_range_by_category(
     hi_err = [hi - m for m, hi in zip(means, his)]
     for x, m, loe, hie, cat in zip(xs, means, lo_err, hi_err, categories):
         color = colors[cat]
+        outline = darken_hsl(color, 0.40)
         ax.errorbar(
             x, m, yerr=[[loe], [hie]],
-            fmt="o", color=color, ecolor=color,
+            fmt="o", color=color, ecolor=outline,
             elinewidth=1.3, capsize=4, capthick=1.3, markersize=7,
-            markeredgecolor="white", markeredgewidth=0.8, zorder=3,
+            markeredgecolor=outline, markeredgewidth=0.8, zorder=3,
         )
     apply_category_ticklabels(ax, xs, [labels[c] for c in categories])
 
@@ -694,10 +695,15 @@ def bar_with_ci(
             draw_dot_cloud(ax, x, raw_values[cat], (dot_colors or colors)[cat], width=0.16, zorder=2.5)
     lo_err = [m - lo for m, lo in zip(means, los)]
     hi_err = [hi - m for m, hi in zip(means, his)]
-    ax.errorbar(
-        xs, means, yerr=[lo_err, hi_err],
-        fmt="none", ecolor=INK, elinewidth=1.3, capsize=4, capthick=1.3, zorder=3,
-    )
+    # One errorbar call per category (not one call across all xs): ecolor
+    # can't take a per-point color list once capsize>0 -- the caps are drawn
+    # as markers sharing a single markeredgecolor, so a list raises.
+    for x, m, loe, hie, cat in zip(xs, means, lo_err, hi_err, categories):
+        outline = darken_hsl(colors[cat], 0.40)
+        ax.errorbar(
+            x, m, yerr=[[loe], [hie]],
+            fmt="none", ecolor=outline, elinewidth=1.3, capsize=4, capthick=1.3, zorder=3,
+        )
     apply_category_ticklabels(ax, xs, [labels[c] for c in categories])
 
 
@@ -742,11 +748,12 @@ def point_range_by_group(
             continue
         ax.plot(xs, means, "-", color=color, linewidth=1.5, zorder=2)
         if show_ci:
+            outline = darken_hsl(color, 0.40)
             ax.errorbar(
                 xs, means, yerr=[lo_err, hi_err],
-                fmt="o", color=color, ecolor=color,
+                fmt="o", color=color, ecolor=outline,
                 elinewidth=1.3, capsize=4, capthick=1.3, markersize=6.5,
-                markeredgecolor="white", markeredgewidth=0.7,
+                markeredgecolor=outline, markeredgewidth=0.7,
                 label=series_labels[s], zorder=3,
             )
         else:
