@@ -33,6 +33,7 @@ re-derived threshold (see FIGURE_THRESHOLD), regardless of --threshold.
 from __future__ import annotations
 
 import argparse
+import colorsys
 import random
 import sqlite3
 import sys
@@ -75,6 +76,21 @@ def darken(hex_color: str, factor: float) -> str:
     g = round(g * (1 - factor))
     b = round(b * (1 - factor))
     return f"#{r:02x}{g:02x}{b:02x}"
+
+
+def darken_hsl(hex_color: str, factor: float) -> str:
+    """Darken a hex color by scaling its HSL lightness by (1 - factor).
+
+    Unlike darken() (a linear RGB blend toward black), this holds hue and
+    saturation fixed -- a straight RGB blend shifts the hue of saturated
+    colors (e.g. modality_figure's fills), an HSL lightness scale doesn't.
+    Used for modality_figure's box/bar outlines, which are each fill's own
+    darker shade rather than a flat black."""
+    hex_color = hex_color.lstrip("#")
+    r, g, b = (int(hex_color[i : i + 2], 16) / 255 for i in (0, 2, 4))
+    h, l, s = colorsys.rgb_to_hls(r, g, b)
+    r2, g2, b2 = colorsys.hls_to_rgb(h, l * (1 - factor), s)
+    return f"#{round(r2 * 255):02x}{round(g2 * 255):02x}{round(b2 * 255):02x}"
 
 
 MODALITY_IDS = [f"M{i}" for i in range(1, 8)]
@@ -832,6 +848,7 @@ def plot_modality_figure(trials: list[dict], preferences: list[dict], suffix: st
     modalities = figure_modalities(rows)
     xs = list(range(1, len(modalities) + 1))
     colors = [FIGURE_COLORS[m] for m in modalities]
+    outline_colors = [darken_hsl(FIGURE_COLORS[m], 0.40) for m in modalities]
     tick_labels = [FIGURE_LABELS[m] for m in modalities]
 
     # figsize widened so the extra wspace set below (see the tight_layout
@@ -844,15 +861,24 @@ def plot_modality_figure(trials: list[dict], preferences: list[dict], suffix: st
     bp = ax_time.boxplot(
         time_data, positions=xs, widths=0.6, whis=1.5,
         patch_artist=True, showfliers=False,
-        medianprops=dict(color="black", linewidth=1.6),
-        boxprops=dict(edgecolor="black", linewidth=1.6),
-        whiskerprops=dict(color="black", linewidth=1.6),
-        capprops=dict(color="black", linewidth=1.6),
+        medianprops=dict(linewidth=1.6),
+        boxprops=dict(linewidth=1.6),
+        whiskerprops=dict(linewidth=1.6),
+        capprops=dict(linewidth=1.6),
         zorder=2,
     )
-    for patch, m in zip(bp["boxes"], modalities):
+    # Each box's outline/whiskers/caps/median take a darker shade of that
+    # category's own fill instead of a flat black -- one box per category,
+    # but 2 whiskers and 2 caps per box (both ends), 1 median each.
+    for i, (patch, m) in enumerate(zip(bp["boxes"], modalities)):
         patch.set_facecolor(FIGURE_COLORS[m])
         patch.set_alpha(1.0)
+        patch.set_edgecolor(outline_colors[i])
+        bp["medians"][i].set_color(outline_colors[i])
+        for whisker in bp["whiskers"][2 * i : 2 * i + 2]:
+            whisker.set_color(outline_colors[i])
+        for cap in bp["caps"][2 * i : 2 * i + 2]:
+            cap.set_color(outline_colors[i])
 
     any_timeout = False
     for x, m in zip(xs, modalities):
@@ -903,7 +929,7 @@ def plot_modality_figure(trials: list[dict], preferences: list[dict], suffix: st
         means.append(phat)
         los.append(lo)
         his.append(hi)
-    ax_success.bar(xs, means, width=0.6, color=colors, alpha=1.0, edgecolor="black", linewidth=1.6, zorder=2)
+    ax_success.bar(xs, means, width=0.6, color=colors, alpha=1.0, edgecolor=outline_colors, linewidth=1.6, zorder=2)
     ax_success.errorbar(
         xs, means, yerr=[[m - lo for m, lo in zip(means, los)], [hi - m for m, hi in zip(means, his)]],
         fmt="none", ecolor="black", elinewidth=1.8, capsize=5, capthick=1.8, zorder=4,
@@ -925,7 +951,7 @@ def plot_modality_figure(trials: list[dict], preferences: list[dict], suffix: st
         means.append(mn)
         los.append(lo)
         his.append(hi)
-    ax_pref.bar(xs, means, width=0.6, color=colors, alpha=1.0, edgecolor="black", linewidth=1.6, zorder=2)
+    ax_pref.bar(xs, means, width=0.6, color=colors, alpha=1.0, edgecolor=outline_colors, linewidth=1.6, zorder=2)
     ax_pref.errorbar(
         xs, means, yerr=[[m - lo for m, lo in zip(means, los)], [hi - m for m, hi in zip(means, his)]],
         fmt="none", ecolor="black", elinewidth=1.8, capsize=5, capthick=1.8, zorder=4,
