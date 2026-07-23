@@ -28,6 +28,14 @@ Plot filenames get a _thr<linear>x<angular> suffix.
 modality_figure.png is a combined publication figure (time / success /
 preference stacked panels) and always renders at a hardcoded 10mm/10deg
 re-derived threshold (see FIGURE_THRESHOLD), regardless of --threshold.
+
+conditions_figure.png is a companion combined figure (noise / latency /
+precision time-to-match panels, M3 vs M5, log-scaled magnitude axes). Unlike
+every other plot in this file, it applies NO threshold re-derivation at all --
+not FIGURE_THRESHOLD, and not --threshold either -- so it always reflects
+elapsed_s/achieved exactly as recorded: noise/latency trials under the live
+5mm/5deg rule they actually ran under, precision trials under each trial's
+own per-trial threshold.
 """
 
 from __future__ import annotations
@@ -46,6 +54,7 @@ import matplotlib
 
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
+import matplotlib.ticker
 from matplotlib.lines import Line2D
 
 # -- Palette ------------------------------------------------------------
@@ -990,6 +999,117 @@ def plot_modality_figure(trials: list[dict], preferences: list[dict], suffix: st
     save(fig, "modality_figure.png", suffix, tight=False)
 
 
+def plot_conditions_figure(trials: list[dict], suffix: str = "") -> None:
+    """Companion to plot_modality_figure: noise / latency / precision
+    time-to-match, each panel comparing M3 (2D/Patient) vs M5 (3D/User) on a
+    log-scaled x-axis of the condition's own magnitude. Same size, rcParams,
+    line weights, text sizes, headroom convention, and no-title style as
+    plot_modality_figure -- see that function's comments for why tight_layout
+    and subplots_adjust are sequenced the way they are below.
+
+    `trials` must be the RAW, non-threshold-derived trial list (see main()) --
+    this is the one plot in the file that intentionally skips both
+    FIGURE_THRESHOLD and any --threshold override, so noise/latency reflect
+    the live 5mm/5deg rule they actually ran under and precision reflects
+    each trial's own per-trial threshold, exactly as recorded."""
+    noise_rows = [
+        t for t in trials
+        if t["experiment_condition"] == "noise"
+        and t["modality_id"] in COMPARE_MODES
+        and t["noise"] is not None
+        and t["elapsed_s"] is not None
+    ]
+    latency_rows = [
+        t for t in trials
+        if t["experiment_condition"] == "latency"
+        and t["modality_id"] in COMPARE_MODES
+        and t["perceived_ms"] is not None
+        and t["elapsed_s"] is not None
+    ]
+    precision_rows = [
+        t for t in trials
+        if t["experiment_condition"] == "precision"
+        and t["modality_id"] in COMPARE_MODES
+        and t["precision_linear_mm"] is not None
+        and t["elapsed_s"] is not None
+    ]
+    missing = [
+        name for name, rows in
+        [("noise", noise_rows), ("latency", latency_rows), ("precision", precision_rows)]
+        if not rows
+    ]
+    if missing:
+        print(f"  conditions_figure: no data for {', '.join(missing)}, skipping")
+        return
+
+    def draw_panel(ax, rows, magnitude_key, magnitude_values, show_legend=False):
+        for s in COMPARE_MODES:
+            color = FIGURE_COLORS[s]
+            xs_ser, means, lo_err, hi_err = [], [], [], []
+            for xv in magnitude_values:
+                vals = [r["elapsed_s"] for r in rows if r[magnitude_key] == xv and r["modality_id"] == s]
+                if not vals:
+                    continue
+                m, lo, hi = mean_ci95(vals, bounds=TIME_BOUNDS)
+                xs_ser.append(xv)
+                means.append(m)
+                lo_err.append(m - lo)
+                hi_err.append(hi - m)
+            if not xs_ser:
+                continue
+            ax.plot(xs_ser, means, "-", color=color, linewidth=1.5, zorder=2)
+            # No outlines anywhere here (unlike modality_figure): fill color
+            # only, on both the marker and its CI line/caps.
+            ax.errorbar(
+                xs_ser, means, yerr=[lo_err, hi_err],
+                fmt="o", color=color, ecolor=color,
+                elinewidth=1.8, capsize=5, capthick=1.8, markersize=8,
+                markeredgewidth=0, zorder=3, label=FIGURE_LABELS[s],
+            )
+        ax.axhline(90, color="black", linestyle="--", linewidth=1.0, alpha=0.5, zorder=1)
+        ax.set_ylim(0, 94.5)  # 5% headroom above the 90s cap, matching plot_modality_figure
+        ax.set_ylabel("Time to match (s)", fontsize=15)
+        if show_legend:
+            ax.legend(loc="best", fontsize=12, numpoints=1)
+
+    fig, (ax_noise, ax_latency, ax_precision) = plt.subplots(1, 3, figsize=(15, 5.5))
+
+    noise_values = sorted({r["noise"] for r in noise_rows})
+    draw_panel(ax_noise, noise_rows, "noise", noise_values, show_legend=True)
+    ax_noise.set_xscale("symlog", linthresh=1)  # 0 is a valid magnitude, invalid on a plain log axis
+    ax_noise.set_xticks(noise_values)
+    ax_noise.set_xticklabels([f"{v:g}" for v in noise_values])
+    ax_noise.set_xlabel("Noise (mm / deg)", fontsize=15)
+
+    latency_values = sorted({r["perceived_ms"] for r in latency_rows})
+    draw_panel(ax_latency, latency_rows, "perceived_ms", latency_values)
+    ax_latency.set_xscale("log")
+    ax_latency.set_xticks(latency_values)
+    ax_latency.set_xticklabels([f"{v:g}" for v in latency_values])
+    ax_latency.xaxis.set_minor_locator(matplotlib.ticker.NullLocator())
+    ax_latency.set_xlabel("Perceived latency (ms)", fontsize=15)
+
+    # Ascending sort already puts the tightest threshold (smallest mm) on the
+    # left and loosest (largest mm) on the right -- no reversal needed.
+    precision_values = sorted({r["precision_linear_mm"] for r in precision_rows})
+    draw_panel(ax_precision, precision_rows, "precision_linear_mm", precision_values)
+    ax_precision.set_xscale("log")
+    ax_precision.set_xticks(precision_values)
+    ax_precision.set_xticklabels([f"{v:g}" for v in precision_values])
+    ax_precision.xaxis.set_minor_locator(matplotlib.ticker.NullLocator())
+    ax_precision.set_xlabel("Precision threshold (mm / deg)", fontsize=15)
+
+    for ax in (ax_noise, ax_latency, ax_precision):
+        ax.tick_params(axis="both", labelsize=13)
+        ax.spines["left"].set_linewidth(1.6)
+        ax.spines["bottom"].set_linewidth(1.6)
+        style_axes(ax)
+
+    fig.tight_layout()
+    fig.subplots_adjust(wspace=0.4)
+    save(fig, "conditions_figure.png", suffix, tight=False)
+
+
 def plot_learning_curve_time(trials: list[dict], suffix: str = "") -> None:
     rows = [
         t
@@ -1206,6 +1326,11 @@ def main() -> None:
         suffix = args.participant
 
     participant_suffix = suffix
+    # conditions_figure.png uses the trials exactly as recorded -- no
+    # FIGURE_THRESHOLD re-derivation (that's modality_figure-only) and no
+    # --threshold override either (apply_threshold_override always returns a
+    # new list, so rebinding `trials` below doesn't touch this reference).
+    raw_trials = trials
     trajectories = load_trajectories(paths)
 
     # modality_figure.png always renders at FIGURE_THRESHOLD (10mm/10deg),
@@ -1243,6 +1368,7 @@ def main() -> None:
     plot_noise_time(trials, suffix)
     plot_latency_time(trials, suffix)
     plot_precision_time(trials, suffix)
+    plot_conditions_figure(raw_trials, participant_suffix)
 
 
 if __name__ == "__main__":
