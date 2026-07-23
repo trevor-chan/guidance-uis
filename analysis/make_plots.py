@@ -1118,7 +1118,7 @@ def plot_conditions_figure(trials: list[dict], suffix: str = "") -> None:
     draw_panel(ax_noise, noise_rows, "noise", noise_values)
     ax_noise.set_xticks(noise_values)
     ax_noise.set_xticklabels([f"{v:g}" for v in noise_values])
-    ax_noise.set_xlabel("Noise (mm / deg)", fontsize=15)
+    ax_noise.set_xlabel("Noise (mm & deg)", fontsize=15)
 
     latency_values = sorted({r["perceived_ms"] for r in latency_rows})
     draw_panel(ax_latency, latency_rows, "perceived_ms", latency_values)
@@ -1132,7 +1132,7 @@ def plot_conditions_figure(trials: list[dict], suffix: str = "") -> None:
     draw_panel(ax_precision, precision_rows, "precision_linear_mm", precision_values)
     ax_precision.set_xticks(precision_values)
     ax_precision.set_xticklabels([f"{v:g}" for v in precision_values])
-    ax_precision.set_xlabel("Precision threshold (mm / deg)", fontsize=15)
+    ax_precision.set_xlabel("Precision threshold (mm & deg)", fontsize=15)
 
     for ax in (ax_noise, ax_latency, ax_precision):
         ax.tick_params(axis="both", labelsize=13)
@@ -1229,7 +1229,7 @@ def plot_noise_time(trials: list[dict], suffix: str = "") -> None:
         dot_colors=COMPARE_DOT_COLORS,
         bounds=TIME_BOUNDS,
     )
-    ax.set_xlabel("Noise magnitude (mm / deg)")
+    ax.set_xlabel("Noise magnitude (mm & deg)")
     ax.set_ylabel("Time to match (s)")
     ax.set_title("Noise: completion time by magnitude (mean ± 95% CI)")
     style_axes(ax)
@@ -1316,7 +1316,7 @@ def plot_precision_time(trials: list[dict], suffix: str = "") -> None:
         dot_colors=COMPARE_DOT_COLORS,
         bounds=TIME_BOUNDS,
     )
-    ax.set_xlabel("Precision threshold (mm / deg)")
+    ax.set_xlabel("Precision threshold (mm & deg)")
     ax.set_ylabel("Time to match (s)")
     ax.set_title("Precision: completion time by threshold (mean ± 95% CI)")
     style_axes(ax)
