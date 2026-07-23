@@ -1041,14 +1041,26 @@ def plot_conditions_figure(trials: list[dict], suffix: str = "") -> None:
         print(f"  conditions_figure: no data for {', '.join(missing)}, skipping")
         return
 
-    # M3 (2D/Patient) is always drawn before M5 (3D/User) -- COMPARE_MODES is
-    # already ["M3", "M5"] -- so M5's artists land on top wherever the two
-    # series overlap, consistently across all three panels.
+    # M3 (2D/Patient) is a complete layer below M5 (3D/User) -- explicit,
+    # distinct zorder per series on EVERY artist (connecting line, marker,
+    # CI line, caps), not reliance on draw-call order. ax.errorbar's zorder
+    # kwarg applies uniformly to its dataline/caplines/barlinecollection (all
+    # get the same zorder; the dataline gets +0.1 internally so the marker
+    # itself sits a hair above its own whiskers) -- confirmed by inspecting
+    # the returned ErrorbarContainer.
     series_markers = {"M3": "^", "M5": "s"}
+    series_zorder = {"M3": 2, "M5": 3}
+    # Marker outline and CI caps both take the same darkened shade of each
+    # series' fill (same treatment as plot_modality_figure's box/bar
+    # outlines) -- see the errorbar() call below for why one property drives
+    # both.
+    series_outline = {s: darken_hsl(FIGURE_COLORS[s], 0.40) for s in COMPARE_MODES}
 
     def draw_panel(ax, rows, magnitude_key, magnitude_values, show_legend=False, show_ylabel=False):
         for s in COMPARE_MODES:
             color = FIGURE_COLORS[s]
+            outline = series_outline[s]
+            z = series_zorder[s]
             xs_ser, means, lo_err, hi_err = [], [], [], []
             for xv in magnitude_values:
                 vals = [r["elapsed_s"] for r in rows if r[magnitude_key] == xv and r["modality_id"] == s]
@@ -1061,14 +1073,22 @@ def plot_conditions_figure(trials: list[dict], suffix: str = "") -> None:
                 hi_err.append(hi - m)
             if not xs_ser:
                 continue
-            ax.plot(xs_ser, means, "-", color=color, linewidth=1.5, zorder=2)
-            # No outlines anywhere here (unlike modality_figure): fill color
-            # only, on both the marker and its CI line/caps.
+            ax.plot(xs_ser, means, "-", color=color, linewidth=1.5, zorder=z)
+            # errorbar() reuses ONE markeredgewidth for both the data
+            # marker's edge and the cap tick thickness (confirmed by
+            # inspection -- an explicit markeredgewidth always wins over
+            # capthick when both are given), and cap COLOR comes from
+            # ecolor, not markeredgecolor/color -- also confirmed by
+            # inspection (rendered pixel color at a cap matched ecolor, not
+            # the marker's color/markeredgecolor). So: markeredgecolor=
+            # outline colors the marker's own edge, ecolor=outline colors
+            # the CI line + caps, and markeredgewidth=1.8 sets a visible,
+            # shared, non-zero thickness for both the marker edge and caps.
             ax.errorbar(
                 xs_ser, means, yerr=[lo_err, hi_err],
-                fmt=series_markers[s], color=color, ecolor=color,
-                elinewidth=1.8, capsize=5, capthick=1.8, markersize=9,
-                markeredgewidth=0, zorder=3, label=FIGURE_LABELS[s],
+                fmt=series_markers[s], color=color, ecolor=outline,
+                elinewidth=1.8, capsize=5, capthick=1.8, markersize=20,
+                markeredgecolor=outline, markeredgewidth=1.8, zorder=z, label=FIGURE_LABELS[s],
             )
         ax.axhline(90, color="black", linestyle="--", linewidth=1.0, alpha=0.5, zorder=1)
         ax.set_ylim(0, 94.5)  # 5% headroom above the 90s cap, matching plot_modality_figure
