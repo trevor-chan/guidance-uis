@@ -937,10 +937,14 @@ def plot_modality_figure(trials: list[dict], preferences: list[dict], suffix: st
         los.append(lo)
         his.append(hi)
     ax_success.bar(xs, means, width=0.6, color=colors, alpha=1.0, edgecolor=outline_colors, linewidth=1.6, zorder=2)
-    ax_success.errorbar(
-        xs, means, yerr=[[m - lo for m, lo in zip(means, los)], [hi - m for m, hi in zip(means, his)]],
-        fmt="none", ecolor="black", elinewidth=1.8, capsize=5, capthick=1.8, zorder=4,
-    )
+    # One errorbar call per category (not one call across all xs): ecolor
+    # can't take a per-point color list once capsize>0 -- the caps are drawn
+    # as markers sharing a single markeredgecolor, so a list raises.
+    for x, m, lo, hi, outline in zip(xs, means, los, his, outline_colors):
+        ax_success.errorbar(
+            x, m, yerr=[[m - lo], [hi - m]],
+            fmt="none", ecolor=outline, elinewidth=1.8, capsize=5, capthick=1.8, zorder=4,
+        )
     ax_success.set_ylim(0, 1.05)  # 5% headroom above 1.0 so no CI cap gets clipped
     ax_success.set_ylabel("Success rate", fontsize=15)
     ax_success.set_xticks(xs)
@@ -959,10 +963,11 @@ def plot_modality_figure(trials: list[dict], preferences: list[dict], suffix: st
         los.append(lo)
         his.append(hi)
     ax_pref.bar(xs, means, width=0.6, color=colors, alpha=1.0, edgecolor=outline_colors, linewidth=1.6, zorder=2)
-    ax_pref.errorbar(
-        xs, means, yerr=[[m - lo for m, lo in zip(means, los)], [hi - m for m, hi in zip(means, his)]],
-        fmt="none", ecolor="black", elinewidth=1.8, capsize=5, capthick=1.8, zorder=4,
-    )
+    for x, m, lo, hi, outline in zip(xs, means, los, his, outline_colors):
+        ax_pref.errorbar(
+            x, m, yerr=[[m - lo], [hi - m]],
+            fmt="none", ecolor=outline, elinewidth=1.8, capsize=5, capthick=1.8, zorder=4,
+        )
     ax_pref.set_ylim(0, 5.25)  # 5% headroom above 5 so no CI cap gets clipped
     ax_pref.set_yticks([1, 2, 3, 4, 5])
     ax_pref.set_ylabel("Preference (1-5)", fontsize=15)
