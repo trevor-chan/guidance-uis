@@ -24,6 +24,10 @@ trial actually ran with (see apply_threshold_override / derive_match).
 Affects modality_time, noise_time, latency_time, precision_time,
 learning_curve_time, and modality_success; modality_preference is unaffected.
 Plot filenames get a _thr<linear>x<angular> suffix.
+
+modality_figure.png is a combined publication figure (time / success /
+preference stacked panels) and always renders at a hardcoded 10mm/10deg
+re-derived threshold (see FIGURE_THRESHOLD), regardless of --threshold.
 """
 
 from __future__ import annotations
@@ -41,6 +45,7 @@ import matplotlib
 
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
+from matplotlib.lines import Line2D
 
 # -- Palette ------------------------------------------------------------
 #
@@ -104,6 +109,33 @@ COMPARE_MODES = ["M3", "M5"]  # 2D/Patient vs 3D/User: the two-series plots
 COMPARE_LABELS = {"M3": "M3 (2D/Patient)", "M5": "M5 (3D/User)"}
 COMPARE_COLORS = {m: MODALITY_COLORS[m] for m in COMPARE_MODES}
 COMPARE_DOT_COLORS = {m: MODALITY_DOT_COLORS[m] for m in COMPARE_MODES}
+
+# -- Combined manuscript figure (modality_figure.png) -----------------------
+#
+# A dedicated palette/ordering fixed by the manuscript figure spec: dimension
+# grouped left-to-right (1D, then 2D transducer/user/patient, then 3D
+# transducer/user/patient), independent of MODALITY_COLORS/MODALITY_LABELS
+# above (those serve the individual per-metric plots and order by M-number).
+FIGURE_ORDER = ["M1", "M4", "M2", "M3", "M7", "M5", "M6"]
+FIGURE_LABELS = {
+    "M1": "1D",
+    "M4": "2D Transducer",
+    "M2": "2D User",
+    "M3": "2D Patient",
+    "M7": "3D Transducer",
+    "M5": "3D User",
+    "M6": "3D Patient",
+}
+FIGURE_COLORS = {
+    "M1": "#9E9E9E",
+    "M4": "#A8DEC4",
+    "M2": "#52C08A",
+    "M3": "#1B8A5A",
+    "M7": "#AECBEB",
+    "M5": "#5B9BD5",
+    "M6": "#1F5C99",
+}
+FIGURE_THRESHOLD = (10.0, 10.0)  # hardcoded for modality_figure.png, see plot_modality_figure
 
 INK = "#1a1a1a"
 GRID_COLOR = "#e3e3e3"
@@ -445,6 +477,11 @@ def present_modalities(rows: list[dict]) -> list[str]:
     return [m for m in MODALITY_IDS if m in found]
 
 
+def figure_modalities(rows: list[dict]) -> list[str]:
+    found = {r["modality_id"] for r in rows if r["modality_id"]}
+    return [m for m in FIGURE_ORDER if m in found]
+
+
 def apply_category_ticklabels(ax, xs: list[float], labels: list[str], rotate_len: int = 8) -> None:
     """Rotate long category labels ~38° right-aligned so they never overlap;
     short labels stay horizontal."""
@@ -771,6 +808,122 @@ def plot_modality_success(trials: list[dict], suffix: str = "") -> None:
     save(fig, "modality_success.png", suffix)
 
 
+def plot_modality_figure(trials: list[dict], preferences: list[dict], suffix: str = "") -> None:
+    """Combined publication figure: time (box+dots) / success / preference,
+    three panels stacked on a shared, dimension-grouped x-axis. `trials` must
+    already be re-derived at FIGURE_THRESHOLD by the caller (see main()) —
+    this function does not re-derive anything itself, it only renders."""
+    rows = [
+        t
+        for t in trials
+        if t["experiment_condition"] == "modality"
+        and t["elapsed_s"] is not None
+        and t["achieved"] is not None
+    ]
+    if not rows:
+        print("  modality_figure: no data, skipping")
+        return
+    modalities = figure_modalities(rows)
+    xs = list(range(1, len(modalities) + 1))
+    colors = [FIGURE_COLORS[m] for m in modalities]
+
+    fig, (ax_time, ax_success, ax_pref) = plt.subplots(
+        3, 1, figsize=(7, 10), sharex=True,
+        gridspec_kw={"height_ratios": [1.8, 1.0, 1.0]},
+    )
+
+    # -- Panel A: time to match (conventional box-and-whisker + raw dots) --
+    time_data = [[r["elapsed_s"] for r in rows if r["modality_id"] == m] for m in modalities]
+    bp = ax_time.boxplot(
+        time_data, positions=xs, widths=0.6, whis=1.5,
+        patch_artist=True, showfliers=False,
+        medianprops=dict(color="black", linewidth=1.5),
+        boxprops=dict(edgecolor="black", linewidth=1.0),
+        whiskerprops=dict(color="black", linewidth=1.0),
+        capprops=dict(color="black", linewidth=1.0),
+        zorder=2,
+    )
+    for patch, m in zip(bp["boxes"], modalities):
+        patch.set_facecolor(FIGURE_COLORS[m])
+        patch.set_alpha(1.0)
+
+    any_timeout = False
+    for x, m in zip(xs, modalities):
+        matched = [r["elapsed_s"] for r in rows if r["modality_id"] == m and r["achieved"]]
+        timed_out = [r["elapsed_s"] for r in rows if r["modality_id"] == m and not r["achieved"]]
+        if matched:
+            jx = jittered_xs(x, len(matched), 0.12)
+            ax_time.plot(jx, matched, "o", color="black", markersize=3, alpha=0.45, markeredgewidth=0, zorder=3)
+        if timed_out:
+            any_timeout = True
+            jx = jittered_xs(x, len(timed_out), 0.12)
+            ax_time.plot(jx, timed_out, "x", color="black", markersize=5, markeredgewidth=1.3, alpha=0.7, zorder=3)
+    ax_time.set_ylim(bottom=0)
+    if any_timeout:
+        # Timed-out trials cluster right at the data max (the timeout cap),
+        # so a legend placed inside the axes there would overlap that row of
+        # x markers -- headroom above the tallest whisker/marker keeps it clear.
+        top = ax_time.get_ylim()[1]
+        ax_time.set_ylim(0, top * 1.18)
+        timeout_handle = Line2D(
+            [], [], marker="x", color="black", linestyle="None",
+            markersize=6, markeredgewidth=1.3, label="x = timeout",
+        )
+        ax_time.legend(handles=[timeout_handle], loc="upper right")
+    ax_time.set_ylabel("Time to match (s)")
+    style_axes(ax_time)
+
+    # -- Panel B: success rate (bar to mean + Wilson 95% CI) --
+    means, los, his = [], [], []
+    for m in modalities:
+        outcomes = [r["achieved"] for r in rows if r["modality_id"] == m]
+        phat, lo, hi = wilson_ci95(sum(outcomes), len(outcomes))
+        means.append(phat)
+        los.append(lo)
+        his.append(hi)
+    ax_success.bar(xs, means, width=0.6, color=colors, alpha=1.0, edgecolor="black", linewidth=1.0, zorder=2)
+    ax_success.errorbar(
+        xs, means, yerr=[[m - lo for m, lo in zip(means, los)], [hi - m for m, hi in zip(means, his)]],
+        fmt="none", ecolor="black", elinewidth=1.3, capsize=4, capthick=1.3, zorder=3,
+    )
+    ax_success.set_ylim(0, 1.0)
+    ax_success.set_ylabel("Success rate")
+    style_axes(ax_success)
+
+    # -- Panel C: preference (bar to mean + 95% CI) --
+    means, los, his = [], [], []
+    for m in modalities:
+        ratings = [p["rating"] for p in preferences if p["modality_id"] == m]
+        if ratings:
+            mn, lo, hi = mean_ci95(ratings, bounds=PREFERENCE_BOUNDS)
+        else:
+            mn = lo = hi = 1.0
+        means.append(mn)
+        los.append(lo)
+        his.append(hi)
+    ax_pref.bar(xs, means, width=0.6, color=colors, alpha=1.0, edgecolor="black", linewidth=1.0, zorder=2)
+    ax_pref.errorbar(
+        xs, means, yerr=[[m - lo for m, lo in zip(means, los)], [hi - m for m, hi in zip(means, his)]],
+        fmt="none", ecolor="black", elinewidth=1.3, capsize=4, capthick=1.3, zorder=3,
+    )
+    ax_pref.set_ylim(1, 5)
+    ax_pref.set_yticks([1, 2, 3, 4, 5])
+    ax_pref.set_ylabel("Preference (1-5)")
+    style_axes(ax_pref)
+
+    # Only the bottom panel carries x tick labels; alignment across panels
+    # comes from the shared xs / sharex=True above.
+    ax_time.tick_params(axis="x", labelbottom=False)
+    ax_success.tick_params(axis="x", labelbottom=False)
+    ax_pref.set_xticks(xs)
+    ax_pref.set_xticklabels([FIGURE_LABELS[m] for m in modalities], rotation=90)
+
+    linear_mm, angular_deg = FIGURE_THRESHOLD
+    ax_time.set_title(f"Modality comparison (re-derived @ {linear_mm:g}mm / {angular_deg:g}deg threshold)")
+    fig.align_ylabels([ax_time, ax_success, ax_pref])
+    save(fig, "modality_figure.png", suffix)
+
+
 def plot_learning_curve_time(trials: list[dict], suffix: str = "") -> None:
     rows = [
         t
@@ -986,9 +1139,22 @@ def main() -> None:
         preferences = [p for p in preferences if p["participant_id"] and p["participant_id"].lower() in matches]
         suffix = args.participant
 
+    participant_suffix = suffix
+    trajectories = load_trajectories(paths)
+
+    # modality_figure.png always renders at FIGURE_THRESHOLD (10mm/10deg),
+    # independent of any --threshold passed for the other plots below.
+    figure_trials, n_matched_fig, n_timed_out_fig = apply_threshold_override(
+        trials, trajectories, *FIGURE_THRESHOLD
+    )
+    print(
+        f"\nRe-derived modality_figure at {FIGURE_THRESHOLD[0]:g}mm/{FIGURE_THRESHOLD[1]:g}deg, "
+        f"hold {HOLD_S:g}s: {n_matched_fig} newly matched, {n_timed_out_fig} newly "
+        f"timed out (of {len(figure_trials)} trials)."
+    )
+
     if args.threshold:
         linear_mm, angular_deg_thr = args.threshold
-        trajectories = load_trajectories(paths)
         trials, n_matched, n_timed_out = apply_threshold_override(
             trials, trajectories, linear_mm, angular_deg_thr
         )
@@ -1006,6 +1172,7 @@ def main() -> None:
     plot_modality_time(trials, suffix)
     plot_modality_preference(preferences, suffix)
     plot_modality_success(trials, suffix)
+    plot_modality_figure(figure_trials, preferences, participant_suffix)
     plot_learning_curve_time(trials, suffix)
     plot_noise_time(trials, suffix)
     plot_latency_time(trials, suffix)
