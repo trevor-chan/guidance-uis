@@ -36,24 +36,35 @@ not FIGURE_THRESHOLD, and not --threshold either -- so it always reflects
 elapsed_s/achieved exactly as recorded: noise/latency trials under the live
 5mm/5deg rule they actually ran under, precision trials under each trial's
 own per-trial threshold.
+
+modality_summary.csv and conditions_summary.csv are self-documented (source
+folders/files, threshold used, generation date in leading `#` comment lines)
+per-row summary statistics for modality_figure.png / conditions_figure.png,
+written alongside them in analysis/plots/. Both are computed by
+modality_figure_stats() / conditions_figure_stats() -- the SAME functions the
+figures themselves draw from -- so the CSVs and the figures can never
+disagree; nothing is recomputed independently for the CSV.
 """
 
 from __future__ import annotations
 
 import argparse
 import colorsys
+import csv
 import random
 import sqlite3
 import sys
 from collections import defaultdict
+from datetime import datetime
 from math import sqrt
 from pathlib import Path
-from statistics import mean, stdev
+from statistics import mean, median, stdev
 
 import matplotlib
 
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
+import matplotlib.cbook
 from matplotlib.lines import Line2D
 
 # -- Palette ------------------------------------------------------------
@@ -523,6 +534,32 @@ def save(fig, name: str, suffix: str = "", tight: bool = True) -> None:
     print(f"  wrote {out_path}")
 
 
+def write_summary_csv(
+    name: str,
+    meta_lines: list[str],
+    header: list[str],
+    rows: list[list],
+    suffix: str = "",
+) -> None:
+    """Writes a summary CSV next to the figures in PLOTS_DIR, self-documented
+    with `#`-prefixed metadata lines above the header row (source
+    folders/files, threshold used, generated date -- see callers). Sits
+    alongside save() as the CSV counterpart: same directory, same
+    <stem>_<suffix>.<ext> naming."""
+    PLOTS_DIR.mkdir(parents=True, exist_ok=True)
+    if suffix:
+        stem, ext = name.rsplit(".", 1)
+        name = f"{stem}_{suffix}.{ext}"
+    out_path = PLOTS_DIR / name
+    with out_path.open("w", newline="", encoding="utf-8") as handle:
+        for line in meta_lines:
+            handle.write(f"{line}\n")
+        writer = csv.writer(handle)
+        writer.writerow(header)
+        writer.writerows(rows)
+    print(f"  wrote {out_path}")
+
+
 def present_modalities(rows: list[dict]) -> list[str]:
     found = {r["modality_id"] for r in rows if r["modality_id"]}
     return [m for m in MODALITY_IDS if m in found]
@@ -866,12 +903,30 @@ def plot_modality_success(trials: list[dict], suffix: str = "") -> None:
     save(fig, "modality_success.png", suffix)
 
 
-def plot_modality_figure(trials: list[dict], preferences: list[dict], suffix: str = "") -> None:
-    """Combined publication figure: time (box+dots) / success / preference,
-    three panels side by side on a dimension-grouped x-axis (each panel keeps
-    its own x tick labels since they no longer share an axis). `trials` must
-    already be re-derived at FIGURE_THRESHOLD by the caller (see main()) —
-    this function does not re-derive anything itself, it only renders."""
+def modality_figure_stats(trials: list[dict], preferences: list[dict]) -> list[dict]:
+    """Per-modality summary stats for modality_figure.png, in FIGURE_ORDER.
+
+    This is the SINGLE source of the numbers plot_modality_figure draws (box
+    quartiles, success bar+CI, preference bar+CI) -- it also backs
+    modality_summary.csv, so the figure and the CSV can never drift: both
+    read the same dict this function returns, nothing is recomputed
+    independently. `trials` must already be re-derived at FIGURE_THRESHOLD by
+    the caller (see main()); this function does not re-derive anything.
+
+    time_median/time_q1/time_q3 come from matplotlib.cbook.boxplot_stats
+    (whis=1.5) -- the exact function ax.boxplot() itself calls internally,
+    so these are guaranteed to equal the rendered box edges, not a
+    similar-but-different percentile method. time_min/time_max are each
+    modality's true data extremes (every trial is plotted as a dot
+    regardless of whisker range, so those extremes are visible in the
+    figure even though showfliers=False suppresses matplotlib's own flier
+    markers for anything past the whiskers).
+
+    pref_mean/pref_ci95_lo/pref_ci95_hi fall back to 1.0 when a modality has
+    zero ratings, matching plot_modality_figure's own bar-height fallback
+    for that case (a rendering placeholder, not a real statistic) --
+    pref_median/pref_min/pref_max stay None since there's nothing to compute
+    them from."""
     rows = [
         t
         for t in trials
@@ -880,9 +935,104 @@ def plot_modality_figure(trials: list[dict], preferences: list[dict], suffix: st
         and t["achieved"] is not None
     ]
     if not rows:
-        print("  modality_figure: no data, skipping")
-        return
+        return []
     modalities = figure_modalities(rows)
+    stats = []
+    for m in modalities:
+        mrows = [r for r in rows if r["modality_id"] == m]
+        times = [r["elapsed_s"] for r in mrows]
+        achieved_flags = [bool(r["achieved"]) for r in mrows]
+        participants = {r["participant_id"] for r in mrows if r["participant_id"]}
+
+        time_mean, time_lo, time_hi = mean_ci95(times, bounds=TIME_BOUNDS)
+        time_sd = stdev(times) if len(times) > 1 else 0.0
+        box = matplotlib.cbook.boxplot_stats(times, whis=1.5)[0]
+
+        successes = sum(achieved_flags)
+        n_outcomes = len(achieved_flags)
+        phat, succ_lo, succ_hi = wilson_ci95(successes, n_outcomes)
+
+        ratings = [p["rating"] for p in preferences if p["modality_id"] == m]
+        if ratings:
+            pref_mean, pref_lo, pref_hi = mean_ci95(ratings, bounds=PREFERENCE_BOUNDS)
+            pref_sd = stdev(ratings) if len(ratings) > 1 else 0.0
+            pref_median, pref_min, pref_max = median(ratings), min(ratings), max(ratings)
+        else:
+            pref_mean = pref_lo = pref_hi = 1.0  # mirrors the figure's zero-data bar-height fallback
+            pref_sd = pref_median = pref_min = pref_max = None
+
+        stats.append(dict(
+            modality_id=m,
+            modality_label=FIGURE_LABELS[m],
+            times=times,
+            achieved_flags=achieved_flags,
+            n_trials=len(times),
+            n_participants=len(participants),
+            time_mean=time_mean, time_sd=time_sd,
+            time_ci95_lo=time_lo, time_ci95_hi=time_hi,
+            time_median=box["med"], time_q1=box["q1"], time_q3=box["q3"],
+            time_min=min(times), time_max=max(times),
+            n_timeouts=n_outcomes - successes,
+            success_k=successes, success_n=n_outcomes, success_rate=phat,
+            success_ci95_lo=succ_lo, success_ci95_hi=succ_hi,
+            pref_n=len(ratings), pref_mean=pref_mean, pref_sd=pref_sd,
+            pref_ci95_lo=pref_lo, pref_ci95_hi=pref_hi,
+            pref_median=pref_median, pref_min=pref_min, pref_max=pref_max,
+        ))
+    return stats
+
+
+MODALITY_SUMMARY_HEADER = [
+    "modality_label", "modality_id", "n_trials", "n_participants",
+    "time_mean", "time_sd", "time_ci95_lo", "time_ci95_hi",
+    "time_median", "time_q1", "time_q3", "time_min", "time_max", "n_timeouts",
+    "success_k", "success_n", "success_rate", "success_ci95_lo", "success_ci95_hi",
+    "pref_n", "pref_mean", "pref_sd", "pref_ci95_lo", "pref_ci95_hi",
+    "pref_median", "pref_min", "pref_max",
+]
+
+
+def write_modality_summary_csv(stats: list[dict], meta: dict, suffix: str = "") -> None:
+    if not stats:
+        print("  modality_summary: no data, skipping")
+        return
+    paths = meta["paths"]
+    meta_lines = [
+        "# modality_summary.csv -- per-modality summary statistics backing modality_figure.png",
+        "# every value here is read from the exact same computation modality_figure.png draws from",
+        "# (see modality_figure_stats in analysis/make_plots.py); the two can never disagree.",
+        f"# generated: {datetime.now().astimezone().isoformat(timespec='seconds')}",
+        f"# source folder: {meta['folder']}",
+        f"# source .sqlite files ({len(paths)}):",
+        *(f"#   {p}" for p in paths),
+        f"# participant filter: {meta.get('participant') or 'all'}",
+        "# threshold: re-derived @ 10mm/10deg (FIGURE_THRESHOLD), matching modality_figure.png",
+        "# time_median/time_q1/time_q3 are the exact box-plot quartiles rendered in the figure "
+        "(matplotlib boxplot_stats, whis=1.5); time_min/time_max are each modality's raw per-trial extremes",
+    ]
+    rows = [[row[col] for col in MODALITY_SUMMARY_HEADER] for row in stats]
+    write_summary_csv("modality_summary.csv", meta_lines, MODALITY_SUMMARY_HEADER, rows, suffix)
+
+
+def plot_modality_figure(
+    trials: list[dict], preferences: list[dict], suffix: str = "", meta: dict | None = None
+) -> None:
+    """Combined publication figure: time (box+dots) / success / preference,
+    three panels side by side on a dimension-grouped x-axis (each panel keeps
+    its own x tick labels since they no longer share an axis). `trials` must
+    already be re-derived at FIGURE_THRESHOLD by the caller (see main()) —
+    this function does not re-derive anything itself, it only renders.
+
+    `meta`, if given, also writes modality_summary.csv from the exact same
+    stats used to draw (see modality_figure_stats) -- pass
+    {"paths": [...], "folder": Path(...), "participant": str | None}."""
+    stats = modality_figure_stats(trials, preferences)
+    if not stats:
+        print("  modality_figure: no data, skipping")
+        if meta is not None:
+            print("  modality_summary: no data, skipping")
+        return
+    modalities = [row["modality_id"] for row in stats]
     xs = list(range(1, len(modalities) + 1))
     colors = [FIGURE_COLORS[m] for m in modalities]
     outline_colors = [darken_hsl(FIGURE_COLORS[m], 0.40) for m in modalities]
@@ -894,7 +1044,7 @@ def plot_modality_figure(trials: list[dict], preferences: list[dict], suffix: st
     fig, (ax_time, ax_success, ax_pref) = plt.subplots(1, 3, figsize=(15, 5.5))
 
     # -- Panel A: time to match (conventional box-and-whisker + raw dots) --
-    time_data = [[r["elapsed_s"] for r in rows if r["modality_id"] == m] for m in modalities]
+    time_data = [row["times"] for row in stats]
     bp = ax_time.boxplot(
         time_data, positions=xs, widths=0.6, whis=1.5,
         patch_artist=True, showfliers=False,
@@ -918,9 +1068,9 @@ def plot_modality_figure(trials: list[dict], preferences: list[dict], suffix: st
             cap.set_color(outline_colors[i])
 
     any_timeout = False
-    for x, m in zip(xs, modalities):
-        matched = [r["elapsed_s"] for r in rows if r["modality_id"] == m and r["achieved"]]
-        timed_out = [r["elapsed_s"] for r in rows if r["modality_id"] == m and not r["achieved"]]
+    for x, row in zip(xs, stats):
+        matched = [t for t, ok in zip(row["times"], row["achieved_flags"]) if ok]
+        timed_out = [t for t, ok in zip(row["times"], row["achieved_flags"]) if not ok]
         if matched:
             jx = jittered_xs(x, len(matched), 0.12)
             ax_time.plot(jx, matched, "o", color="black", markersize=5, alpha=0.45, markeredgewidth=0, zorder=3)
@@ -959,13 +1109,9 @@ def plot_modality_figure(trials: list[dict], preferences: list[dict], suffix: st
     style_axes(ax_time)
 
     # -- Panel B: success rate (bar to mean + Wilson 95% CI) --
-    means, los, his = [], [], []
-    for m in modalities:
-        outcomes = [r["achieved"] for r in rows if r["modality_id"] == m]
-        phat, lo, hi = wilson_ci95(sum(outcomes), len(outcomes))
-        means.append(phat)
-        los.append(lo)
-        his.append(hi)
+    means = [row["success_rate"] for row in stats]
+    los = [row["success_ci95_lo"] for row in stats]
+    his = [row["success_ci95_hi"] for row in stats]
     ax_success.bar(xs, means, width=0.6, color=colors, alpha=1.0, edgecolor=outline_colors, linewidth=1.6, zorder=2)
     # One errorbar call per category (not one call across all xs): ecolor
     # can't take a per-point color list once capsize>0 -- the caps are drawn
@@ -982,16 +1128,9 @@ def plot_modality_figure(trials: list[dict], preferences: list[dict], suffix: st
     style_axes(ax_success)
 
     # -- Panel C: preference (bar to mean + 95% CI) --
-    means, los, his = [], [], []
-    for m in modalities:
-        ratings = [p["rating"] for p in preferences if p["modality_id"] == m]
-        if ratings:
-            mn, lo, hi = mean_ci95(ratings, bounds=PREFERENCE_BOUNDS)
-        else:
-            mn = lo = hi = 1.0
-        means.append(mn)
-        los.append(lo)
-        his.append(hi)
+    means = [row["pref_mean"] for row in stats]
+    los = [row["pref_ci95_lo"] for row in stats]
+    his = [row["pref_ci95_hi"] for row in stats]
     ax_pref.bar(xs, means, width=0.6, color=colors, alpha=1.0, edgecolor=outline_colors, linewidth=1.6, zorder=2)
     for x, m, lo, hi, outline in zip(xs, means, los, his, outline_colors):
         ax_pref.errorbar(
@@ -1019,8 +1158,120 @@ def plot_modality_figure(trials: list[dict], preferences: list[dict], suffix: st
     fig.subplots_adjust(wspace=0.4)
     save(fig, "modality_figure.png", suffix, tight=False)
 
+    if meta is not None:
+        write_modality_summary_csv(stats, meta, suffix)
 
-def plot_conditions_figure(trials: list[dict], suffix: str = "") -> None:
+
+CONDITIONS_MAGNITUDE_KEYS = {
+    "noise": "noise",
+    "latency": "perceived_ms",
+    "precision": "precision_linear_mm",
+}
+
+
+def conditions_figure_rows(trials: list[dict], experiment: str, magnitude_key: str) -> list[dict]:
+    return [
+        t for t in trials
+        if t["experiment_condition"] == experiment
+        and t["modality_id"] in COMPARE_MODES
+        and t[magnitude_key] is not None
+        and t["elapsed_s"] is not None
+    ]
+
+
+def conditions_figure_stats(trials: list[dict]) -> dict[str, list[dict]]:
+    """Per-(experiment, series, x-value) summary stats for
+    conditions_figure.png, in the figure's own x-order (ascending magnitude;
+    for precision that's tightest-to-loosest threshold since it's sorted by
+    precision_linear_mm ascending).
+
+    This is the SINGLE source of the mean+CI numbers plot_conditions_figure
+    draws -- it also backs conditions_summary.csv, so the two can never
+    drift: both read the same list of dicts this function returns. `trials`
+    must be the RAW, non-threshold-derived, practice+real-pooled trial list
+    (see main() / conditions_figure_search_roots) -- this function does not
+    re-derive or re-pool anything.
+
+    Returns {"noise": [...], "latency": [...], "precision": [...]}; an
+    experiment's list is empty if it has no data (caller decides how to
+    report that)."""
+    result: dict[str, list[dict]] = {}
+    for experiment, magnitude_key in CONDITIONS_MAGNITUDE_KEYS.items():
+        rows = conditions_figure_rows(trials, experiment, magnitude_key)
+        if not rows:
+            result[experiment] = []
+            continue
+        magnitude_values = sorted({r[magnitude_key] for r in rows})
+        entries = []
+        for s in COMPARE_MODES:
+            for xv in magnitude_values:
+                srows = [r for r in rows if r[magnitude_key] == xv and r["modality_id"] == s]
+                if not srows:
+                    continue
+                times = [r["elapsed_s"] for r in srows]
+                achieved_flags = [r["achieved"] for r in srows if r["achieved"] is not None]
+                participants = {r["participant_id"] for r in srows if r["participant_id"]}
+                time_mean, time_lo, time_hi = mean_ci95(times, bounds=TIME_BOUNDS)
+                time_sd = stdev(times) if len(times) > 1 else 0.0
+                box = matplotlib.cbook.boxplot_stats(times, whis=1.5)[0]
+                entries.append(dict(
+                    experiment=experiment,
+                    modality_id=s,
+                    series_label=FIGURE_LABELS[s],
+                    x_value=xv,
+                    x_label=f"{xv:g}",
+                    n_trials=len(times),
+                    n_participants=len(participants),
+                    time_mean=time_mean, time_sd=time_sd,
+                    time_ci95_lo=time_lo, time_ci95_hi=time_hi,
+                    time_median=box["med"], time_q1=box["q1"], time_q3=box["q3"],
+                    time_min=min(times), time_max=max(times),
+                    n_timeouts=sum(1 for ok in achieved_flags if not ok),
+                ))
+        result[experiment] = entries
+    return result
+
+
+CONDITIONS_SUMMARY_HEADER = [
+    "experiment", "series_label", "modality_id", "x_value", "x_label",
+    "n_trials", "n_participants",
+    "time_mean", "time_sd", "time_ci95_lo", "time_ci95_hi",
+    "time_median", "time_q1", "time_q3", "time_min", "time_max", "n_timeouts",
+]
+
+
+def write_conditions_summary_csv(stats: dict[str, list[dict]], meta: dict, suffix: str = "") -> None:
+    missing = [experiment for experiment, entries in stats.items() if not entries]
+    present = [experiment for experiment in CONDITIONS_MAGNITUDE_KEYS if stats.get(experiment)]
+    if not present:
+        print(f"  conditions_summary: no data for {', '.join(missing)}, skipping")
+        return
+    if missing:
+        print(f"  conditions_summary: no data for {', '.join(missing)}, writing remaining experiments only")
+    roots = meta["roots"]
+    paths = meta["paths"]
+    meta_lines = [
+        "# conditions_summary.csv -- per (experiment, series, x-value) summary statistics backing conditions_figure.png",
+        "# every value here is read from the exact same computation conditions_figure.png draws from",
+        "# (see conditions_figure_stats in analysis/make_plots.py); the two can never disagree.",
+        f"# generated: {datetime.now().astimezone().isoformat(timespec='seconds')}",
+        "# data pooled from practice + real bins (never trash):",
+        *([f"#   root: {r}" for r in roots] if roots else ["#   (no practice/real bin found)"]),
+        f"# source .sqlite files ({len(paths)}):",
+        *(f"#   {p}" for p in paths),
+        f"# participant filter: {meta.get('participant') or 'all'}",
+        "# threshold: recorded as-run, NOT re-derived -- noise/latency reflect the live 5mm/5deg matching",
+        "# rule those trials actually ran under; precision reflects each trial's own per-trial threshold",
+    ]
+    rows = [
+        [row[col] for col in CONDITIONS_SUMMARY_HEADER]
+        for experiment in CONDITIONS_MAGNITUDE_KEYS
+        for row in stats.get(experiment, [])
+    ]
+    write_summary_csv("conditions_summary.csv", meta_lines, CONDITIONS_SUMMARY_HEADER, rows, suffix)
+
+
+def plot_conditions_figure(trials: list[dict], suffix: str = "", meta: dict | None = None) -> None:
     """Companion to plot_modality_figure: noise / latency / precision
     time-to-match, each panel comparing M3 (2D/Patient) vs M5 (3D/User) on a
     log-scaled x-axis of the condition's own magnitude. Same size, rcParams,
@@ -1035,35 +1286,17 @@ def plot_conditions_figure(trials: list[dict], suffix: str = "") -> None:
     pointed at, and (b) intentionally skips both FIGURE_THRESHOLD and any
     --threshold override, so noise/latency reflect the live 5mm/5deg rule
     they actually ran under and precision reflects each trial's own
-    per-trial threshold, exactly as recorded."""
-    noise_rows = [
-        t for t in trials
-        if t["experiment_condition"] == "noise"
-        and t["modality_id"] in COMPARE_MODES
-        and t["noise"] is not None
-        and t["elapsed_s"] is not None
-    ]
-    latency_rows = [
-        t for t in trials
-        if t["experiment_condition"] == "latency"
-        and t["modality_id"] in COMPARE_MODES
-        and t["perceived_ms"] is not None
-        and t["elapsed_s"] is not None
-    ]
-    precision_rows = [
-        t for t in trials
-        if t["experiment_condition"] == "precision"
-        and t["modality_id"] in COMPARE_MODES
-        and t["precision_linear_mm"] is not None
-        and t["elapsed_s"] is not None
-    ]
-    missing = [
-        name for name, rows in
-        [("noise", noise_rows), ("latency", latency_rows), ("precision", precision_rows)]
-        if not rows
-    ]
+    per-trial threshold, exactly as recorded.
+
+    `meta`, if given, also writes conditions_summary.csv from the exact same
+    stats used to draw (see conditions_figure_stats) -- pass
+    {"roots": [...], "paths": [...], "participant": str | None}."""
+    stats = conditions_figure_stats(trials)
+    missing = [experiment for experiment, entries in stats.items() if not entries]
     if missing:
         print(f"  conditions_figure: no data for {', '.join(missing)}, skipping")
+        if meta is not None:
+            write_conditions_summary_csv(stats, meta, suffix)
         return
 
     # M3 (2D/Patient) is a complete layer below M5 (3D/User) -- explicit,
@@ -1076,22 +1309,17 @@ def plot_conditions_figure(trials: list[dict], suffix: str = "") -> None:
     series_markers = {"M3": "^", "M5": "s"}
     series_zorder = {"M3": 2, "M5": 3}
 
-    def draw_panel(ax, rows, magnitude_key, magnitude_values):
+    def draw_panel(ax, entries):
         for s in COMPARE_MODES:
+            series_entries = [e for e in entries if e["modality_id"] == s]
+            if not series_entries:
+                continue
             color = FIGURE_COLORS[s]
             z = series_zorder[s]
-            xs_ser, means, lo_err, hi_err = [], [], [], []
-            for xv in magnitude_values:
-                vals = [r["elapsed_s"] for r in rows if r[magnitude_key] == xv and r["modality_id"] == s]
-                if not vals:
-                    continue
-                m, lo, hi = mean_ci95(vals, bounds=TIME_BOUNDS)
-                xs_ser.append(xv)
-                means.append(m)
-                lo_err.append(m - lo)
-                hi_err.append(hi - m)
-            if not xs_ser:
-                continue
+            xs_ser = [e["x_value"] for e in series_entries]
+            means = [e["time_mean"] for e in series_entries]
+            lo_err = [e["time_mean"] - e["time_ci95_lo"] for e in series_entries]
+            hi_err = [e["time_ci95_hi"] - e["time_mean"] for e in series_entries]
             ax.plot(xs_ser, means, "-", color=color, linewidth=1.5, zorder=z)
             # Single light fill color everywhere for this series: no
             # darkened outline (markeredgecolor=color, matching the fill) and
@@ -1114,22 +1342,22 @@ def plot_conditions_figure(trials: list[dict], suffix: str = "") -> None:
 
     fig, (ax_noise, ax_latency, ax_precision) = plt.subplots(1, 3, figsize=(15, 5.5))
 
-    noise_values = sorted({r["noise"] for r in noise_rows})
-    draw_panel(ax_noise, noise_rows, "noise", noise_values)
+    noise_values = sorted({e["x_value"] for e in stats["noise"]})
+    draw_panel(ax_noise, stats["noise"])
     ax_noise.set_xticks(noise_values)
     ax_noise.set_xticklabels([f"{v:g}" for v in noise_values])
     ax_noise.set_xlabel("Noise (mm & deg)", fontsize=15)
 
-    latency_values = sorted({r["perceived_ms"] for r in latency_rows})
-    draw_panel(ax_latency, latency_rows, "perceived_ms", latency_values)
+    latency_values = sorted({e["x_value"] for e in stats["latency"]})
+    draw_panel(ax_latency, stats["latency"])
     ax_latency.set_xticks(latency_values)
     ax_latency.set_xticklabels([f"{v:g}" for v in latency_values])
     ax_latency.set_xlabel("Latency (ms)", fontsize=15)
 
     # Ascending sort already puts the tightest threshold (smallest mm) on the
     # left and loosest (largest mm) on the right -- no reversal needed.
-    precision_values = sorted({r["precision_linear_mm"] for r in precision_rows})
-    draw_panel(ax_precision, precision_rows, "precision_linear_mm", precision_values)
+    precision_values = sorted({e["x_value"] for e in stats["precision"]})
+    draw_panel(ax_precision, stats["precision"])
     ax_precision.set_xticks(precision_values)
     ax_precision.set_xticklabels([f"{v:g}" for v in precision_values])
     ax_precision.set_xlabel("Precision threshold (mm & deg)", fontsize=15)
@@ -1163,6 +1391,9 @@ def plot_conditions_figure(trials: list[dict], suffix: str = "") -> None:
     fig.tight_layout()
     fig.subplots_adjust(wspace=0.4)
     save(fig, "conditions_figure.png", suffix, tight=False)
+
+    if meta is not None:
+        write_conditions_summary_csv(stats, meta, suffix)
 
 
 def plot_learning_curve_time(trials: list[dict], suffix: str = "") -> None:
@@ -1446,12 +1677,18 @@ def main() -> None:
     plot_modality_time(trials, suffix)
     plot_modality_preference(preferences, suffix)
     plot_modality_success(trials, suffix)
-    plot_modality_figure(figure_trials, preferences, participant_suffix)
+    plot_modality_figure(
+        figure_trials, preferences, participant_suffix,
+        meta={"paths": paths, "folder": folder, "participant": args.participant},
+    )
     plot_learning_curve_time(trials, suffix)
     plot_noise_time(trials, suffix)
     plot_latency_time(trials, suffix)
     plot_precision_time(trials, suffix)
-    plot_conditions_figure(conditions_trials, participant_suffix)
+    plot_conditions_figure(
+        conditions_trials, participant_suffix,
+        meta={"roots": conditions_roots, "paths": conditions_paths, "participant": args.participant},
+    )
 
 
 if __name__ == "__main__":
