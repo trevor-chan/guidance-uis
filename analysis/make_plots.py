@@ -1934,22 +1934,24 @@ def plot_learning_curve_averaged(
         completed_mask = achieved_flags
         censored_mask = ~achieved_flags
 
-        # Pooled points shown lightly (jittered, low alpha) -- with many
-        # participants' trials stacked at each integer trial number,
-        # unjittered dots would just overplot into a solid column.
-        for xv in np.unique(trial_nums[completed_mask]):
-            vals = elapsed[completed_mask & (trial_nums == xv)]
-            jx = jittered_xs(float(xv), len(vals), 0.15)
-            ax.plot(jx, vals, "o", color=color, markersize=3.5, alpha=0.25, markeredgewidth=0, zorder=2)
+        # Pooled points shown lightly (low alpha) at their EXACT trial
+        # number -- no horizontal jitter. Many participants' trials stack at
+        # each integer trial number, but overplotting there is truthful
+        # (that's really where the data is); shifting points off their real
+        # x to reduce visual overlap would misalign them against the fitted
+        # curve and axis ticks, which stay at the exact integer trial.
+        if completed_mask.any():
+            ax.plot(
+                trial_nums[completed_mask], elapsed[completed_mask], "o", color=color,
+                markersize=3.5, alpha=0.25, markeredgewidth=0, zorder=2,
+            )
         if censored_mask.any():
             any_timeout = True
-            for xv in np.unique(trial_nums[censored_mask]):
-                n = int(np.sum(censored_mask & (trial_nums == xv)))
-                jx = jittered_xs(float(xv), n, 0.15)
-                ax.plot(
-                    jx, np.full(n, 90.0), "o", color=TIMEOUT_COLOR, markersize=3.5,
-                    alpha=0.35, markeredgewidth=0, zorder=2, clip_on=False,
-                )
+            ax.plot(
+                trial_nums[censored_mask], np.full(int(censored_mask.sum()), 90.0), "o",
+                color=TIMEOUT_COLOR, markersize=3.5, alpha=0.35, markeredgewidth=0,
+                zorder=2, clip_on=False,
+            )
 
         fit = fit_curve_for_mode(trial_nums, achieved_flags, elapsed, censored)
         if fit is None:
