@@ -68,6 +68,10 @@ excluded-cohort pooled figures again, but with x = each participant's own
 cumulative time-on-task (running sum of elapsed_s, including timeouts)
 instead of trial number -- see learning_curve_cumulative_arrays /
 plot_learning_curve_cumulative.
+
+learning_curve_success.png: per-trial success rate (line + Wilson 95% CI
+whisker, no fit, no band), both modes overlaid, same P1/P2 exclusion as the
+other exP1P2 figures -- see plot_learning_curve_success.
 """
 
 from __future__ import annotations
@@ -1983,6 +1987,7 @@ def plot_learning_curve_averaged(
         return
 
     ax.set_xlim(1, trial_max_global)
+    ax.set_xticks([0, 5, 10, 15, 20])
     ax.set_xlabel("Trial", fontsize=15)
     ax.set_ylabel("Time to match (s)", fontsize=15)
     ax.tick_params(axis="both", labelsize=13)
@@ -2175,6 +2180,98 @@ def plot_learning_curve_cumulative(
     ax.legend(handles=legend_handles, loc="best", fontsize=12, numpoints=1)
 
     save(fig, name, suffix)
+
+
+def plot_learning_curve_success(
+    trials: list[dict], suffix: str = "", exclude_participants: list[str] | None = None
+) -> None:
+    """learning_curve_success.png: per-trial success rate, both modes (M3,
+    M5) overlaid -- a thin connecting line through the point estimates plus
+    a Wilson 95% CI whisker (error bar with caps, NOT a shaded band) at each
+    trial. Per (mode, trial) success rate = matched / n_participants who did
+    that trial, via wilson_ci95 -- no curve fit here, just the raw per-trial
+    rate, so (unlike the exp_decay figures) there's no minimum-points
+    threshold to skip a trial: Wilson's interval is well-defined even at
+    n=1.
+
+    Same darkened-outline treatment as the other figures (marker edge AND
+    CI line/caps take darken_hsl(fill, 0.40)) using the SAME single
+    errorbar() call for both marker and whisker -- ecolor drives the CI
+    color, markeredgecolor drives the marker edge, and markeredgewidth must
+    stay non-zero or the caps silently disappear (see plot_conditions_
+    figure's comments for the full explanation of that coupling)."""
+    mode_rows = {
+        m: learning_curve_individual_rows(trials, m, exclude_participants=exclude_participants)
+        for m in COMPARE_MODES
+    }
+    if not any(mode_rows.values()):
+        print("  learning_curve_success: no data, skipping")
+        return
+
+    fig, ax = plt.subplots(figsize=(7.5, 5.5))
+    any_drawn = False
+    trial_max_global = 1
+    for m in COMPARE_MODES:
+        rows = mode_rows[m]
+        if not rows:
+            continue
+        color = FIGURE_COLORS[m]
+        outline = darken_hsl(color, 0.40)
+        by_trial = defaultdict(list)
+        for r in rows:
+            by_trial[r["trial_index"] + 1].append(bool(r["achieved"]))
+        trial_nums = sorted(by_trial)
+        if not trial_nums:
+            continue
+        trial_max_global = max(trial_max_global, max(trial_nums))
+
+        means, los, his = [], [], []
+        for t in trial_nums:
+            outcomes = by_trial[t]
+            phat, lo, hi = wilson_ci95(sum(outcomes), len(outcomes))
+            means.append(phat)
+            los.append(lo)
+            his.append(hi)
+        any_drawn = True
+
+        ax.plot(trial_nums, means, "-", color=color, linewidth=1.8, zorder=2)
+        lo_err = [mn - lo for mn, lo in zip(means, los)]
+        hi_err = [hi - mn for mn, hi in zip(means, his)]
+        ax.errorbar(
+            trial_nums, means, yerr=[lo_err, hi_err],
+            fmt="o", color=color, ecolor=outline,
+            elinewidth=1.8, capsize=5, capthick=1.8, markersize=7,
+            markeredgecolor=outline, markeredgewidth=1.8, zorder=3,
+        )
+
+    if not any_drawn:
+        plt.close(fig)
+        print("  learning_curve_success: no data, skipping")
+        return
+
+    ax.set_ylim(0, 1.05)
+    ax.set_xlim(1, trial_max_global)
+    ax.set_xticks([0, 5, 10, 15, 20])
+    ax.set_xlabel("Trial", fontsize=15)
+    ax.set_ylabel("Success rate", fontsize=15)
+    ax.tick_params(axis="both", labelsize=13)
+    ax.spines["left"].set_linewidth(1.6)
+    ax.spines["bottom"].set_linewidth(1.6)
+    style_axes(ax)
+
+    # Explicit proxy handles (not the errorbar artists) -- clean marker-only
+    # legend, no connecting line through the markers.
+    legend_handles = [
+        Line2D(
+            [], [], marker="o", color=FIGURE_COLORS[m], linestyle="none", markersize=8,
+            markeredgecolor=darken_hsl(FIGURE_COLORS[m], 0.40), markeredgewidth=1.8,
+            label=FIGURE_LABELS[m],
+        )
+        for m in COMPARE_MODES if mode_rows[m]
+    ]
+    ax.legend(handles=legend_handles, loc="best", fontsize=12, numpoints=1)
+
+    save(fig, "learning_curve_success.png", suffix)
 
 
 def plot_noise_time(trials: list[dict], suffix: str = "") -> None:
@@ -2477,6 +2574,7 @@ def main() -> None:
         trials, suffix, censored=True, y_top=lc_cum_y_top,
         exclude_participants=lc_exclude_requested, name_suffix="_exP1P2",
     )
+    plot_learning_curve_success(trials, suffix, exclude_participants=lc_exclude_requested)
     plot_noise_time(trials, suffix)
     plot_latency_time(trials, suffix)
     plot_precision_time(trials, suffix)
