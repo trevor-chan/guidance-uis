@@ -53,6 +53,13 @@ MLE instead (timeouts contribute P(time>90), not a y=90 point) -- see
 fit_naive_exp_decay / fit_censored_exp_decay and
 plot_learning_curve_individual's docstring for why the censored curve comes
 out ABOVE naive at heavily-timed-out trials, not below.
+
+learning_curve_averaged_naive.png / learning_curve_averaged_censored.png pool
+ALL participants' trials into ONE fit per mode (M3, M5), both overlaid on a
+single axes, with a 95% bootstrap confidence band (bootstrap_curve_band,
+N_BOOT=500 resamples) around each fitted curve. Same naive-vs-censored
+semantics as the individual figures above, just pooled instead of per-
+participant -- see plot_learning_curve_averaged.
 """
 
 from __future__ import annotations
@@ -774,6 +781,85 @@ def fit_censored_exp_decay(
         return None
     c, a, b, sigma = result.x
     return float(c), float(a), float(b), float(sigma)
+
+
+def trial_arrays(rows: list[dict]) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """(trial_nums, achieved_flags, elapsed) arrays from a list of trial
+    dicts -- shared by every learning-curve fit/plot path (per-participant
+    and pooled) so there's one place that defines this mapping."""
+    rows = sorted(rows, key=lambda r: r["trial_index"])
+    trial_nums = np.array([r["trial_index"] + 1 for r in rows], dtype=float)
+    achieved_flags = np.array([bool(r["achieved"]) for r in rows])
+    elapsed = np.array([r["elapsed_s"] for r in rows], dtype=float)
+    return trial_nums, achieved_flags, elapsed
+
+
+def fit_curve_for_mode(
+    trial_nums: np.ndarray, achieved_flags: np.ndarray, elapsed: np.ndarray, censored: bool
+) -> tuple[float, ...] | None:
+    """One fit call, naive or censored, shared by every caller (per-
+    participant figures, pooled/averaged figures, bootstrap replicates, and
+    the y_top pre-passes) so the fitting math lives in exactly one place.
+    Returns (c,a,b) for naive, (c,a,b,sigma) for censored, or None if there
+    isn't enough data / the fit doesn't converge. No printing here -- each
+    caller knows its own context (which participant, which mode, which
+    bootstrap replicate) and prints accordingly."""
+    completed_mask = achieved_flags
+    if not censored:
+        if len(trial_nums) < 4:
+            return None
+        y_all = np.where(achieved_flags, elapsed, 90.0)
+        return fit_naive_exp_decay(trial_nums, y_all)
+    n_completed = int(completed_mask.sum())
+    if n_completed < 4:
+        return None
+    naive_init = fit_naive_exp_decay(trial_nums[completed_mask], elapsed[completed_mask])
+    return fit_censored_exp_decay(
+        trial_nums[completed_mask], elapsed[completed_mask],
+        trial_nums[~completed_mask], cap=90.0,
+        init=naive_init if naive_init else None,
+    )
+
+
+N_BOOT = 500  # bootstrap replicates for the averaged learning-curve figures' 95% band
+LEARNING_CURVE_BOOTSTRAP_SEED = 20260810  # fixed seed: reruns over the same data reproduce the same band
+
+
+def bootstrap_curve_band(
+    trial_nums: np.ndarray,
+    achieved_flags: np.ndarray,
+    elapsed: np.ndarray,
+    censored: bool,
+    smooth_trials: np.ndarray,
+    n_boot: int = N_BOOT,
+) -> tuple[np.ndarray | None, np.ndarray | None, int]:
+    """95% bootstrap band for a POOLED exp_decay fit: resample the (trial,
+    achieved, elapsed) triples WITH REPLACEMENT n_boot times, refit the SAME
+    model (fit_curve_for_mode, naive or censored per `censored`) each time,
+    evaluate over smooth_trials, and take the 2.5th/97.5th percentile across
+    converged replicates at each point.
+
+    Replicates that fail to converge (fit_curve_for_mode returns None -- can
+    happen if an unlucky resample drops below the 4-point minimum, or the
+    optimizer just doesn't converge on that resample) are skipped, not
+    counted toward the band. Returns (None, None, n_converged) if fewer than
+    half the replicates converge -- the caller decides whether to still show
+    the point-estimate curve without a band in that case.
+
+    Returns (lo, hi, n_converged)."""
+    n = len(trial_nums)
+    rng = np.random.default_rng(LEARNING_CURVE_BOOTSTRAP_SEED)
+    curves = []
+    for _ in range(n_boot):
+        idx = rng.integers(0, n, size=n)
+        fit = fit_curve_for_mode(trial_nums[idx], achieved_flags[idx], elapsed[idx], censored)
+        if fit is None:
+            continue
+        curves.append(exp_decay(smooth_trials, *fit[:3]))
+    if len(curves) < n_boot * 0.5:
+        return None, None, len(curves)
+    arr = np.array(curves)
+    return np.percentile(arr, 2.5, axis=0), np.percentile(arr, 97.5, axis=0), len(curves)
 
 
 # -- Summary-with-dots primitives -------------------------------------------
@@ -1579,19 +1665,8 @@ def learning_curve_censored_y_top(
         for r in rows:
             by_participant[r["participant_id"]].append(r)
         for prows in by_participant.values():
-            prows = sorted(prows, key=lambda r: r["trial_index"])
-            trial_nums = np.array([r["trial_index"] + 1 for r in prows], dtype=float)
-            achieved_flags = np.array([bool(r["achieved"]) for r in prows])
-            elapsed = np.array([r["elapsed_s"] for r in prows], dtype=float)
-            completed_mask = achieved_flags
-            if int(completed_mask.sum()) < 4:
-                continue
-            naive_init = fit_naive_exp_decay(trial_nums[completed_mask], elapsed[completed_mask])
-            fit = fit_censored_exp_decay(
-                trial_nums[completed_mask], elapsed[completed_mask],
-                trial_nums[~completed_mask], cap=90.0,
-                init=naive_init if naive_init else None,
-            )
+            trial_nums, achieved_flags, elapsed = trial_arrays(prows)
+            fit = fit_curve_for_mode(trial_nums, achieved_flags, elapsed, censored=True)
             if fit is None:
                 continue
             any_curve = True
@@ -1660,10 +1735,7 @@ def plot_learning_curve_individual(
             by_participant[r["participant_id"]].append(r)
 
         for p in sorted(by_participant):
-            prows = sorted(by_participant[p], key=lambda r: r["trial_index"])
-            trial_nums = np.array([r["trial_index"] + 1 for r in prows], dtype=float)
-            achieved_flags = np.array([bool(r["achieved"]) for r in prows])
-            elapsed = np.array([r["elapsed_s"] for r in prows], dtype=float)
+            trial_nums, achieved_flags, elapsed = trial_arrays(by_participant[p])
             color = participant_colors[p]
             completed_mask = achieved_flags
             censored_mask = ~achieved_flags
@@ -1681,35 +1753,24 @@ def plot_learning_curve_individual(
                 )
             any_drawn = True
 
-            if not censored:
-                y_all = np.where(achieved_flags, elapsed, 90.0)
-                if len(y_all) < 4:
-                    print(f"  learning_curve_individual_naive: {p}/{m}: only {len(y_all)} trials, skipping fit")
-                    continue
-                popt = fit_naive_exp_decay(trial_nums, y_all)
-                if popt is None:
-                    print(f"  learning_curve_individual_naive: {p}/{m}: fit did not converge, skipping curve")
-                    continue
-                curve_y = exp_decay(smooth_trials, *popt)
-            else:
-                n_completed = int(completed_mask.sum())
-                if n_completed < 4:
-                    print(
-                        f"  learning_curve_individual_censored: {p}/{m}: only {n_completed} completed "
-                        "trials, skipping fit"
-                    )
-                    continue
-                naive_init = fit_naive_exp_decay(trial_nums[completed_mask], elapsed[completed_mask])
-                fit = fit_censored_exp_decay(
-                    trial_nums[completed_mask], elapsed[completed_mask],
-                    trial_nums[censored_mask], cap=90.0,
-                    init=naive_init if naive_init else None,
-                )
-                if fit is None:
-                    print(f"  learning_curve_individual_censored: {p}/{m}: fit did not converge, skipping curve")
-                    continue
-                curve_y = exp_decay(smooth_trials, *fit[:3])
-
+            fit = fit_curve_for_mode(trial_nums, achieved_flags, elapsed, censored)
+            if fit is None:
+                if not censored:
+                    if len(trial_nums) < 4:
+                        print(f"  learning_curve_individual_naive: {p}/{m}: only {len(trial_nums)} trials, skipping fit")
+                    else:
+                        print(f"  learning_curve_individual_naive: {p}/{m}: fit did not converge, skipping curve")
+                else:
+                    n_completed = int(completed_mask.sum())
+                    if n_completed < 4:
+                        print(
+                            f"  learning_curve_individual_censored: {p}/{m}: only {n_completed} completed "
+                            "trials, skipping fit"
+                        )
+                    else:
+                        print(f"  learning_curve_individual_censored: {p}/{m}: fit did not converge, skipping curve")
+                continue
+            curve_y = exp_decay(smooth_trials, *fit[:3])
             ax.plot(smooth_trials, curve_y, "-", color=color, linewidth=1.8, zorder=2)
 
         ax.set_xlabel("Trial", fontsize=15)
@@ -1739,6 +1800,149 @@ def plot_learning_curve_individual(
     fig.tight_layout()
     fig.subplots_adjust(wspace=0.35, right=0.86)  # right margin reserved for the participant legend
     save(fig, name, suffix, tight=False)
+
+
+def learning_curve_averaged_y_top(trials: list[dict], headroom: float = 1.05) -> float:
+    """Shared y-axis top for BOTH averaged learning-curve figures: 5%
+    headroom above the single highest point reached across both modes'
+    POOLED censored fit -- including the bootstrap band's upper bound, not
+    just the point-estimate curve, so the band itself is never clipped. No
+    ceiling (unlike learning_curve_censored_y_top's per-participant 180 cap
+    -- there's only two pooled curves here, not one per participant, so
+    there's nothing for a single extreme fit to squash).
+
+    Quiet pre-pass (band computed but not printed) -- plot_learning_curve_
+    averaged(censored=True) reruns and prints its own band computation when
+    it renders for real, so this doesn't double up notes. Falls back to 94.5
+    if there's no data or the censored fit doesn't converge for either
+    mode."""
+    peak = 0.0
+    any_curve = False
+    for m in COMPARE_MODES:
+        rows = learning_curve_individual_rows(trials, m)
+        if len(rows) < 4:
+            continue
+        trial_nums, achieved_flags, elapsed = trial_arrays(rows)
+        fit = fit_curve_for_mode(trial_nums, achieved_flags, elapsed, censored=True)
+        if fit is None:
+            continue
+        any_curve = True
+        trial_max = int(trial_nums.max())
+        smooth_trials = np.linspace(1, trial_max, 200)
+        peak = max(peak, float(np.max(exp_decay(smooth_trials, *fit[:3]))))
+        _, hi, _ = bootstrap_curve_band(trial_nums, achieved_flags, elapsed, True, smooth_trials)
+        if hi is not None:
+            peak = max(peak, float(np.max(hi)))
+    return peak * headroom if any_curve else 94.5
+
+
+def plot_learning_curve_averaged(
+    trials: list[dict], suffix: str = "", censored: bool = False, y_top: float = 94.5
+) -> None:
+    """Pooled learning-curve figure: ONE exp_decay fit per mode (M3, M5),
+    pooling every participant's trials together (no per-participant
+    structure -- contrast with plot_learning_curve_individual), both modes
+    overlaid on a single axes with a 95% bootstrap confidence band
+    (bootstrap_curve_band) around each fitted curve. Same fit/model
+    semantics as plot_learning_curve_individual: censored=False ("naive")
+    treats timeouts as y=90 and fits OLS; censored=True fits a right-
+    censored Gaussian MLE (see fit_censored_exp_decay's docstring for why
+    its curve sits ABOVE naive at heavily-timed-out trials).
+
+    `y_top` should be the SAME value (see learning_curve_averaged_y_top) for
+    both the naive and censored calls, so the two figures share an
+    identical y-scale."""
+    name = "learning_curve_averaged_censored.png" if censored else "learning_curve_averaged_naive.png"
+    label = "censored" if censored else "naive"
+    mode_rows = {m: learning_curve_individual_rows(trials, m) for m in COMPARE_MODES}
+    if not any(mode_rows.values()):
+        print(f"  learning_curve_averaged_{label}: no data, skipping")
+        return
+
+    fig, ax = plt.subplots(figsize=(7.5, 5.5))
+    ax.axhline(90, color="black", linestyle="--", linewidth=1.0, alpha=0.5, zorder=1)
+    ax.set_ylim(0, y_top)
+
+    any_drawn = False
+    any_timeout = False
+    trial_max_global = 1
+    for m in COMPARE_MODES:
+        rows = mode_rows[m]
+        color = FIGURE_COLORS[m]
+        if not rows:
+            continue
+        trial_nums, achieved_flags, elapsed = trial_arrays(rows)
+        trial_max = int(trial_nums.max())
+        trial_max_global = max(trial_max_global, trial_max)
+        smooth_trials = np.linspace(1, trial_max, 200)
+        completed_mask = achieved_flags
+        censored_mask = ~achieved_flags
+
+        # Pooled points shown lightly (jittered, low alpha) -- with many
+        # participants' trials stacked at each integer trial number,
+        # unjittered dots would just overplot into a solid column.
+        for xv in np.unique(trial_nums[completed_mask]):
+            vals = elapsed[completed_mask & (trial_nums == xv)]
+            jx = jittered_xs(float(xv), len(vals), 0.15)
+            ax.plot(jx, vals, "o", color=color, markersize=3.5, alpha=0.25, markeredgewidth=0, zorder=2)
+        if censored_mask.any():
+            any_timeout = True
+            for xv in np.unique(trial_nums[censored_mask]):
+                n = int(np.sum(censored_mask & (trial_nums == xv)))
+                jx = jittered_xs(float(xv), n, 0.15)
+                ax.plot(
+                    jx, np.full(n, 90.0), "o", color=TIMEOUT_COLOR, markersize=3.5,
+                    alpha=0.35, markeredgewidth=0, zorder=2, clip_on=False,
+                )
+
+        fit = fit_curve_for_mode(trial_nums, achieved_flags, elapsed, censored)
+        if fit is None:
+            n_completed = int(completed_mask.sum())
+            reason = (
+                f"only {len(trial_nums)} trials" if not censored and len(trial_nums) < 4
+                else f"only {n_completed} completed trials" if censored and n_completed < 4
+                else "fit did not converge"
+            )
+            print(f"  learning_curve_averaged_{label}: {m}: {reason}, skipping curve")
+            continue
+        any_drawn = True
+        curve_y = exp_decay(smooth_trials, *fit[:3])
+
+        lo, hi, n_converged = bootstrap_curve_band(trial_nums, achieved_flags, elapsed, censored, smooth_trials)
+        if lo is None:
+            print(
+                f"  learning_curve_averaged_{label}: {m}: only {n_converged}/{N_BOOT} bootstrap "
+                "replicates converged (<50%), skipping band"
+            )
+        else:
+            ax.fill_between(smooth_trials, lo, hi, color=color, alpha=0.18, linewidth=0, zorder=1)
+
+        ax.plot(smooth_trials, curve_y, "-", color=color, linewidth=2.4, zorder=3)
+
+    if not any_drawn:
+        plt.close(fig)
+        print(f"  learning_curve_averaged_{label}: no data, skipping")
+        return
+
+    ax.set_xlim(1, trial_max_global)
+    ax.set_xlabel("Trial", fontsize=15)
+    ax.set_ylabel("Time to match (s)", fontsize=15)
+    ax.tick_params(axis="both", labelsize=13)
+    ax.spines["left"].set_linewidth(1.6)
+    ax.spines["bottom"].set_linewidth(1.6)
+    style_axes(ax)
+
+    legend_handles = [
+        Line2D([], [], color=FIGURE_COLORS[m], linewidth=2.4, label=FIGURE_LABELS[m])
+        for m in COMPARE_MODES if mode_rows[m]
+    ]
+    if any_timeout:
+        legend_handles.append(
+            Line2D([], [], marker="o", color=TIMEOUT_COLOR, linestyle="none", markersize=7, label="Timeout")
+        )
+    ax.legend(handles=legend_handles, loc="best", fontsize=12, numpoints=1)
+
+    save(fig, name, suffix)
 
 
 def plot_noise_time(trials: list[dict], suffix: str = "") -> None:
@@ -1996,6 +2200,10 @@ def main() -> None:
     print(f"  learning_curve_individual: shared y_top = {learning_curve_y_top:.2f}")
     plot_learning_curve_individual(trials, suffix, censored=False, y_top=learning_curve_y_top)
     plot_learning_curve_individual(trials, suffix, censored=True, y_top=learning_curve_y_top)
+    learning_curve_avg_y_top = learning_curve_averaged_y_top(trials)
+    print(f"  learning_curve_averaged: shared y_top = {learning_curve_avg_y_top:.2f}")
+    plot_learning_curve_averaged(trials, suffix, censored=False, y_top=learning_curve_avg_y_top)
+    plot_learning_curve_averaged(trials, suffix, censored=True, y_top=learning_curve_avg_y_top)
     plot_noise_time(trials, suffix)
     plot_latency_time(trials, suffix)
     plot_precision_time(trials, suffix)
