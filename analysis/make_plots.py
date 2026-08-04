@@ -1881,45 +1881,27 @@ def learning_curve_averaged_y_top(
     return min(y_top, cap) if cap is not None else y_top
 
 
-def plot_learning_curve_averaged(
+def draw_learning_curve_averaged_panel(
+    ax,
     trials: list[dict],
-    suffix: str = "",
-    censored: bool = False,
-    y_top: float = 94.5,
+    censored: bool,
+    y_top: float,
     exclude_participants: list[str] | None = None,
-    name_suffix: str = "",
-) -> None:
-    """Pooled learning-curve figure: ONE exp_decay fit per mode (M3, M5),
-    pooling every participant's trials together (no per-participant
-    structure -- contrast with plot_learning_curve_individual), both modes
-    overlaid on a single axes with a 95% bootstrap confidence band
-    (bootstrap_curve_band) around each fitted curve. Same fit/model
-    semantics as plot_learning_curve_individual: censored=False ("naive")
-    treats timeouts as y=90 and fits OLS; censored=True fits a right-
-    censored Gaussian MLE (see fit_censored_exp_decay's docstring for why
-    its curve sits ABOVE naive at heavily-timed-out trials).
-
-    `y_top` should be the SAME value (see learning_curve_averaged_y_top) for
-    both the naive and censored calls, so the two figures share an
-    identical y-scale.
-
-    exclude_participants drops those participant_ids (exact match, see
-    learning_curve_individual_rows) before pooling -- everything downstream
-    (fit, band, y_top the caller should have computed to match) uses only
-    the remaining participants. `name_suffix` (e.g. "_exP1P2") is appended
-    to the output filename so an excluded-cohort run doesn't overwrite the
-    full-cohort one."""
-    name = f"learning_curve_averaged_{'censored' if censored else 'naive'}{name_suffix}.png"
-    label = f"{'censored' if censored else 'naive'}{name_suffix}"
+    label: str = "averaged",
+) -> bool:
+    """Draws the pooled-fit-per-mode time-to-match panel (points, fitted
+    curve, bootstrap band, axis styling, its own legend) into a caller-
+    supplied `ax` -- the actual rendering logic behind plot_learning_curve_
+    averaged, factored out so plot_learning_curve_figure can compose it into
+    a multi-panel figure without reimplementing the fit/bootstrap math.
+    `label` prefixes this panel's own per-mode skip/no-converge prints (the
+    caller decides what an overall "nothing drawn" verdict means for its own
+    figure/file, so this does NOT print an overall no-data message).
+    Returns True if at least one mode's curve was drawn."""
     mode_rows = {
         m: learning_curve_individual_rows(trials, m, exclude_participants=exclude_participants)
         for m in COMPARE_MODES
     }
-    if not any(mode_rows.values()):
-        print(f"  learning_curve_averaged_{label}: no data, skipping")
-        return
-
-    fig, ax = plt.subplots(figsize=(7.5, 5.5))
     ax.axhline(90, color="black", linestyle="--", linewidth=1.0, alpha=0.5, zorder=1)
     ax.set_ylim(0, y_top)
 
@@ -1965,7 +1947,7 @@ def plot_learning_curve_averaged(
                 else f"only {n_completed} completed trials" if censored and n_completed < 4
                 else "fit did not converge"
             )
-            print(f"  learning_curve_averaged_{label}: {m}: {reason}, skipping curve")
+            print(f"  learning_curve_{label}: {m}: {reason}, skipping curve")
             continue
         any_drawn = True
         curve_y = exp_decay(smooth_trials, *fit[:3])
@@ -1973,7 +1955,7 @@ def plot_learning_curve_averaged(
         lo, hi, n_converged = bootstrap_curve_band(trial_nums, achieved_flags, elapsed, censored, smooth_trials)
         if lo is None:
             print(
-                f"  learning_curve_averaged_{label}: {m}: only {n_converged}/{N_BOOT} bootstrap "
+                f"  learning_curve_{label}: {m}: only {n_converged}/{N_BOOT} bootstrap "
                 "replicates converged (<50%), skipping band"
             )
         else:
@@ -1982,12 +1964,16 @@ def plot_learning_curve_averaged(
         ax.plot(smooth_trials, curve_y, "-", color=color, linewidth=2.4, zorder=3)
 
     if not any_drawn:
-        plt.close(fig)
-        print(f"  learning_curve_averaged_{label}: no data, skipping")
-        return
+        return False
 
+    # set_xticks() BEFORE set_xlim(): matplotlib silently expands the view
+    # to include any tick location outside the current limits, so calling
+    # set_xticks() second would undo the xlim(1, ...) below (confirmed --
+    # this previously left the axis starting at 0 despite the explicit
+    # xlim(1, ...) call that used to come after it). Ticks start at 1, not
+    # 0, for the same reason: the axis must start at trial 1.
+    ax.set_xticks([1, 5, 10, 15, 20])
     ax.set_xlim(1, trial_max_global)
-    ax.set_xticks([0, 5, 10, 15, 20])
     ax.set_xlabel("Trial", fontsize=15)
     ax.set_ylabel("Time to match (s)", fontsize=15)
     ax.tick_params(axis="both", labelsize=13)
@@ -2004,7 +1990,49 @@ def plot_learning_curve_averaged(
             Line2D([], [], marker="o", color=TIMEOUT_COLOR, linestyle="none", markersize=7, label="Timeout")
         )
     ax.legend(handles=legend_handles, loc="best", fontsize=12, numpoints=1)
+    return True
 
+
+def plot_learning_curve_averaged(
+    trials: list[dict],
+    suffix: str = "",
+    censored: bool = False,
+    y_top: float = 94.5,
+    exclude_participants: list[str] | None = None,
+    name_suffix: str = "",
+) -> None:
+    """Pooled learning-curve figure: ONE exp_decay fit per mode (M3, M5),
+    pooling every participant's trials together (no per-participant
+    structure -- contrast with plot_learning_curve_individual), both modes
+    overlaid on a single axes with a 95% bootstrap confidence band
+    (bootstrap_curve_band) around each fitted curve. Same fit/model
+    semantics as plot_learning_curve_individual: censored=False ("naive")
+    treats timeouts as y=90 and fits OLS; censored=True fits a right-
+    censored Gaussian MLE (see fit_censored_exp_decay's docstring for why
+    its curve sits ABOVE naive at heavily-timed-out trials).
+
+    Not called by main() by default (see plot_learning_curve_figure, which
+    composes this same rendering -- via draw_learning_curve_averaged_panel
+    -- into one of its two panels instead of its own standalone file); kept
+    as a standalone entry point for re-enabling this exact output later.
+
+    `y_top` should be the SAME value (see learning_curve_averaged_y_top) for
+    both the naive and censored calls, so the two figures share an
+    identical y-scale.
+
+    exclude_participants drops those participant_ids (exact match, see
+    learning_curve_individual_rows) before pooling -- everything downstream
+    (fit, band, y_top the caller should have computed to match) uses only
+    the remaining participants. `name_suffix` (e.g. "_exP1P2") is appended
+    to the output filename so an excluded-cohort run doesn't overwrite the
+    full-cohort one."""
+    name = f"learning_curve_averaged_{'censored' if censored else 'naive'}{name_suffix}.png"
+    label = f"averaged_{'censored' if censored else 'naive'}{name_suffix}"
+    fig, ax = plt.subplots(figsize=(7.5, 5.5))
+    if not draw_learning_curve_averaged_panel(ax, trials, censored, y_top, exclude_participants, label):
+        plt.close(fig)
+        print(f"  learning_curve_{label}: no data, skipping")
+        return
     save(fig, name, suffix)
 
 
@@ -2182,17 +2210,18 @@ def plot_learning_curve_cumulative(
     save(fig, name, suffix)
 
 
-def plot_learning_curve_success(
-    trials: list[dict], suffix: str = "", exclude_participants: list[str] | None = None
-) -> None:
-    """learning_curve_success.png: per-trial success rate, both modes (M3,
-    M5) overlaid -- a thin connecting line through the point estimates plus
-    a Wilson 95% CI whisker (error bar with caps, NOT a shaded band) at each
-    trial. Per (mode, trial) success rate = matched / n_participants who did
-    that trial, via wilson_ci95 -- no curve fit here, just the raw per-trial
-    rate, so (unlike the exp_decay figures) there's no minimum-points
-    threshold to skip a trial: Wilson's interval is well-defined even at
-    n=1.
+def draw_learning_curve_success_panel(
+    ax, trials: list[dict], exclude_participants: list[str] | None = None
+) -> bool:
+    """Draws the per-trial success-rate panel (line + Wilson 95% CI whisker
+    per mode, axis styling, its own legend) into a caller-supplied `ax` --
+    the actual rendering logic behind plot_learning_curve_success, factored
+    out so plot_learning_curve_figure can compose it into a multi-panel
+    figure without reimplementing the Wilson-interval math. Per (mode,
+    trial) success rate = matched / n_participants who did that trial --
+    no curve fit, so (unlike draw_learning_curve_averaged_panel) there's no
+    minimum-points threshold to skip a trial: Wilson's interval is
+    well-defined even at n=1. Returns True if at least one mode had data.
 
     Same darkened-outline treatment as the other figures (marker edge AND
     CI line/caps take darken_hsl(fill, 0.40)) using the SAME single
@@ -2204,11 +2233,6 @@ def plot_learning_curve_success(
         m: learning_curve_individual_rows(trials, m, exclude_participants=exclude_participants)
         for m in COMPARE_MODES
     }
-    if not any(mode_rows.values()):
-        print("  learning_curve_success: no data, skipping")
-        return
-
-    fig, ax = plt.subplots(figsize=(7.5, 5.5))
     any_drawn = False
     trial_max_global = 1
     for m in COMPARE_MODES:
@@ -2245,13 +2269,15 @@ def plot_learning_curve_success(
         )
 
     if not any_drawn:
-        plt.close(fig)
-        print("  learning_curve_success: no data, skipping")
-        return
+        return False
 
     ax.set_ylim(0, 1.05)
+    # set_xticks() before set_xlim() -- see draw_learning_curve_averaged_
+    # panel's comment; same fix, same reason (ticks including 0 were
+    # silently pulling the left edge back to 0 despite this xlim(1, ...)
+    # call previously coming after it).
+    ax.set_xticks([1, 5, 10, 15, 20])
     ax.set_xlim(1, trial_max_global)
-    ax.set_xticks([0, 5, 10, 15, 20])
     ax.set_xlabel("Trial", fontsize=15)
     ax.set_ylabel("Success rate", fontsize=15)
     ax.tick_params(axis="both", labelsize=13)
@@ -2270,8 +2296,74 @@ def plot_learning_curve_success(
         for m in COMPARE_MODES if mode_rows[m]
     ]
     ax.legend(handles=legend_handles, loc="best", fontsize=12, numpoints=1)
+    return True
 
+
+def plot_learning_curve_success(
+    trials: list[dict], suffix: str = "", exclude_participants: list[str] | None = None
+) -> None:
+    """learning_curve_success.png: per-trial success rate, both modes (M3,
+    M5) overlaid. Not called by main() by default (see
+    plot_learning_curve_figure, which composes this same rendering -- via
+    draw_learning_curve_success_panel -- into one of its two panels instead
+    of its own standalone file); kept as a standalone entry point for
+    re-enabling this exact output later."""
+    fig, ax = plt.subplots(figsize=(7.5, 5.5))
+    if not draw_learning_curve_success_panel(ax, trials, exclude_participants):
+        plt.close(fig)
+        print("  learning_curve_success: no data, skipping")
+        return
     save(fig, "learning_curve_success.png", suffix)
+
+
+def plot_learning_curve_figure(
+    trials: list[dict],
+    suffix: str = "",
+    exclude_participants: list[str] | None = None,
+    y_top: float = 94.5,
+) -> None:
+    """learning_curve_figure.png: the two learning-curve panels main() now
+    actually ships, side by side -- LEFT is the pooled CENSORED time-to-
+    match fit + 95% bootstrap band (draw_learning_curve_averaged_panel,
+    censored=True), RIGHT is the per-trial success rate (draw_learning_
+    curve_success_panel). Both panels always use the excluded cohort passed
+    in via `exclude_participants` (main() passes the P1/P2 pattern-match
+    exclusion -- see learning_curve_individual_rows).
+
+    Composition only: no fit/bootstrap/Wilson math is reimplemented here,
+    both panels are drawn by calling the exact same functions
+    plot_learning_curve_averaged / plot_learning_curve_success call
+    internally. Each panel keeps its OWN self-contained legend (rather than
+    one merged figure-level legend) -- they show different y-quantities
+    with slightly different legend content (the time panel adds a "Timeout"
+    entry when applicable; the success panel never has one), so per-panel
+    reads more clearly than trying to reconcile the two into a single
+    shared legend.
+
+    `y_top` should be learning_curve_averaged_y_top(trials,
+    exclude_participants=..., cap=220.0) -- the same value that would be
+    used for the standalone censored_exP1P2 figure -- so the left panel
+    matches that output exactly."""
+    fig, (ax_time, ax_success) = plt.subplots(1, 2, figsize=(13, 5.5))
+    any_time = draw_learning_curve_averaged_panel(
+        ax_time, trials, censored=True, y_top=y_top,
+        exclude_participants=exclude_participants, label="figure_time",
+    )
+    any_success = draw_learning_curve_success_panel(ax_success, trials, exclude_participants)
+    if not (any_time or any_success):
+        plt.close(fig)
+        print("  learning_curve_figure: no data, skipping")
+        return
+    if not any_time:
+        ax_time.set_visible(False)
+        print("  learning_curve_figure: time panel has no data, left panel left blank")
+    if not any_success:
+        ax_success.set_visible(False)
+        print("  learning_curve_figure: success panel has no data, right panel left blank")
+
+    fig.tight_layout()
+    fig.subplots_adjust(wspace=0.35)
+    save(fig, "learning_curve_figure.png", suffix, tight=False)
 
 
 def plot_noise_time(trials: list[dict], suffix: str = "") -> None:
@@ -2516,27 +2608,22 @@ def main() -> None:
 
     print_summary(trials, participant=args.participant)
 
+    # main() ships exactly three figures: modality_figure.png,
+    # conditions_figure.png, learning_curve_figure.png (+ the first two's
+    # summary CSVs). Every other plot_* function in this file is still
+    # defined and fully working -- see e.g. plot_modality_time,
+    # plot_learning_curve_individual, plot_noise_time -- just not called
+    # here, so any of them can be re-enabled later without reimplementing
+    # anything.
     print("\nPlots:")
-    plot_modality_time(trials, suffix)
-    plot_modality_preference(preferences, suffix)
-    plot_modality_success(trials, suffix)
     plot_modality_figure(
         figure_trials, preferences, participant_suffix,
         meta={"paths": paths, "folder": folder, "participant": args.participant},
     )
-    plot_learning_curve_time(trials, suffix)
-    learning_curve_y_top = learning_curve_censored_y_top(trials)
-    print(f"  learning_curve_individual: shared y_top = {learning_curve_y_top:.2f}")
-    plot_learning_curve_individual(trials, suffix, censored=False, y_top=learning_curve_y_top)
-    plot_learning_curve_individual(trials, suffix, censored=True, y_top=learning_curve_y_top)
-    learning_curve_avg_y_top = learning_curve_averaged_y_top(trials)
-    print(f"  learning_curve_averaged: shared y_top = {learning_curve_avg_y_top:.2f}")
-    plot_learning_curve_averaged(trials, suffix, censored=False, y_top=learning_curve_avg_y_top)
-    plot_learning_curve_averaged(trials, suffix, censored=True, y_top=learning_curve_avg_y_top)
 
-    # Excluded-cohort variant: same pooled/bootstrap pipeline, minus P1 and
-    # P2 -- pattern match (see learning_curve_individual_rows), not exact
-    # string, so e.g. "P1-REAL" is excluded by the token "P1".
+    # learning_curve_figure.png always uses the P1/P2 pattern-matched
+    # exclusion (see learning_curve_individual_rows) -- P1-style tokens
+    # match e.g. "P1-REAL" but not "P10"/"P12".
     lc_ids_present = sorted({
         t["participant_id"] for t in trials
         if t["experiment_condition"] == "learning_curve" and t["participant_id"]
@@ -2551,33 +2638,11 @@ def main() -> None:
     lc_avg_ex_y_top = learning_curve_averaged_y_top(
         trials, exclude_participants=lc_exclude_requested, cap=220.0
     )
-    print(f"  learning_curve_averaged (excl P1,P2): shared y_top = {lc_avg_ex_y_top:.2f}")
-    plot_learning_curve_averaged(
-        trials, suffix, censored=False, y_top=lc_avg_ex_y_top,
-        exclude_participants=lc_exclude_requested, name_suffix="_exP1P2",
-    )
-    plot_learning_curve_averaged(
-        trials, suffix, censored=True, y_top=lc_avg_ex_y_top,
-        exclude_participants=lc_exclude_requested, name_suffix="_exP1P2",
+    print(f"  learning_curve_figure: shared y_top (left panel) = {lc_avg_ex_y_top:.2f}")
+    plot_learning_curve_figure(
+        trials, suffix, exclude_participants=lc_exclude_requested, y_top=lc_avg_ex_y_top,
     )
 
-    # Cumulative-time x-axis, same excluded cohort.
-    lc_cum_y_top = learning_curve_cumulative_y_top(
-        trials, exclude_participants=lc_exclude_requested, cap=220.0
-    )
-    print(f"  learning_curve_cumulative (excl P1,P2): shared y_top = {lc_cum_y_top:.2f}")
-    plot_learning_curve_cumulative(
-        trials, suffix, censored=False, y_top=lc_cum_y_top,
-        exclude_participants=lc_exclude_requested, name_suffix="_exP1P2",
-    )
-    plot_learning_curve_cumulative(
-        trials, suffix, censored=True, y_top=lc_cum_y_top,
-        exclude_participants=lc_exclude_requested, name_suffix="_exP1P2",
-    )
-    plot_learning_curve_success(trials, suffix, exclude_participants=lc_exclude_requested)
-    plot_noise_time(trials, suffix)
-    plot_latency_time(trials, suffix)
-    plot_precision_time(trials, suffix)
     plot_conditions_figure(
         conditions_trials, participant_suffix,
         meta={"roots": conditions_roots, "paths": conditions_paths, "participant": args.participant},
