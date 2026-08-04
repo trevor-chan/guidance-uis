@@ -68,6 +68,7 @@ import argparse
 import colorsys
 import csv
 import random
+import re
 import sqlite3
 import sys
 from collections import defaultdict
@@ -1627,11 +1628,19 @@ def plot_learning_curve_time(trials: list[dict], suffix: str = "") -> None:
 def learning_curve_individual_rows(
     trials: list[dict], modality_id: str, exclude_participants: list[str] | None = None
 ) -> list[dict]:
-    """exclude_participants, if given, matches participant_id EXACTLY
-    (case-sensitive, no normalization) -- see plot_learning_curve_averaged's
-    exP1P2 variants, which report the literal ids they matched so it's
-    obvious whether the exclusion actually landed on real data."""
-    exclude = set(exclude_participants or [])
+    """exclude_participants tokens are matched as a PREFIX pattern, not an
+    exact string: a token T excludes any participant_id that, case-
+    insensitively, equals T or starts with T followed by a non-digit
+    separator -- regex ^T($|[^0-9]) per token. This lets a short token like
+    "P1" exclude real ids such as "P1-REAL" or "P1_pilot" without also
+    matching "P10"/"P11"/... (the character right after "P1" in those is
+    itself a digit, which [^0-9] rejects). See plot_learning_curve_averaged's
+    exP1P2 variants, which report the literal ids that actually matched so
+    it's obvious whether the exclusion landed on real data."""
+    exclude_patterns = [
+        re.compile(rf"^{re.escape(token)}($|[^0-9])", re.IGNORECASE)
+        for token in (exclude_participants or [])
+    ]
     return [
         t for t in trials
         if t["experiment_condition"] == "learning_curve"
@@ -1639,7 +1648,7 @@ def learning_curve_individual_rows(
         and t["elapsed_s"] is not None
         and t["achieved"] is not None
         and t["participant_id"]
-        and t["participant_id"] not in exclude
+        and not any(p.match(t["participant_id"]) for p in exclude_patterns)
     ]
 
 
@@ -2236,15 +2245,19 @@ def main() -> None:
     plot_learning_curve_averaged(trials, suffix, censored=True, y_top=learning_curve_avg_y_top)
 
     # Excluded-cohort variant: same pooled/bootstrap pipeline, minus P1 and
-    # P2 (exact participant_id match -- see learning_curve_individual_rows).
+    # P2 -- pattern match (see learning_curve_individual_rows), not exact
+    # string, so e.g. "P1-REAL" is excluded by the token "P1".
     lc_ids_present = sorted({
         t["participant_id"] for t in trials
         if t["experiment_condition"] == "learning_curve" and t["participant_id"]
     })
     lc_exclude_requested = ["P1", "P2"]
-    lc_exclude_matched = [p for p in lc_exclude_requested if p in lc_ids_present]
+    lc_exclude_patterns = [
+        re.compile(rf"^{re.escape(token)}($|[^0-9])", re.IGNORECASE) for token in lc_exclude_requested
+    ]
+    lc_exclude_matched = [pid for pid in lc_ids_present if any(p.match(pid) for p in lc_exclude_patterns)]
     print(f"  learning_curve participant_ids present: {lc_ids_present or '(none)'}")
-    print(f"  learning_curve exclusion requested={lc_exclude_requested}, matched={lc_exclude_matched or '(none)'}")
+    print(f"  learning_curve exclusion tokens={lc_exclude_requested}, matched ids={lc_exclude_matched or '(none)'}")
     lc_avg_ex_y_top = learning_curve_averaged_y_top(trials, exclude_participants=lc_exclude_requested)
     print(f"  learning_curve_averaged (excl P1,P2): shared y_top = {lc_avg_ex_y_top:.2f}")
     plot_learning_curve_averaged(
