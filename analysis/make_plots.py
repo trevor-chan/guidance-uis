@@ -163,12 +163,12 @@ FIGURE_LABELS = {
 }
 FIGURE_COLORS = {
     "M1": "#C4C4C4",  # 1D, grey
-    "M4": "#A6E5C4",  # 2D Transducer, green (lighter)
-    "M7": "#2E9E63",  # 3D Transducer, green (darker)
+    "M4": "#CDB4E6",  # 2D Transducer, purple (lighter)
+    "M7": "#7A3EB0",  # 3D Transducer, purple (darker)
     "M2": "#A9C9F0",  # 2D User, blue (lighter)
     "M5": "#2E6FCC",  # 3D User, blue (darker)
-    "M3": "#CDB4E6",  # 2D Patient, purple (lighter)
-    "M6": "#7A3EB0",  # 3D Patient, purple (darker)
+    "M3": "#A6E5C4",  # 2D Patient, green (lighter)
+    "M6": "#2E9E63",  # 3D Patient, green (darker)
 }
 FIGURE_THRESHOLD = (10.0, 10.0)  # hardcoded for modality_figure.png, see plot_modality_figure
 TIMEOUT_COLOR = "#E06666"  # muted red, close in visual weight to the black trial dots
