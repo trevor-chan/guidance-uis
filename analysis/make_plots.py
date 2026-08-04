@@ -1624,7 +1624,14 @@ def plot_learning_curve_time(trials: list[dict], suffix: str = "") -> None:
     save(fig, "learning_curve_time.png", suffix)
 
 
-def learning_curve_individual_rows(trials: list[dict], modality_id: str) -> list[dict]:
+def learning_curve_individual_rows(
+    trials: list[dict], modality_id: str, exclude_participants: list[str] | None = None
+) -> list[dict]:
+    """exclude_participants, if given, matches participant_id EXACTLY
+    (case-sensitive, no normalization) -- see plot_learning_curve_averaged's
+    exP1P2 variants, which report the literal ids they matched so it's
+    obvious whether the exclusion actually landed on real data."""
+    exclude = set(exclude_participants or [])
     return [
         t for t in trials
         if t["experiment_condition"] == "learning_curve"
@@ -1632,6 +1639,7 @@ def learning_curve_individual_rows(trials: list[dict], modality_id: str) -> list
         and t["elapsed_s"] is not None
         and t["achieved"] is not None
         and t["participant_id"]
+        and t["participant_id"] not in exclude
     ]
 
 
@@ -1802,7 +1810,9 @@ def plot_learning_curve_individual(
     save(fig, name, suffix, tight=False)
 
 
-def learning_curve_averaged_y_top(trials: list[dict], headroom: float = 1.05) -> float:
+def learning_curve_averaged_y_top(
+    trials: list[dict], headroom: float = 1.05, exclude_participants: list[str] | None = None
+) -> float:
     """Shared y-axis top for BOTH averaged learning-curve figures: 5%
     headroom above the single highest point reached across both modes'
     POOLED censored fit -- including the bootstrap band's upper bound, not
@@ -1810,6 +1820,11 @@ def learning_curve_averaged_y_top(trials: list[dict], headroom: float = 1.05) ->
     ceiling (unlike learning_curve_censored_y_top's per-participant 180 cap
     -- there's only two pooled curves here, not one per participant, so
     there's nothing for a single extreme fit to squash).
+
+    exclude_participants, if given, is passed straight through to
+    learning_curve_individual_rows -- pass the SAME list used for the actual
+    figure render so the y_top matches what's being plotted (see the
+    exP1P2 variants of plot_learning_curve_averaged).
 
     Quiet pre-pass (band computed but not printed) -- plot_learning_curve_
     averaged(censored=True) reruns and prints its own band computation when
@@ -1819,7 +1834,7 @@ def learning_curve_averaged_y_top(trials: list[dict], headroom: float = 1.05) ->
     peak = 0.0
     any_curve = False
     for m in COMPARE_MODES:
-        rows = learning_curve_individual_rows(trials, m)
+        rows = learning_curve_individual_rows(trials, m, exclude_participants=exclude_participants)
         if len(rows) < 4:
             continue
         trial_nums, achieved_flags, elapsed = trial_arrays(rows)
@@ -1837,7 +1852,12 @@ def learning_curve_averaged_y_top(trials: list[dict], headroom: float = 1.05) ->
 
 
 def plot_learning_curve_averaged(
-    trials: list[dict], suffix: str = "", censored: bool = False, y_top: float = 94.5
+    trials: list[dict],
+    suffix: str = "",
+    censored: bool = False,
+    y_top: float = 94.5,
+    exclude_participants: list[str] | None = None,
+    name_suffix: str = "",
 ) -> None:
     """Pooled learning-curve figure: ONE exp_decay fit per mode (M3, M5),
     pooling every participant's trials together (no per-participant
@@ -1851,10 +1871,20 @@ def plot_learning_curve_averaged(
 
     `y_top` should be the SAME value (see learning_curve_averaged_y_top) for
     both the naive and censored calls, so the two figures share an
-    identical y-scale."""
-    name = "learning_curve_averaged_censored.png" if censored else "learning_curve_averaged_naive.png"
-    label = "censored" if censored else "naive"
-    mode_rows = {m: learning_curve_individual_rows(trials, m) for m in COMPARE_MODES}
+    identical y-scale.
+
+    exclude_participants drops those participant_ids (exact match, see
+    learning_curve_individual_rows) before pooling -- everything downstream
+    (fit, band, y_top the caller should have computed to match) uses only
+    the remaining participants. `name_suffix` (e.g. "_exP1P2") is appended
+    to the output filename so an excluded-cohort run doesn't overwrite the
+    full-cohort one."""
+    name = f"learning_curve_averaged_{'censored' if censored else 'naive'}{name_suffix}.png"
+    label = f"{'censored' if censored else 'naive'}{name_suffix}"
+    mode_rows = {
+        m: learning_curve_individual_rows(trials, m, exclude_participants=exclude_participants)
+        for m in COMPARE_MODES
+    }
     if not any(mode_rows.values()):
         print(f"  learning_curve_averaged_{label}: no data, skipping")
         return
@@ -2204,6 +2234,27 @@ def main() -> None:
     print(f"  learning_curve_averaged: shared y_top = {learning_curve_avg_y_top:.2f}")
     plot_learning_curve_averaged(trials, suffix, censored=False, y_top=learning_curve_avg_y_top)
     plot_learning_curve_averaged(trials, suffix, censored=True, y_top=learning_curve_avg_y_top)
+
+    # Excluded-cohort variant: same pooled/bootstrap pipeline, minus P1 and
+    # P2 (exact participant_id match -- see learning_curve_individual_rows).
+    lc_ids_present = sorted({
+        t["participant_id"] for t in trials
+        if t["experiment_condition"] == "learning_curve" and t["participant_id"]
+    })
+    lc_exclude_requested = ["P1", "P2"]
+    lc_exclude_matched = [p for p in lc_exclude_requested if p in lc_ids_present]
+    print(f"  learning_curve participant_ids present: {lc_ids_present or '(none)'}")
+    print(f"  learning_curve exclusion requested={lc_exclude_requested}, matched={lc_exclude_matched or '(none)'}")
+    lc_avg_ex_y_top = learning_curve_averaged_y_top(trials, exclude_participants=lc_exclude_requested)
+    print(f"  learning_curve_averaged (excl P1,P2): shared y_top = {lc_avg_ex_y_top:.2f}")
+    plot_learning_curve_averaged(
+        trials, suffix, censored=False, y_top=lc_avg_ex_y_top,
+        exclude_participants=lc_exclude_requested, name_suffix="_exP1P2",
+    )
+    plot_learning_curve_averaged(
+        trials, suffix, censored=True, y_top=lc_avg_ex_y_top,
+        exclude_participants=lc_exclude_requested, name_suffix="_exP1P2",
+    )
     plot_noise_time(trials, suffix)
     plot_latency_time(trials, suffix)
     plot_precision_time(trials, suffix)
