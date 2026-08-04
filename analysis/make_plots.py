@@ -1820,15 +1820,21 @@ def plot_learning_curve_individual(
 
 
 def learning_curve_averaged_y_top(
-    trials: list[dict], headroom: float = 1.05, exclude_participants: list[str] | None = None
+    trials: list[dict],
+    headroom: float = 1.05,
+    exclude_participants: list[str] | None = None,
+    cap: float | None = None,
 ) -> float:
     """Shared y-axis top for BOTH averaged learning-curve figures: 5%
     headroom above the single highest point reached across both modes'
     POOLED censored fit -- including the bootstrap band's upper bound, not
     just the point-estimate curve, so the band itself is never clipped. No
-    ceiling (unlike learning_curve_censored_y_top's per-participant 180 cap
-    -- there's only two pooled curves here, not one per participant, so
-    there's nothing for a single extreme fit to squash).
+    ceiling by default (unlike learning_curve_censored_y_top's per-
+    participant 180 cap -- there's only two pooled curves here, not one per
+    participant, so there's usually nothing for a single extreme fit to
+    squash); pass `cap` to impose one anyway (used for the exP1P2 variants,
+    capped at 220, since removing two participants can otherwise leave a
+    small remaining cohort whose bootstrap band blows up).
 
     exclude_participants, if given, is passed straight through to
     learning_curve_individual_rows -- pass the SAME list used for the actual
@@ -1857,7 +1863,10 @@ def learning_curve_averaged_y_top(
         _, hi, _ = bootstrap_curve_band(trial_nums, achieved_flags, elapsed, True, smooth_trials)
         if hi is not None:
             peak = max(peak, float(np.max(hi)))
-    return peak * headroom if any_curve else 94.5
+    if not any_curve:
+        return 94.5
+    y_top = peak * headroom
+    return min(y_top, cap) if cap is not None else y_top
 
 
 def plot_learning_curve_averaged(
@@ -2258,7 +2267,9 @@ def main() -> None:
     lc_exclude_matched = [pid for pid in lc_ids_present if any(p.match(pid) for p in lc_exclude_patterns)]
     print(f"  learning_curve participant_ids present: {lc_ids_present or '(none)'}")
     print(f"  learning_curve exclusion tokens={lc_exclude_requested}, matched ids={lc_exclude_matched or '(none)'}")
-    lc_avg_ex_y_top = learning_curve_averaged_y_top(trials, exclude_participants=lc_exclude_requested)
+    lc_avg_ex_y_top = learning_curve_averaged_y_top(
+        trials, exclude_participants=lc_exclude_requested, cap=220.0
+    )
     print(f"  learning_curve_averaged (excl P1,P2): shared y_top = {lc_avg_ex_y_top:.2f}")
     plot_learning_curve_averaged(
         trials, suffix, censored=False, y_top=lc_avg_ex_y_top,
