@@ -59,7 +59,15 @@ ALL participants' trials into ONE fit per mode (M3, M5), both overlaid on a
 single axes, with a 95% bootstrap confidence band (bootstrap_curve_band,
 N_BOOT=500 resamples) around each fitted curve. Same naive-vs-censored
 semantics as the individual figures above, just pooled instead of per-
-participant -- see plot_learning_curve_averaged.
+participant -- see plot_learning_curve_averaged. *_exP1P2 variants of these
+exclude participant_ids matching "P1"/"P2" (pattern match, not exact string
+-- see learning_curve_individual_rows) and cap y_top at 220.
+
+learning_curve_cumulative_naive_exP1P2.png / _censored_exP1P2.png are the
+excluded-cohort pooled figures again, but with x = each participant's own
+cumulative time-on-task (running sum of elapsed_s, including timeouts)
+instead of trial number -- see learning_curve_cumulative_arrays /
+plot_learning_curve_cumulative.
 """
 
 from __future__ import annotations
@@ -1993,6 +2001,180 @@ def plot_learning_curve_averaged(
     save(fig, name, suffix)
 
 
+def learning_curve_cumulative_arrays(
+    trials: list[dict], modality_id: str, exclude_participants: list[str] | None = None
+) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """Pooled (x_cumulative, achieved_flags, elapsed) for ONE mode, where
+    x_cumulative is each participant's own running total of elapsed_s
+    (including timeouts, ~90s each) through and including that trial --
+    ordered by trial_index, each participant's clock starting at 0. E.g. a
+    participant whose first three trials took 60, 65, 25s lands points at
+    x=60, x=125, x=150 (y = 65 and y = 25 for the 2nd/3rd, respectively).
+
+    Row filtering/exclusion is identical to the trial-number figures (same
+    learning_curve_individual_rows call) -- only the x-axis construction
+    differs; fit_curve_for_mode / bootstrap_curve_band are agnostic to
+    what the x-values mean, so no fitting code changes for this variant."""
+    rows = learning_curve_individual_rows(trials, modality_id, exclude_participants=exclude_participants)
+    by_participant = defaultdict(list)
+    for r in rows:
+        by_participant[r["participant_id"]].append(r)
+    x_list, achieved_list, elapsed_list = [], [], []
+    for prows in by_participant.values():
+        prows = sorted(prows, key=lambda r: r["trial_index"])
+        cumulative = 0.0
+        for r in prows:
+            cumulative += r["elapsed_s"]
+            x_list.append(cumulative)
+            achieved_list.append(bool(r["achieved"]))
+            elapsed_list.append(r["elapsed_s"])
+    return (
+        np.array(x_list, dtype=float),
+        np.array(achieved_list, dtype=bool),
+        np.array(elapsed_list, dtype=float),
+    )
+
+
+def learning_curve_cumulative_y_top(
+    trials: list[dict],
+    headroom: float = 1.05,
+    exclude_participants: list[str] | None = None,
+    cap: float | None = None,
+) -> float:
+    """Shared y-axis top for the cumulative-time excluded-cohort figure
+    pair -- same construction as learning_curve_averaged_y_top (5% headroom
+    above the censored fit + bootstrap band peak across both modes), just
+    over the cumulative-time x-axis instead of trial number. See that
+    function's docstring for the cap/fallback semantics."""
+    peak = 0.0
+    any_curve = False
+    for m in COMPARE_MODES:
+        x_cum, achieved_flags, elapsed = learning_curve_cumulative_arrays(trials, m, exclude_participants)
+        if len(x_cum) < 4:
+            continue
+        fit = fit_curve_for_mode(x_cum, achieved_flags, elapsed, censored=True)
+        if fit is None:
+            continue
+        any_curve = True
+        smooth_x = np.linspace(0, float(x_cum.max()), 200)
+        peak = max(peak, float(np.max(exp_decay(smooth_x, *fit[:3]))))
+        _, hi, _ = bootstrap_curve_band(x_cum, achieved_flags, elapsed, True, smooth_x)
+        if hi is not None:
+            peak = max(peak, float(np.max(hi)))
+    if not any_curve:
+        return 94.5
+    y_top = peak * headroom
+    return min(y_top, cap) if cap is not None else y_top
+
+
+def plot_learning_curve_cumulative(
+    trials: list[dict],
+    suffix: str = "",
+    censored: bool = False,
+    y_top: float = 94.5,
+    exclude_participants: list[str] | None = None,
+    name_suffix: str = "",
+) -> None:
+    """Cumulative-time variant of plot_learning_curve_averaged: x is each
+    participant's own running total of time-on-task (see
+    learning_curve_cumulative_arrays) instead of trial number 1..20. Same
+    model, same naive-vs-censored semantics, same bootstrap band -- only the
+    x-axis meaning and its 0-anchored range differ, so this mirrors that
+    function's structure closely rather than sharing code directly (the
+    per-panel bookkeeping -- x_max, smooth grid, legend -- reads more
+    clearly kept separate than parameterized through a shared helper for
+    just two callers)."""
+    name = f"learning_curve_cumulative_{'censored' if censored else 'naive'}{name_suffix}.png"
+    label = f"cumulative_{'censored' if censored else 'naive'}{name_suffix}"
+
+    mode_data = {m: learning_curve_cumulative_arrays(trials, m, exclude_participants) for m in COMPARE_MODES}
+    if all(len(d[0]) == 0 for d in mode_data.values()):
+        print(f"  learning_curve_{label}: no data, skipping")
+        return
+
+    fig, ax = plt.subplots(figsize=(7.5, 5.5))
+    ax.axhline(90, color="black", linestyle="--", linewidth=1.0, alpha=0.5, zorder=1)
+    ax.set_ylim(0, y_top)
+
+    any_drawn = False
+    any_timeout = False
+    x_max_global = 1.0
+    for m in COMPARE_MODES:
+        x_cum, achieved_flags, elapsed = mode_data[m]
+        color = FIGURE_COLORS[m]
+        if len(x_cum) == 0:
+            continue
+        x_max = float(x_cum.max())
+        x_max_global = max(x_max_global, x_max)
+        smooth_x = np.linspace(0, x_max, 200)
+        completed_mask = achieved_flags
+        censored_mask = ~achieved_flags
+
+        # No jitter here (unlike the trial-number figure): x is continuous
+        # cumulative time, points aren't stacked at shared integer x-values.
+        if completed_mask.any():
+            ax.plot(
+                x_cum[completed_mask], elapsed[completed_mask], "o", color=color,
+                markersize=3.5, alpha=0.25, markeredgewidth=0, zorder=2,
+            )
+        if censored_mask.any():
+            any_timeout = True
+            ax.plot(
+                x_cum[censored_mask], np.full(int(censored_mask.sum()), 90.0), "o",
+                color=TIMEOUT_COLOR, markersize=3.5, alpha=0.35, markeredgewidth=0,
+                zorder=2, clip_on=False,
+            )
+
+        fit = fit_curve_for_mode(x_cum, achieved_flags, elapsed, censored)
+        if fit is None:
+            n_completed = int(completed_mask.sum())
+            reason = (
+                f"only {len(x_cum)} points" if not censored and len(x_cum) < 4
+                else f"only {n_completed} completed points" if censored and n_completed < 4
+                else "fit did not converge"
+            )
+            print(f"  learning_curve_{label}: {m}: {reason}, skipping curve")
+            continue
+        any_drawn = True
+        curve_y = exp_decay(smooth_x, *fit[:3])
+
+        lo, hi, n_converged = bootstrap_curve_band(x_cum, achieved_flags, elapsed, censored, smooth_x)
+        if lo is None:
+            print(
+                f"  learning_curve_{label}: {m}: only {n_converged}/{N_BOOT} bootstrap "
+                "replicates converged (<50%), skipping band"
+            )
+        else:
+            ax.fill_between(smooth_x, lo, hi, color=color, alpha=0.18, linewidth=0, zorder=1)
+
+        ax.plot(smooth_x, curve_y, "-", color=color, linewidth=2.4, zorder=3)
+
+    if not any_drawn:
+        plt.close(fig)
+        print(f"  learning_curve_{label}: no data, skipping")
+        return
+
+    ax.set_xlim(0, x_max_global)
+    ax.set_xlabel("Cumulative time on task (s)", fontsize=15)
+    ax.set_ylabel("Time to match (s)", fontsize=15)
+    ax.tick_params(axis="both", labelsize=13)
+    ax.spines["left"].set_linewidth(1.6)
+    ax.spines["bottom"].set_linewidth(1.6)
+    style_axes(ax)
+
+    legend_handles = [
+        Line2D([], [], color=FIGURE_COLORS[m], linewidth=2.4, label=FIGURE_LABELS[m])
+        for m in COMPARE_MODES if len(mode_data[m][0])
+    ]
+    if any_timeout:
+        legend_handles.append(
+            Line2D([], [], marker="o", color=TIMEOUT_COLOR, linestyle="none", markersize=7, label="Timeout")
+        )
+    ax.legend(handles=legend_handles, loc="best", fontsize=12, numpoints=1)
+
+    save(fig, name, suffix)
+
+
 def plot_noise_time(trials: list[dict], suffix: str = "") -> None:
     rows = [
         t
@@ -2277,6 +2459,20 @@ def main() -> None:
     )
     plot_learning_curve_averaged(
         trials, suffix, censored=True, y_top=lc_avg_ex_y_top,
+        exclude_participants=lc_exclude_requested, name_suffix="_exP1P2",
+    )
+
+    # Cumulative-time x-axis, same excluded cohort.
+    lc_cum_y_top = learning_curve_cumulative_y_top(
+        trials, exclude_participants=lc_exclude_requested, cap=220.0
+    )
+    print(f"  learning_curve_cumulative (excl P1,P2): shared y_top = {lc_cum_y_top:.2f}")
+    plot_learning_curve_cumulative(
+        trials, suffix, censored=False, y_top=lc_cum_y_top,
+        exclude_participants=lc_exclude_requested, name_suffix="_exP1P2",
+    )
+    plot_learning_curve_cumulative(
+        trials, suffix, censored=True, y_top=lc_cum_y_top,
         exclude_participants=lc_exclude_requested, name_suffix="_exP1P2",
     )
     plot_noise_time(trials, suffix)
