@@ -1549,7 +1549,56 @@ def learning_curve_individual_rows(trials: list[dict], modality_id: str) -> list
     ]
 
 
-def plot_learning_curve_individual(trials: list[dict], suffix: str = "", censored: bool = False) -> None:
+def learning_curve_censored_y_top(trials: list[dict], headroom: float = 1.05, fallback: float = 94.5) -> float:
+    """Shared y-axis top for BOTH learning-curve figures: 5% headroom above
+    the highest point any participant's CENSORED fitted curve reaches (over
+    trials 1..that panel's max), across both panels -- the censored curves
+    are the ones that can exceed the raw data / the 90s cap, so they set the
+    scale for both plots (see plot_learning_curve_individual, which is
+    passed this value for its y_top so naive and censored render on an
+    identical scale).
+
+    This re-runs the same fit_censored_exp_decay call plot_learning_curve_
+    individual(censored=True) makes per participant, but silently (no skip/
+    no-converge prints) -- that render prints those notes itself when it
+    runs for real, so this pre-pass doesn't double them up. Falls back to
+    `fallback` if there's no data or no participant fit converges (matching
+    the figure's previous hardcoded ceiling)."""
+    peak = 0.0
+    any_curve = False
+    for m in COMPARE_MODES:
+        rows = learning_curve_individual_rows(trials, m)
+        if not rows:
+            continue
+        trial_max = max(r["trial_index"] + 1 for r in rows)
+        smooth_trials = np.linspace(1, trial_max, 200)
+        by_participant = defaultdict(list)
+        for r in rows:
+            by_participant[r["participant_id"]].append(r)
+        for prows in by_participant.values():
+            prows = sorted(prows, key=lambda r: r["trial_index"])
+            trial_nums = np.array([r["trial_index"] + 1 for r in prows], dtype=float)
+            achieved_flags = np.array([bool(r["achieved"]) for r in prows])
+            elapsed = np.array([r["elapsed_s"] for r in prows], dtype=float)
+            completed_mask = achieved_flags
+            if int(completed_mask.sum()) < 4:
+                continue
+            naive_init = fit_naive_exp_decay(trial_nums[completed_mask], elapsed[completed_mask])
+            fit = fit_censored_exp_decay(
+                trial_nums[completed_mask], elapsed[completed_mask],
+                trial_nums[~completed_mask], cap=90.0,
+                init=naive_init if naive_init else None,
+            )
+            if fit is None:
+                continue
+            any_curve = True
+            peak = max(peak, float(np.max(exp_decay(smooth_trials, *fit[:3]))))
+    return peak * headroom if any_curve else fallback
+
+
+def plot_learning_curve_individual(
+    trials: list[dict], suffix: str = "", censored: bool = False, y_top: float = 94.5
+) -> None:
     """Per-participant learning-curve figure: mu(trial) = c + a*exp(-b*trial),
     fit independently per participant per panel (M3, M5) -- no shared/pooled
     structure across participants. Same size/style/no-title conventions as
@@ -1566,7 +1615,13 @@ def plot_learning_curve_individual(trials: list[dict], suffix: str = "", censore
     below: naive's y=90 substitution is a classic Tobit-style downward-biased
     estimator (a timeout means "at least 90", never "exactly 90", so naive
     systematically underestimates by discarding the "could be much higher"
-    information censoring carries)."""
+    information censoring carries).
+
+    `y_top` should be the SAME value (see learning_curve_censored_y_top) for
+    both the naive and censored calls covering the same data, so the two
+    figures share an identical y-scale and are directly comparable -- the
+    dashed y=90 timeout line stays put either way, it just sits lower in the
+    frame when y_top is pulled up by high censored-curve peaks."""
     name = "learning_curve_individual_censored.png" if censored else "learning_curve_individual_naive.png"
     label = "censored" if censored else "naive"
     panel_rows = {m: learning_curve_individual_rows(trials, m) for m in COMPARE_MODES}
@@ -1590,7 +1645,7 @@ def plot_learning_curve_individual(trials: list[dict], suffix: str = "", censore
         rows = panel_rows[m]
         ax.set_title(FIGURE_LABELS[m], fontsize=15)  # only per-panel identification; no figure title
         ax.axhline(90, color="black", linestyle="--", linewidth=1.0, alpha=0.5, zorder=1)
-        ax.set_ylim(0, 94.5)
+        ax.set_ylim(0, y_top)
         if not rows:
             continue
         trial_max = max(r["trial_index"] + 1 for r in rows)
@@ -1934,8 +1989,10 @@ def main() -> None:
         meta={"paths": paths, "folder": folder, "participant": args.participant},
     )
     plot_learning_curve_time(trials, suffix)
-    plot_learning_curve_individual(trials, suffix, censored=False)
-    plot_learning_curve_individual(trials, suffix, censored=True)
+    learning_curve_y_top = learning_curve_censored_y_top(trials)
+    print(f"  learning_curve_individual: shared y_top = {learning_curve_y_top:.2f}")
+    plot_learning_curve_individual(trials, suffix, censored=False, y_top=learning_curve_y_top)
+    plot_learning_curve_individual(trials, suffix, censored=True, y_top=learning_curve_y_top)
     plot_noise_time(trials, suffix)
     plot_latency_time(trials, suffix)
     plot_precision_time(trials, suffix)
