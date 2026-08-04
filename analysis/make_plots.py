@@ -163,11 +163,11 @@ FIGURE_LABELS = {
 }
 FIGURE_COLORS = {
     "M1": "#C4C4C4",  # 1D, grey
-    "M4": "#CDB4E6",  # 2D Transducer, purple (lighter)
+    "M4": "#A87FCE",  # 2D Transducer, purple (mid)
     "M7": "#7A3EB0",  # 3D Transducer, purple (darker)
-    "M2": "#A9C9F0",  # 2D User, blue (lighter)
+    "M2": "#72A1E0",  # 2D User, blue (mid)
     "M5": "#2E6FCC",  # 3D User, blue (darker)
-    "M3": "#A6E5C4",  # 2D Patient, green (lighter)
+    "M3": "#70C598",  # 2D Patient, green (mid)
     "M6": "#2E9E63",  # 3D Patient, green (darker)
 }
 FIGURE_THRESHOLD = (10.0, 10.0)  # hardcoded for modality_figure.png, see plot_modality_figure
