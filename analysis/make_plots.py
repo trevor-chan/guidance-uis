@@ -1549,14 +1549,17 @@ def learning_curve_individual_rows(trials: list[dict], modality_id: str) -> list
     ]
 
 
-def learning_curve_censored_y_top(trials: list[dict], headroom: float = 1.05, fallback: float = 94.5) -> float:
+def learning_curve_censored_y_top(
+    trials: list[dict], headroom: float = 1.05, fallback: float = 94.5, cap: float = 180.0
+) -> float:
     """Shared y-axis top for BOTH learning-curve figures: 5% headroom above
     the highest point any participant's CENSORED fitted curve reaches (over
     trials 1..that panel's max), across both panels -- the censored curves
     are the ones that can exceed the raw data / the 90s cap, so they set the
     scale for both plots (see plot_learning_curve_individual, which is
     passed this value for its y_top so naive and censored render on an
-    identical scale).
+    identical scale). Capped at `cap` so one extreme participant's fit can't
+    squash everyone else's curves down to near-flat lines.
 
     This re-runs the same fit_censored_exp_decay call plot_learning_curve_
     individual(censored=True) makes per participant, but silently (no skip/
@@ -1593,7 +1596,7 @@ def learning_curve_censored_y_top(trials: list[dict], headroom: float = 1.05, fa
                 continue
             any_curve = True
             peak = max(peak, float(np.max(exp_decay(smooth_trials, *fit[:3]))))
-    return peak * headroom if any_curve else fallback
+    return min(peak * headroom, cap) if any_curve else fallback
 
 
 def plot_learning_curve_individual(
