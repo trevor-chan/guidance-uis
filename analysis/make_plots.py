@@ -2006,11 +2006,14 @@ def draw_learning_curve_averaged_panel(
     # Each legend row IS the mode label + its fitted equation, e.g.
     # "3D User      $y = 42.3 + 120\,e^{-0.648x}$" -- no separate "Timeout"
     # entry and no standalone equation text elsewhere on the panel. Labels
-    # are space-padded to a common width so the "$y = ...$" column starts at
-    # the same x in both rows; the legend's font is set to monospace so that
-    # padding actually lines up pixel-for-pixel (a proportional font would
-    # only get it approximately right). The mathtext equation itself still
-    # renders in matplotlib's normal math font regardless of that setting.
+    # are space-padded to a common width so the "$y = ...$" column roughly
+    # lines up between rows. No per-Text "family" override here -- that
+    # would win over mathtext.default="regular"'s "match the surrounding
+    # text" behavior (confirmed: an earlier "family": "monospace" override
+    # made the mathtext render in monospace too, not the figure's sans-
+    # serif). Leaving font selection to the figure-wide rcParams
+    # (font.family="sans-serif") is what makes the equations match the
+    # "2D Patient"/"3D User" labels' typeface.
     present_modes = [m for m in COMPARE_MODES if mode_rows[m]]
     label_width = max((len(FIGURE_LABELS[m]) for m in present_modes), default=0)
     legend_handles = [
@@ -2020,10 +2023,7 @@ def draw_learning_curve_averaged_panel(
         )
         for m in present_modes
     ]
-    ax.legend(
-        handles=legend_handles, loc="upper right", numpoints=1,
-        prop={"family": "monospace", "size": 9},
-    )
+    ax.legend(handles=legend_handles, loc="upper right", numpoints=1, fontsize=9)
     return True
 
 
