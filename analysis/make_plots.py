@@ -1973,7 +1973,7 @@ def draw_learning_curve_averaged_panel(
     # xlim(1, ...) call that used to come after it). Ticks start at 1, not
     # 0, for the same reason: the axis must start at trial 1.
     ax.set_xticks([1, 5, 10, 15, 20])
-    ax.set_xlim(1, trial_max_global)
+    ax.set_xlim(1, trial_max_global + 1)  # a little breathing room past the last trial; no tick added there
     ax.set_xlabel("Trial", fontsize=15)
     ax.set_ylabel("Time to match (s)", fontsize=15)
     ax.tick_params(axis="both", labelsize=13)
