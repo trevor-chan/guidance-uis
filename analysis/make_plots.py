@@ -99,6 +99,13 @@ from matplotlib.lines import Line2D
 from scipy.optimize import curve_fit, minimize
 from scipy.stats import norm
 
+# mathtext.default="regular" makes $...$ mathtext segments (the learning-
+# curve legend equations) render in the surrounding sans-serif font instead
+# of mathtext's own default Computer Modern font, while keeping proper
+# superscript layout for exponents. No other figure in this file uses
+# mathtext, so this has no effect elsewhere.
+matplotlib.rcParams["mathtext.default"] = "regular"
+
 # -- Palette ------------------------------------------------------------
 #
 # Family = data dimensionality: 1D gray, 2D blue, 3D green. Within the 2D and
