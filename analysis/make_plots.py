@@ -2322,48 +2322,34 @@ def plot_learning_curve_figure(
     exclude_participants: list[str] | None = None,
     y_top: float = 94.5,
 ) -> None:
-    """learning_curve_figure.png: the two learning-curve panels main() now
-    actually ships, side by side -- LEFT is the pooled CENSORED time-to-
-    match fit + 95% bootstrap band (draw_learning_curve_averaged_panel,
-    censored=True), RIGHT is the per-trial success rate (draw_learning_
-    curve_success_panel). Both panels always use the excluded cohort passed
-    in via `exclude_participants` (main() passes the P1/P2 pattern-match
-    exclusion -- see learning_curve_individual_rows).
+    """learning_curve_figure.png: single panel -- the pooled CENSORED
+    time-to-match fit + 95% bootstrap band (draw_learning_curve_averaged_
+    panel, censored=True), always on the excluded cohort passed in via
+    `exclude_participants` (main() passes the P1/P2 pattern-match exclusion
+    -- see learning_curve_individual_rows).
 
-    Composition only: no fit/bootstrap/Wilson math is reimplemented here,
-    both panels are drawn by calling the exact same functions
-    plot_learning_curve_averaged / plot_learning_curve_success call
-    internally. Each panel keeps its OWN self-contained legend (rather than
-    one merged figure-level legend) -- they show different y-quantities
-    with slightly different legend content (the time panel adds a "Timeout"
-    entry when applicable; the success panel never has one), so per-panel
-    reads more clearly than trying to reconcile the two into a single
-    shared legend.
+    Composition only: no fit/bootstrap math is reimplemented here, the
+    panel is drawn by calling the exact same function plot_learning_curve_
+    averaged calls internally. Was previously a two-panel figure (this
+    panel plus a success-rate panel via draw_learning_curve_success_panel);
+    that draw function -- and plot_learning_curve_success, which still
+    calls it for its own standalone figure -- are both kept in the file
+    unchanged, just no longer composed in here.
 
     `y_top` should be learning_curve_averaged_y_top(trials,
     exclude_participants=..., cap=220.0) -- the same value that would be
-    used for the standalone censored_exP1P2 figure -- so the left panel
-    matches that output exactly."""
-    fig, (ax_time, ax_success) = plt.subplots(1, 2, figsize=(13, 5.5))
-    any_time = draw_learning_curve_averaged_panel(
-        ax_time, trials, censored=True, y_top=y_top,
+    used for the standalone censored_exP1P2 figure -- so this panel matches
+    that output exactly."""
+    fig, ax = plt.subplots(figsize=(7.5, 5.5))
+    any_drawn = draw_learning_curve_averaged_panel(
+        ax, trials, censored=True, y_top=y_top,
         exclude_participants=exclude_participants, label="figure_time",
     )
-    any_success = draw_learning_curve_success_panel(ax_success, trials, exclude_participants)
-    if not (any_time or any_success):
+    if not any_drawn:
         plt.close(fig)
         print("  learning_curve_figure: no data, skipping")
         return
-    if not any_time:
-        ax_time.set_visible(False)
-        print("  learning_curve_figure: time panel has no data, left panel left blank")
-    if not any_success:
-        ax_success.set_visible(False)
-        print("  learning_curve_figure: success panel has no data, right panel left blank")
-
-    fig.tight_layout()
-    fig.subplots_adjust(wspace=0.35)
-    save(fig, "learning_curve_figure.png", suffix, tight=False)
+    save(fig, "learning_curve_figure.png", suffix)
 
 
 def plot_noise_time(trials: list[dict], suffix: str = "") -> None:
