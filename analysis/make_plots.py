@@ -1908,12 +1908,14 @@ def draw_learning_curve_averaged_panel(
     # M5 (3D User, blue) scatter points are squares, M3 (2D Patient, green)
     # scatter points are triangles -- the same shape convention conditions_
     # figure already uses to tell the two modes apart independent of color.
+    # Triangles render visually smaller than squares at equal markersize, so
+    # M3's size is bumped 1.5x to read as similarly weighted on the panel.
     series_markers = {"M3": "^", "M5": "s"}
+    series_markersize = {"M3": 3.5 * 1.5, "M5": 3.5}
 
     any_drawn = False
-    any_timeout = False
     trial_max_global = 1
-    eq_placements = []  # (color, "y = c + a*e^(-bx)") -- one per mode whose fit converged, in COMPARE_MODES order
+    eq_by_mode = {}  # mode -> "y = c + a*e^(-bx)", one entry per mode whose fit converged
     for m in COMPARE_MODES:
         rows = mode_rows[m]
         color = FIGURE_COLORS[m]
@@ -1935,13 +1937,14 @@ def draw_learning_curve_averaged_panel(
         if completed_mask.any():
             ax.plot(
                 trial_nums[completed_mask], elapsed[completed_mask], series_markers[m], color=color,
-                markersize=3.5, alpha=0.25, markeredgewidth=0, zorder=2,
+                markersize=series_markersize[m], alpha=0.25, markeredgewidth=0, zorder=2,
             )
         if censored_mask.any():
-            any_timeout = True
+            # Same marker shape as this mode's matched points (only color
+            # distinguishes matched vs. timed-out within a mode).
             ax.plot(
-                trial_nums[censored_mask], np.full(int(censored_mask.sum()), 90.0), "o",
-                color=TIMEOUT_COLOR, markersize=3.5, alpha=0.35, markeredgewidth=0,
+                trial_nums[censored_mask], np.full(int(censored_mask.sum()), 90.0), series_markers[m],
+                color=TIMEOUT_COLOR, markersize=series_markersize[m], alpha=0.35, markeredgewidth=0,
                 zorder=2, clip_on=False,
             )
 
@@ -1970,7 +1973,7 @@ def draw_learning_curve_averaged_panel(
             ax.fill_between(smooth_trials, lo, hi, color=color, alpha=0.18, linewidth=0, zorder=1)
 
         ax.plot(smooth_trials, curve_y, "-", color=color, linewidth=2.4, zorder=3)
-        eq_placements.append((color, eq))
+        eq_by_mode[m] = eq
 
     if not any_drawn:
         return False
@@ -1990,32 +1993,20 @@ def draw_learning_curve_averaged_panel(
     ax.spines["bottom"].set_linewidth(1.6)
     style_axes(ax)
 
+    # Each legend row IS the mode label + its fitted equation, e.g.
+    # "3D User   y = 42.3 + 120*e^(-0.648x)" -- no separate "Timeout" entry
+    # and no standalone equation text elsewhere on the panel. matplotlib
+    # legend entries render as one string at one font size, so the combined
+    # label uses the legend's own (smaller) fontsize throughout rather than
+    # mixing two sizes within a row.
     legend_handles = [
-        Line2D([], [], color=FIGURE_COLORS[m], linewidth=2.4, label=FIGURE_LABELS[m])
+        Line2D(
+            [], [], color=FIGURE_COLORS[m], linewidth=2.4,
+            label=f"{FIGURE_LABELS[m]}   {eq_by_mode[m]}",
+        )
         for m in COMPARE_MODES if mode_rows[m]
     ]
-    if any_timeout:
-        # alpha=0.35 matches the actual timeout dots plotted above -- a
-        # fully-opaque swatch would read as a darker red than what's really
-        # on the panel.
-        legend_handles.append(
-            Line2D(
-                [], [], marker="o", color=TIMEOUT_COLOR, linestyle="none",
-                markersize=7, alpha=0.35, label="Timeout",
-            )
-        )
-    ax.legend(handles=legend_handles, loc="upper right", fontsize=12, numpoints=1)
-
-    # Fitted equations stacked just to the LEFT of the upper-right legend
-    # box, in axes-fraction coordinates so placement is stable regardless of
-    # the data's actual y-range/scale -- right-aligned at x=0.63 so the
-    # legend (which starts further right) never overlaps them, and never
-    # over the curves/bands since this corner sits above both.
-    for i, (color, eq) in enumerate(eq_placements):
-        ax.text(
-            0.63, 0.97 - 0.075 * i, eq, transform=ax.transAxes,
-            ha="right", va="top", fontsize=11, fontweight="bold", color=color, zorder=4,
-        )
+    ax.legend(handles=legend_handles, loc="upper right", fontsize=9, numpoints=1)
     return True
 
 
@@ -2363,7 +2354,7 @@ def plot_learning_curve_figure(
     unchanged, just no longer composed in here.
 
     `y_top` should be learning_curve_averaged_y_top(trials,
-    exclude_participants=..., cap=150.0) -- the same value that would be
+    exclude_participants=..., cap=120.0) -- the same value that would be
     used for the standalone censored_exP1P2 figure -- so this panel matches
     that output exactly."""
     fig, ax = plt.subplots(figsize=(7.5, 5.5))
@@ -2648,7 +2639,7 @@ def main() -> None:
     print(f"  learning_curve participant_ids present: {lc_ids_present or '(none)'}")
     print(f"  learning_curve exclusion tokens={lc_exclude_requested}, matched ids={lc_exclude_matched or '(none)'}")
     lc_avg_ex_y_top = learning_curve_averaged_y_top(
-        trials, exclude_participants=lc_exclude_requested, cap=150.0
+        trials, exclude_participants=lc_exclude_requested, cap=120.0
     )
     print(f"  learning_curve_figure: shared y_top (left panel) = {lc_avg_ex_y_top:.2f}")
     plot_learning_curve_figure(
