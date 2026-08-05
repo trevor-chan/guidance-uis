@@ -99,6 +99,12 @@ from matplotlib.lines import Line2D
 from scipy.optimize import curve_fit, minimize
 from scipy.stats import norm
 
+try:
+    from labellines import labelLines
+    HAVE_LABELLINES = True
+except ImportError:
+    HAVE_LABELLINES = False
+
 # -- Palette ------------------------------------------------------------
 #
 # Family = data dimensionality: 1D gray, 2D blue, 3D green. Within the 2D and
@@ -1908,7 +1914,7 @@ def draw_learning_curve_averaged_panel(
     any_drawn = False
     any_timeout = False
     trial_max_global = 1
-    equation_lines = []  # (color, "y = c + a*e^(-bx)") -- one per mode whose fit converged
+    fitted_lines = []  # Line2D handles for labelLines -- one per mode whose fit converged
     for m in COMPARE_MODES:
         rows = mode_rows[m]
         color = FIGURE_COLORS[m]
@@ -1953,7 +1959,7 @@ def draw_learning_curve_averaged_panel(
         any_drawn = True
         curve_y = exp_decay(smooth_trials, *fit[:3])
         c, a, b = fit[0], fit[1], fit[2]
-        equation_lines.append((color, f"y = {c:.3g} + {a:.3g}·e^(−{b:.3g}x)"))
+        eq = f"y = {c:.3g} + {a:.3g}·e^(−{b:.3g}x)"
 
         lo, hi, n_converged = bootstrap_curve_band(trial_nums, achieved_flags, elapsed, censored, smooth_trials)
         if lo is None:
@@ -1964,7 +1970,8 @@ def draw_learning_curve_averaged_panel(
         else:
             ax.fill_between(smooth_trials, lo, hi, color=color, alpha=0.18, linewidth=0, zorder=1)
 
-        ax.plot(smooth_trials, curve_y, "-", color=color, linewidth=2.4, zorder=3)
+        (curve_line,) = ax.plot(smooth_trials, curve_y, "-", color=color, linewidth=2.4, zorder=3, label=eq)
+        fitted_lines.append(curve_line)
 
     if not any_drawn:
         return False
@@ -2000,15 +2007,37 @@ def draw_learning_curve_averaged_panel(
     # emptiest), so nothing changes visually versus before.
     ax.legend(handles=legend_handles, loc="upper right", fontsize=12, numpoints=1)
 
-    # Fitted equation per mode, stacked below the legend in the same
-    # uncrowded upper-right corner, each in its own mode's color. Axes-
-    # fraction coordinates (transform=ax.transAxes) so placement is stable
-    # regardless of the data's actual y-range/scale.
-    for i, (color, eq) in enumerate(equation_lines):
-        ax.text(
-            0.97, 0.80 - 0.065 * i, eq, transform=ax.transAxes,
-            ha="right", va="top", fontsize=11, color=color,
+    # Fitted equation per mode, labeled INLINE on its own curve (rotated to
+    # follow the local slope, colored to match the curve) instead of as
+    # stacked corner text. Passing xvals as a (min, max) range rather than
+    # fixed numbers lets labelLines spread the labels -- one per curve --
+    # evenly across that range while using bipartite matching internally to
+    # keep each label on a x position that actually falls within its own
+    # curve's domain, which is what keeps the two modes' labels from landing
+    # on top of each other when their curves overlap.
+    if fitted_lines and HAVE_LABELLINES:
+        labelLines(
+            fitted_lines,
+            align=True,
+            xvals=(1.5, trial_max_global - 0.5) if trial_max_global > 2 else (1, trial_max_global),
+            outline_color="white",
+            outline_width=3,
+            fontsize=11,
         )
+    elif fitted_lines:
+        # matplotlib-label-lines isn't installed here (e.g. the study rig
+        # hasn't picked up the new requirements.txt entry yet) -- fall back
+        # to the old stacked corner-text annotations rather than crashing,
+        # so a missing optional dependency never takes down the whole run.
+        print(
+            "  learning_curve: matplotlib-label-lines not installed, falling back to "
+            "corner-text equation labels (pip install matplotlib-label-lines for inline labels)"
+        )
+        for i, line in enumerate(fitted_lines):
+            ax.text(
+                0.97, 0.80 - 0.065 * i, line.get_label(), transform=ax.transAxes,
+                ha="right", va="top", fontsize=11, color=line.get_color(),
+            )
     return True
 
 

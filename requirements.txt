@@ -1,4 +1,5 @@
 matplotlib
+matplotlib-label-lines
 numpy
 openvr
 scipy
