@@ -1940,11 +1940,12 @@ def draw_learning_curve_averaged_panel(
                 markersize=series_markersize[m], alpha=0.25, markeredgewidth=0, zorder=2,
             )
         if censored_mask.any():
-            # Same marker shape as this mode's matched points (only color
-            # distinguishes matched vs. timed-out within a mode).
+            # Same marker shape AND color as this mode's matched points --
+            # timeouts are distinguished only by sitting at y=90, not by a
+            # separate color.
             ax.plot(
                 trial_nums[censored_mask], np.full(int(censored_mask.sum()), 90.0), series_markers[m],
-                color=TIMEOUT_COLOR, markersize=series_markersize[m], alpha=0.35, markeredgewidth=0,
+                color=color, markersize=series_markersize[m], alpha=0.35, markeredgewidth=0,
                 zorder=2, clip_on=False,
             )
 
@@ -1961,7 +1962,9 @@ def draw_learning_curve_averaged_panel(
         any_drawn = True
         curve_y = exp_decay(smooth_trials, *fit[:3])
         c, a, b = fit[0], fit[1], fit[2]
-        eq = f"y = {c:.3g} + {a:.3g}·e^(−{b:.3g}x)"
+        # mathtext (enclosing $...$) so "-b*x" renders as a true superscript
+        # on e instead of literal "^(-...)" characters.
+        eq = rf"$y = {c:.3g} + {a:.3g}\,e^{{-{b:.3g}x}}$"
 
         lo, hi, n_converged = bootstrap_curve_band(trial_nums, achieved_flags, elapsed, censored, smooth_trials)
         if lo is None:
@@ -1994,19 +1997,26 @@ def draw_learning_curve_averaged_panel(
     style_axes(ax)
 
     # Each legend row IS the mode label + its fitted equation, e.g.
-    # "3D User   y = 42.3 + 120*e^(-0.648x)" -- no separate "Timeout" entry
-    # and no standalone equation text elsewhere on the panel. matplotlib
-    # legend entries render as one string at one font size, so the combined
-    # label uses the legend's own (smaller) fontsize throughout rather than
-    # mixing two sizes within a row.
+    # "3D User      $y = 42.3 + 120\,e^{-0.648x}$" -- no separate "Timeout"
+    # entry and no standalone equation text elsewhere on the panel. Labels
+    # are space-padded to a common width so the "$y = ...$" column starts at
+    # the same x in both rows; the legend's font is set to monospace so that
+    # padding actually lines up pixel-for-pixel (a proportional font would
+    # only get it approximately right). The mathtext equation itself still
+    # renders in matplotlib's normal math font regardless of that setting.
+    present_modes = [m for m in COMPARE_MODES if mode_rows[m]]
+    label_width = max((len(FIGURE_LABELS[m]) for m in present_modes), default=0)
     legend_handles = [
         Line2D(
             [], [], color=FIGURE_COLORS[m], linewidth=2.4,
-            label=f"{FIGURE_LABELS[m]}   {eq_by_mode[m]}",
+            label=f"{FIGURE_LABELS[m].ljust(label_width)}   {eq_by_mode[m]}",
         )
-        for m in COMPARE_MODES if mode_rows[m]
+        for m in present_modes
     ]
-    ax.legend(handles=legend_handles, loc="upper right", fontsize=9, numpoints=1)
+    ax.legend(
+        handles=legend_handles, loc="upper right", numpoints=1,
+        prop={"family": "monospace", "size": 9},
+    )
     return True
 
 
