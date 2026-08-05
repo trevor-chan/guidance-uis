@@ -99,12 +99,6 @@ from matplotlib.lines import Line2D
 from scipy.optimize import curve_fit, minimize
 from scipy.stats import norm
 
-try:
-    from labellines import labelLines
-    HAVE_LABELLINES = True
-except ImportError:
-    HAVE_LABELLINES = False
-
 # -- Palette ------------------------------------------------------------
 #
 # Family = data dimensionality: 1D gray, 2D blue, 3D green. Within the 2D and
@@ -1911,10 +1905,15 @@ def draw_learning_curve_averaged_panel(
     ax.axhline(90, color="black", linestyle="--", linewidth=1.0, alpha=0.5, zorder=1)
     ax.set_ylim(0, y_top)
 
+    # M5 (3D User, blue) scatter points are squares, M3 (2D Patient, green)
+    # scatter points are triangles -- the same shape convention conditions_
+    # figure already uses to tell the two modes apart independent of color.
+    series_markers = {"M3": "^", "M5": "s"}
+
     any_drawn = False
     any_timeout = False
     trial_max_global = 1
-    fitted_lines = []  # Line2D handles for labelLines -- one per mode whose fit converged
+    eq_placements = []  # (x, y, va, color, "y = c + a*e^(-bx)") -- one per mode whose fit converged
     for m in COMPARE_MODES:
         rows = mode_rows[m]
         color = FIGURE_COLORS[m]
@@ -1935,7 +1934,7 @@ def draw_learning_curve_averaged_panel(
         # curve and axis ticks, which stay at the exact integer trial.
         if completed_mask.any():
             ax.plot(
-                trial_nums[completed_mask], elapsed[completed_mask], "o", color=color,
+                trial_nums[completed_mask], elapsed[completed_mask], series_markers[m], color=color,
                 markersize=3.5, alpha=0.25, markeredgewidth=0, zorder=2,
             )
         if censored_mask.any():
@@ -1967,11 +1966,31 @@ def draw_learning_curve_averaged_panel(
                 f"  learning_curve_{label}: {m}: only {n_converged}/{N_BOOT} bootstrap "
                 "replicates converged (<50%), skipping band"
             )
+            band_hi, band_lo = curve_y, curve_y
         else:
             ax.fill_between(smooth_trials, lo, hi, color=color, alpha=0.18, linewidth=0, zorder=1)
+            band_hi, band_lo = hi, lo
 
-        (curve_line,) = ax.plot(smooth_trials, curve_y, "-", color=color, linewidth=2.4, zorder=3, label=eq)
-        fitted_lines.append(curve_line)
+        ax.plot(smooth_trials, curve_y, "-", color=color, linewidth=2.4, zorder=3)
+
+        # Fixed manual placement instead of inline/corner labeling: blue
+        # (3D User) sits ABOVE its own band's upper edge, green (2D Patient)
+        # sits BELOW its own band's lower edge, each anchored at a different
+        # x fraction of its own curve so the two labels don't stack in the
+        # same column. Anchor x/y are read off the actual fitted curve (and
+        # its band) at that point, not a fixed axes-fraction guess, so the
+        # label tracks wherever the curve/band actually is.
+        pad = 0.035 * y_top
+        anchor_frac = 0.45 if m == "M5" else 0.72
+        anchor_idx = int(round(anchor_frac * (len(smooth_trials) - 1)))
+        anchor_x = smooth_trials[anchor_idx]
+        if m == "M5":
+            anchor_y = min(band_hi[anchor_idx] + pad, y_top - pad)
+            va = "bottom"
+        else:
+            anchor_y = max(band_lo[anchor_idx] - pad, pad)
+            va = "top"
+        eq_placements.append((anchor_x, anchor_y, va, color, eq))
 
     if not any_drawn:
         return False
@@ -1995,49 +2014,31 @@ def draw_learning_curve_averaged_panel(
         Line2D([], [], color=FIGURE_COLORS[m], linewidth=2.4, label=FIGURE_LABELS[m])
         for m in COMPARE_MODES if mode_rows[m]
     ]
-    if any_timeout:
-        legend_handles.append(
-            Line2D([], [], marker="o", color=TIMEOUT_COLOR, linestyle="none", markersize=7, label="Timeout")
+    # "Time to match" swatch matches plot_modality_figure's convention
+    # exactly (black dot, alpha=0.45) so the two figures read consistently.
+    legend_handles.append(
+        Line2D(
+            [], [], marker="o", color="black", linestyle="none",
+            markersize=7, alpha=0.45, label="Time to match",
         )
-    # loc="upper right" explicitly (not "best") so its position is
-    # predictable -- the fitted-equation annotations below are placed
-    # directly underneath it, in the same upper-right corner, and need to
-    # know where it'll be. This is also where "best" already resolved for
-    # this data shape in practice (a decaying curve leaves that corner
-    # emptiest), so nothing changes visually versus before.
+    )
+    if any_timeout:
+        # alpha=0.35 matches the actual timeout dots plotted above -- a
+        # fully-opaque swatch would read as a darker red than what's really
+        # on the panel.
+        legend_handles.append(
+            Line2D(
+                [], [], marker="o", color=TIMEOUT_COLOR, linestyle="none",
+                markersize=7, alpha=0.35, label="Timeout",
+            )
+        )
     ax.legend(handles=legend_handles, loc="upper right", fontsize=12, numpoints=1)
 
-    # Fitted equation per mode, labeled INLINE on its own curve (rotated to
-    # follow the local slope, colored to match the curve) instead of as
-    # stacked corner text. Passing xvals as a (min, max) range rather than
-    # fixed numbers lets labelLines spread the labels -- one per curve --
-    # evenly across that range while using bipartite matching internally to
-    # keep each label on a x position that actually falls within its own
-    # curve's domain, which is what keeps the two modes' labels from landing
-    # on top of each other when their curves overlap.
-    if fitted_lines and HAVE_LABELLINES:
-        labelLines(
-            fitted_lines,
-            align=True,
-            xvals=(1.5, trial_max_global - 0.5) if trial_max_global > 2 else (1, trial_max_global),
-            outline_color="white",
-            outline_width=3,
-            fontsize=11,
-        )
-    elif fitted_lines:
-        # matplotlib-label-lines isn't installed here (e.g. the study rig
-        # hasn't picked up the new requirements.txt entry yet) -- fall back
-        # to the old stacked corner-text annotations rather than crashing,
-        # so a missing optional dependency never takes down the whole run.
-        print(
-            "  learning_curve: matplotlib-label-lines not installed, falling back to "
-            "corner-text equation labels (pip install matplotlib-label-lines for inline labels)"
-        )
-        for i, line in enumerate(fitted_lines):
-            ax.text(
-                0.97, 0.80 - 0.065 * i, line.get_label(), transform=ax.transAxes,
-                ha="right", va="top", fontsize=11, color=line.get_color(),
-            )
+    # Fitted equation per mode, placed at the fixed (x, y) computed above
+    # while iterating that mode's curve: blue above its band, green below
+    # its band, each already clear of the shaded confidence region.
+    for x, y, va, color, eq in eq_placements:
+        ax.text(x, y, eq, ha="center", va=va, fontsize=11, color=color, zorder=4)
     return True
 
 
