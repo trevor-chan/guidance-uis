@@ -2014,14 +2014,6 @@ def draw_learning_curve_averaged_panel(
         Line2D([], [], color=FIGURE_COLORS[m], linewidth=2.4, label=FIGURE_LABELS[m])
         for m in COMPARE_MODES if mode_rows[m]
     ]
-    # "Time to match" swatch matches plot_modality_figure's convention
-    # exactly (black dot, alpha=0.45) so the two figures read consistently.
-    legend_handles.append(
-        Line2D(
-            [], [], marker="o", color="black", linestyle="none",
-            markersize=7, alpha=0.45, label="Time to match",
-        )
-    )
     if any_timeout:
         # alpha=0.35 matches the actual timeout dots plotted above -- a
         # fully-opaque swatch would read as a darker red than what's really
@@ -2038,7 +2030,7 @@ def draw_learning_curve_averaged_panel(
     # while iterating that mode's curve: blue above its band, green below
     # its band, each already clear of the shaded confidence region.
     for x, y, va, color, eq in eq_placements:
-        ax.text(x, y, eq, ha="center", va=va, fontsize=11, color=color, zorder=4)
+        ax.text(x, y, eq, ha="center", va=va, fontsize=11, fontweight="bold", color=color, zorder=4)
     return True
 
 
@@ -2386,7 +2378,7 @@ def plot_learning_curve_figure(
     unchanged, just no longer composed in here.
 
     `y_top` should be learning_curve_averaged_y_top(trials,
-    exclude_participants=..., cap=220.0) -- the same value that would be
+    exclude_participants=..., cap=150.0) -- the same value that would be
     used for the standalone censored_exP1P2 figure -- so this panel matches
     that output exactly."""
     fig, ax = plt.subplots(figsize=(7.5, 5.5))
@@ -2671,7 +2663,7 @@ def main() -> None:
     print(f"  learning_curve participant_ids present: {lc_ids_present or '(none)'}")
     print(f"  learning_curve exclusion tokens={lc_exclude_requested}, matched ids={lc_exclude_matched or '(none)'}")
     lc_avg_ex_y_top = learning_curve_averaged_y_top(
-        trials, exclude_participants=lc_exclude_requested, cap=220.0
+        trials, exclude_participants=lc_exclude_requested, cap=150.0
     )
     print(f"  learning_curve_figure: shared y_top (left panel) = {lc_avg_ex_y_top:.2f}")
     plot_learning_curve_figure(
