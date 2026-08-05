@@ -1908,6 +1908,7 @@ def draw_learning_curve_averaged_panel(
     any_drawn = False
     any_timeout = False
     trial_max_global = 1
+    equation_lines = []  # (color, "y = c + a*e^(-bx)") -- one per mode whose fit converged
     for m in COMPARE_MODES:
         rows = mode_rows[m]
         color = FIGURE_COLORS[m]
@@ -1951,6 +1952,8 @@ def draw_learning_curve_averaged_panel(
             continue
         any_drawn = True
         curve_y = exp_decay(smooth_trials, *fit[:3])
+        c, a, b = fit[0], fit[1], fit[2]
+        equation_lines.append((color, f"y = {c:.3g} + {a:.3g}·e^(−{b:.3g}x)"))
 
         lo, hi, n_converged = bootstrap_curve_band(trial_nums, achieved_flags, elapsed, censored, smooth_trials)
         if lo is None:
@@ -1989,7 +1992,23 @@ def draw_learning_curve_averaged_panel(
         legend_handles.append(
             Line2D([], [], marker="o", color=TIMEOUT_COLOR, linestyle="none", markersize=7, label="Timeout")
         )
-    ax.legend(handles=legend_handles, loc="best", fontsize=12, numpoints=1)
+    # loc="upper right" explicitly (not "best") so its position is
+    # predictable -- the fitted-equation annotations below are placed
+    # directly underneath it, in the same upper-right corner, and need to
+    # know where it'll be. This is also where "best" already resolved for
+    # this data shape in practice (a decaying curve leaves that corner
+    # emptiest), so nothing changes visually versus before.
+    ax.legend(handles=legend_handles, loc="upper right", fontsize=12, numpoints=1)
+
+    # Fitted equation per mode, stacked below the legend in the same
+    # uncrowded upper-right corner, each in its own mode's color. Axes-
+    # fraction coordinates (transform=ax.transAxes) so placement is stable
+    # regardless of the data's actual y-range/scale.
+    for i, (color, eq) in enumerate(equation_lines):
+        ax.text(
+            0.97, 0.80 - 0.065 * i, eq, transform=ax.transAxes,
+            ha="right", va="top", fontsize=11, color=color,
+        )
     return True
 
 
