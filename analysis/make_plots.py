@@ -272,6 +272,20 @@ EXPERIMENTS = ["modality", "noise", "latency", "learning_curve", "precision"]
 # rather than importing study code, so a mirrored constant fits that pattern.
 HOLD_S = 1.0
 
+# Correction for a since-fixed server-side bug (study/activities.py
+# TrialActivity, server.py): the 3-2-1 pre-trial countdown used to run
+# AFTER the trial clock had already started, so every matched trial's
+# recorded elapsed_s in the data collected before that fix includes ~3s of
+# countdown time that was never real time-to-match. Timed-out trials are
+# NOT affected -- a trial that never matched hit the 90s timeout regardless
+# of when the clock nominally started, so its recorded elapsed_s (90, or a
+# hair over) already reflects the true attempt window and must be left
+# alone; subtracting here would incorrectly shrink the timeout cap itself.
+# Set to 0.0 to disable this correction entirely (e.g. once new data
+# collected under the fixed server no longer needs it) -- see load_data()
+# and apply_threshold_override().
+COUNTDOWN_OFFSET_S = 3.0
+
 # Valid ranges for CI clipping (see mean_ci95's bounds param): a t-based CI is
 # a theoretical range and can extend past values the underlying quantity can
 # never actually take. Trial timeout mirrors the 90s cap in index*.html's
@@ -418,6 +432,11 @@ def load_data(paths: list[Path]) -> tuple[list[dict], list[dict]]:
                 for row in connection.execute(trial_query_for(connection)):
                     record = dict(row)
                     record["source_file"] = str(path)
+                    # COUNTDOWN_OFFSET_S correction: only matched trials'
+                    # elapsed_s included the pre-fix countdown lead-in.
+                    # Timed-out trials are left exactly as recorded.
+                    if record["achieved"] and record["elapsed_s"] is not None:
+                        record["elapsed_s"] = max(0.0, record["elapsed_s"] - COUNTDOWN_OFFSET_S)
                     trials.append(record)
                 for row in connection.execute(PREFERENCE_QUERY):
                     record = dict(row)
@@ -528,7 +547,17 @@ def apply_threshold_override(
 ) -> tuple[list[dict], int, int]:
     """Replace elapsed_s/achieved on every trial with threshold-derived
     values. Returns (derived_trials, n_newly_matched, n_newly_timed_out)
-    relative to each trial's recorded outcome."""
+    relative to each trial's recorded outcome.
+
+    match_time comes from derive_match(), which measures directly off
+    trajectory_samples.elapsed_s -- the same pre-fix, countdown-polluted
+    clock trials.elapsed_s was recorded on (see COUNTDOWN_OFFSET_S). It's a
+    fresh computation, not something load_data() already corrected, so any
+    trial that comes out achieved=True here (whether newly matched or still
+    matched) gets the same correction applied to match_time directly. A
+    trial that comes out achieved=False falls back to the input t's own
+    elapsed_s, which load_data() already corrected (or not) based on THAT
+    trial's original recorded outcome -- nothing further to do there."""
     derived: list[dict] = []
     n_newly_matched = 0
     n_newly_timed_out = 0
@@ -536,7 +565,9 @@ def apply_threshold_override(
         samples = trajectories.get((t["run_id"], t["trial_index"]), [])
         match_time, achieved = derive_match(samples, linear_mm, angular_deg_thr)
         record = dict(t)
-        record["elapsed_s"] = match_time if achieved else t["elapsed_s"]
+        record["elapsed_s"] = (
+            max(0.0, match_time - COUNTDOWN_OFFSET_S) if achieved else t["elapsed_s"]
+        )
         record["achieved"] = achieved
         derived.append(record)
         if achieved and not t["achieved"]:
