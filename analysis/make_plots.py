@@ -318,6 +318,24 @@ def conditions_figure_search_roots(folder: Path) -> list[Path]:
     return [p for name in CONDITIONS_FIGURE_BINS if (p := root / name).is_dir()]
 
 
+# expert_modality_figure.png / expert_conditions_figure.png (see main()):
+# full-length runs by two experienced users, saved into the practice bin
+# rather than real (they aren't naive study participants, so they don't
+# belong in the novice-facing figures) -- ELI-PRACTICE and T-PRACTICE only.
+# Explicit filter even though the practice bin currently holds only these
+# two ids, so a future addition to that bin can't silently leak in.
+EXPERT_PARTICIPANT_IDS = ["ELI-PRACTICE", "T-PRACTICE"]
+
+
+def expert_practice_root(folder: Path) -> Path | None:
+    """The practice bin holding the expert-user runs, using the same
+    folder-resolution convention as conditions_figure_search_roots (pass any
+    one bin, or the shared parent, either way lands on the same root)."""
+    root = folder.parent if folder.name in DATA_BIN_NAMES else folder
+    practice = root / "practice"
+    return practice if practice.is_dir() else None
+
+
 # Columns added by idempotent ALTER TABLE migrations (see study/storage.py
 # _ensure_schema) may be absent from .sqlite files predating that migration.
 # This script opens files read-only and must not mutate study data to add
@@ -1228,7 +1246,8 @@ def write_modality_summary_csv(stats: list[dict], meta: dict, suffix: str = "") 
 
 
 def plot_modality_figure(
-    trials: list[dict], preferences: list[dict], suffix: str = "", meta: dict | None = None
+    trials: list[dict], preferences: list[dict], suffix: str = "", meta: dict | None = None,
+    filename: str = "modality_figure.png",
 ) -> None:
     """Combined publication figure: time (box+dots) / success / preference,
     three panels side by side on a dimension-grouped x-axis (each panel keeps
@@ -1238,7 +1257,11 @@ def plot_modality_figure(
 
     `meta`, if given, also writes modality_summary.csv from the exact same
     stats used to draw (see modality_figure_stats) -- pass
-    {"paths": [...], "folder": Path(...), "participant": str | None}."""
+    {"paths": [...], "folder": Path(...), "participant": str | None}.
+
+    `filename` overrides the output PNG name (e.g. the expert_modality_
+    reference figure in main()) -- same styling/layout either way, just a
+    different file on disk."""
     stats = modality_figure_stats(trials, preferences)
     if not stats:
         print("  modality_figure: no data, skipping")
@@ -1369,7 +1392,7 @@ def plot_modality_figure(
     # and silently undo this.
     fig.tight_layout()
     fig.subplots_adjust(wspace=0.4)
-    save(fig, "modality_figure.png", suffix, tight=False)
+    save(fig, filename, suffix, tight=False)
 
     if meta is not None:
         write_modality_summary_csv(stats, meta, suffix)
@@ -1484,7 +1507,10 @@ def write_conditions_summary_csv(stats: dict[str, list[dict]], meta: dict, suffi
     write_summary_csv("conditions_summary.csv", meta_lines, CONDITIONS_SUMMARY_HEADER, rows, suffix)
 
 
-def plot_conditions_figure(trials: list[dict], suffix: str = "", meta: dict | None = None) -> None:
+def plot_conditions_figure(
+    trials: list[dict], suffix: str = "", meta: dict | None = None,
+    filename: str = "conditions_figure.png",
+) -> None:
     """Companion to plot_modality_figure: noise / latency / precision
     time-to-match, each panel comparing M3 (2D/Patient) vs M5 (3D/User) on a
     log-scaled x-axis of the condition's own magnitude. Same size, rcParams,
@@ -1492,18 +1518,23 @@ def plot_conditions_figure(trials: list[dict], suffix: str = "", meta: dict | No
     plot_modality_figure -- see that function's comments for why tight_layout
     and subplots_adjust are sequenced the way they are below.
 
-    `trials` must be the RAW, non-threshold-derived trial list, ALREADY
-    pooled from the practice + real data bins by main() (see
+    `trials` must be the RAW, non-threshold-derived trial list. Normally
+    ALREADY pooled from the practice + real data bins by main() (see
     conditions_figure_search_roots) -- this is the one plot in the file that
     (a) draws from both bins regardless of which single folder the CLI was
     pointed at, and (b) intentionally skips both FIGURE_THRESHOLD and any
     --threshold override, so noise/latency reflect the live 5mm/5deg rule
     they actually ran under and precision reflects each trial's own
-    per-trial threshold, exactly as recorded.
+    per-trial threshold, exactly as recorded. The expert_conditions_figure
+    caller in main() instead passes an already participant-filtered,
+    practice-bin-only list (no real-bin pooling) -- (b) still applies either
+    way, only the source pool differs.
 
     `meta`, if given, also writes conditions_summary.csv from the exact same
     stats used to draw (see conditions_figure_stats) -- pass
-    {"roots": [...], "paths": [...], "participant": str | None}."""
+    {"roots": [...], "paths": [...], "participant": str | None}.
+
+    `filename` overrides the output PNG name, same as plot_modality_figure."""
     stats = conditions_figure_stats(trials)
     missing = [experiment for experiment, entries in stats.items() if not entries]
     if missing:
@@ -1603,7 +1634,7 @@ def plot_conditions_figure(trials: list[dict], suffix: str = "", meta: dict | No
     # plot_modality_figure, so the two figures share consistent proportions.
     fig.tight_layout()
     fig.subplots_adjust(wspace=0.4)
-    save(fig, "conditions_figure.png", suffix, tight=False)
+    save(fig, filename, suffix, tight=False)
 
     if meta is not None:
         write_conditions_summary_csv(stats, meta, suffix)
@@ -1957,14 +1988,38 @@ def draw_learning_curve_averaged_panel(
             )
 
         fit = fit_curve_for_mode(trial_nums, achieved_flags, elapsed, censored)
-        if fit is None:
+        # a (amplitude) ~0 means the fit found essentially no decay to
+        # explain -- b becomes unidentifiable at that point (optimizer just
+        # parks it at its own bound) and the "y = c + a*e^(-bx)" text
+        # renders nonsensically (a's own scientific-notation string like
+        # "2.87e-10" collides with the exponent's literal "e"). This
+        # technically "converged" (scipy returned a result, no exception),
+        # but it's not a meaningful decay fit -- e.g. already-expert users
+        # with a flat learning curve -- so it gets the same graceful
+        # flat-mean-line handling as an outright non-convergence below.
+        degenerate = fit is not None and fit[1] < 1e-6
+        if fit is None or degenerate:
             n_completed = int(completed_mask.sum())
             reason = (
-                f"only {len(trial_nums)} trials" if not censored and len(trial_nums) < 4
+                "amplitude ~0, degenerate fit" if degenerate
+                else f"only {len(trial_nums)} trials" if not censored and len(trial_nums) < 4
                 else f"only {n_completed} completed trials" if censored and n_completed < 4
                 else "fit did not converge"
             )
-            print(f"  learning_curve_{label}: {m}: {reason}, skipping curve")
+            # Graceful fallback (e.g. expert users already at asymptote, so
+            # there's little/no decay for exp_decay to fit): if there's at
+            # least one completed trial to average, draw a flat dashed line
+            # at its mean instead of leaving the mode with points but no
+            # line at all. If every trial timed out, there's nothing to
+            # average either way -- skip as before.
+            if n_completed > 0:
+                flat_mean = float(elapsed[completed_mask].mean())
+                ax.plot([1, trial_max], [flat_mean, flat_mean], "--", color=color, linewidth=2.4, zorder=3)
+                eq_by_mode[m] = f"mean = {flat_mean:.3g} s (flat, {reason})"
+                any_drawn = True
+                print(f"  learning_curve_{label}: {m}: {reason}, falling back to flat mean line")
+            else:
+                print(f"  learning_curve_{label}: {m}: {reason}, skipping curve")
             continue
         any_drawn = True
         curve_y = exp_decay(smooth_trials, *fit[:3])
@@ -2355,12 +2410,15 @@ def plot_learning_curve_figure(
     suffix: str = "",
     exclude_participants: list[str] | None = None,
     y_top: float = 94.5,
+    filename: str = "learning_curve_figure.png",
 ) -> None:
     """learning_curve_figure.png: single panel -- the pooled CENSORED
     time-to-match fit + 95% bootstrap band (draw_learning_curve_averaged_
     panel, censored=True), always on the excluded cohort passed in via
     `exclude_participants` (main() passes the P1/P2 pattern-match exclusion
-    -- see learning_curve_individual_rows).
+    -- see learning_curve_individual_rows -- the expert_learning_curve_
+    caller in main() passes None: the two expert ids are the entire cohort
+    being plotted, not novices to exclude from it).
 
     Composition only: no fit/bootstrap math is reimplemented here, the
     panel is drawn by calling the exact same function plot_learning_curve_
@@ -2373,7 +2431,9 @@ def plot_learning_curve_figure(
     `y_top` should be learning_curve_averaged_y_top(trials,
     exclude_participants=..., cap=120.0) -- the same value that would be
     used for the standalone censored_exP1P2 figure -- so this panel matches
-    that output exactly."""
+    that output exactly.
+
+    `filename` overrides the output PNG name, same as plot_modality_figure."""
     fig, ax = plt.subplots(figsize=(7.5, 5.5))
     any_drawn = draw_learning_curve_averaged_panel(
         ax, trials, censored=True, y_top=y_top,
@@ -2383,7 +2443,7 @@ def plot_learning_curve_figure(
         plt.close(fig)
         print("  learning_curve_figure: no data, skipping")
         return
-    save(fig, "learning_curve_figure.png", suffix)
+    save(fig, filename, suffix)
 
 
 def plot_noise_time(trials: list[dict], suffix: str = "") -> None:
@@ -2667,6 +2727,60 @@ def main() -> None:
         conditions_trials, participant_suffix,
         meta={"roots": conditions_roots, "paths": conditions_paths, "participant": args.participant},
     )
+
+    # expert_modality_figure.png / expert_conditions_figure.png: same two
+    # figures again, but computed from ONLY the two full expert-user runs
+    # (ELI-PRACTICE, T-PRACTICE) in the practice bin -- not the practice+real
+    # pooling conditions_figure.png normally does, and not anything from the
+    # `trials`/`conditions_trials` already loaded above for the novice
+    # figures. A wholly separate load_data() call, explicitly filtered to
+    # EXPERT_PARTICIPANT_IDS even though the practice bin currently holds
+    # only those two ids.
+    expert_root = expert_practice_root(folder)
+    print("\nExpert-reference figures (practice bin, ELI-PRACTICE + T-PRACTICE only):")
+    if expert_root is None:
+        print(f"  no practice bin found as a sibling of, or under, {folder} -- skipping")
+    else:
+        expert_paths = find_sqlite_files(expert_root)
+        expert_trials_raw, expert_preferences = load_data(expert_paths)
+        expert_trials_raw = [
+            t for t in expert_trials_raw if t["participant_id"] in EXPERT_PARTICIPANT_IDS
+        ]
+        expert_preferences = [
+            p for p in expert_preferences if p["participant_id"] in EXPERT_PARTICIPANT_IDS
+        ]
+        for experiment in ("modality", "noise", "latency", "precision", "learning_curve"):
+            rows = [t for t in expert_trials_raw if t["experiment_condition"] == experiment]
+            ids_present = sorted({t["participant_id"] for t in rows})
+            print(f"  {experiment:<10} participants={ids_present or '(none)'} trials={len(rows)}")
+
+        expert_trajectories = load_trajectories(expert_paths)
+        expert_figure_trials, expert_n_matched, expert_n_timed_out = apply_threshold_override(
+            expert_trials_raw, expert_trajectories, *FIGURE_THRESHOLD
+        )
+        print(
+            f"  re-derived expert_modality_figure at {FIGURE_THRESHOLD[0]:g}mm/{FIGURE_THRESHOLD[1]:g}deg: "
+            f"{expert_n_matched} newly matched, {expert_n_timed_out} newly timed out "
+            f"(of {len(expert_figure_trials)} trials)"
+        )
+        plot_modality_figure(
+            expert_figure_trials, expert_preferences, filename="expert_modality_figure.png",
+        )
+        plot_conditions_figure(
+            expert_trials_raw, filename="expert_conditions_figure.png",
+        )
+
+        # expert_learning_curve_figure.png: no P1/P2-style exclusion here --
+        # unlike the novice figure, the two expert ids ARE the whole cohort
+        # being plotted, not novices to filter out of it. Flat/degenerate
+        # fits are expected (experts are already at asymptote) and handled
+        # by draw_learning_curve_averaged_panel's flat-mean fallback.
+        expert_lc_y_top = learning_curve_averaged_y_top(expert_trials_raw, cap=120.0)
+        print(f"  expert_learning_curve_figure: y_top = {expert_lc_y_top:.2f}")
+        plot_learning_curve_figure(
+            expert_trials_raw, y_top=expert_lc_y_top,
+            filename="expert_learning_curve_figure.png",
+        )
 
 
 if __name__ == "__main__":

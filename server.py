@@ -456,6 +456,7 @@ def _study_blank(activity_type, frame, modality, n_trials, trial_index=None):
         "tracker_visible":             False,
         "cube_size":                   CUBE_SIZE,
         "viewpoint_pose":              None,
+        "countdown_remaining":         None,
     }
 
 
@@ -564,7 +565,13 @@ async def _new_study_handler(
                 session["prev_act_type"] = act_type
 
                 recorder   = session.get("recorder")
-                if recorder:
+                # Don't persist anything while the trial is still in its
+                # pre-countdown window (act_data["countdown_remaining"] is
+                # not None) — the trial hasn't really started yet: no
+                # trials.started_at stamp, no trajectory_samples rows, for
+                # ticks that are just the 3-2-1 counting down. See
+                # TrialActivity.step() in study/activities.py.
+                if recorder and act_data.get("countdown_remaining") is None:
                     recorder.observe_activity(
                         act_type,
                         block_data["trial_index"],
@@ -595,6 +602,7 @@ async def _new_study_handler(
                 state["elapsed"]         = act_data.get("elapsed") or 0.0
                 state["hold_progress"]   = act_data.get("hold_progress", 0.0)
                 state["timed_out"]       = act_data.get("timed_out", False)
+                state["countdown_remaining"] = act_data.get("countdown_remaining")
                 state["comp_calibrated"] = act_type in ("practice", "trial", "paused")
 
                 if modality in ("1d", "2d", "3d"):

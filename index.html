@@ -526,7 +526,7 @@
         } else if (act === "trial") {
           document.getElementById("study-trial-phase").style.display  = "block";
           if (d.trial_index !== null && d.trial_index !== undefined) {
-            window.ExperimentSession.maybeRunTrialCountdown(d.trial_index);
+            window.ExperimentSession.updateTrialCountdown(d.countdown_remaining);
             const total = d.n_trials ?? d.trial_count ?? "?";
             const label = d.target_label ? ` (${d.target_label})` : "";
             document.getElementById("trial-progress-label").textContent =

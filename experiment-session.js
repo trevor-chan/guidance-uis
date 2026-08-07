@@ -655,9 +655,14 @@
   // Full-screen, opaque, always-on-top overlay so the participant can see
   // neither the previous nor the upcoming target while it's up. Shared by all
   // three modality pages so the occlusion behavior is identical everywhere.
+  //
+  // Driven entirely by the server's countdown_remaining (see TrialActivity
+  // in study/activities.py) -- no local setTimeout timer. The server itself
+  // withholds the trial's real clock/90s-timeout start until its own 3s
+  // countdown elapses; this just displays that authoritative value every
+  // time a new message arrives, so what's on screen can never drift from
+  // when the trial actually starts.
   const COUNTDOWN_OVERLAY_ID = "trial-countdown-overlay";
-  let _countdownShownForTrial = null;
-  let _countdownBusy = false;
 
   function countdownOverlay() {
     let overlay = document.getElementById(COUNTDOWN_OVERLAY_ID);
@@ -681,36 +686,18 @@
     return overlay;
   }
 
-  function runTrialCountdown(onComplete) {
+  // Call every render tick with d.countdown_remaining (null/undefined when
+  // the trial isn't in its countdown window). Purely reflects that value --
+  // no timers, no per-trial bookkeeping, so nothing here can get out of
+  // sync with the server.
+  function updateTrialCountdown(remaining) {
     const overlay = countdownOverlay();
+    if (remaining === null || remaining === undefined || remaining <= 0) {
+      overlay.style.display = "none";
+      return;
+    }
     overlay.style.display = "flex";
-    let count = 3;
-    overlay.textContent = String(count);
-    const tick = () => {
-      count -= 1;
-      if (count <= 0) {
-        overlay.style.display = "none";
-        onComplete?.();
-        return;
-      }
-      overlay.textContent = String(count);
-      setTimeout(tick, 1000);
-    };
-    setTimeout(tick, 1000);
-  }
-
-  // Call every render tick while activity_type is "trial". No-ops unless
-  // trialIndex is one we haven't already counted down for, and guards against
-  // re-triggering from the ~30Hz stream of messages while the countdown runs.
-  function maybeRunTrialCountdown(trialIndex, onComplete) {
-    if (trialIndex === null || trialIndex === undefined) return;
-    if (trialIndex === _countdownShownForTrial || _countdownBusy) return;
-    _countdownBusy = true;
-    runTrialCountdown(() => {
-      _countdownShownForTrial = trialIndex;
-      _countdownBusy = false;
-      onComplete?.();
-    });
+    overlay.textContent = String(Math.ceil(remaining));
   }
 
   window.ExperimentSession = Object.freeze({
@@ -740,7 +727,6 @@
     applyPersistentState,
     restorePersistentSession,
     selectCondition,
-    runTrialCountdown,
-    maybeRunTrialCountdown,
+    updateTrialCountdown,
   });
 })();

@@ -65,12 +65,26 @@ class CalibrationActivity(Activity):
 
 # ── Trial ─────────────────────────────────────────────────────────────────────
 
-class TrialActivity(Activity):
-    """Wraps Trial with 1-second continuous-hold-to-register on top.
+COUNTDOWN_SECONDS = 3.0  # pre-trial 3-2-1 countdown, measured server-side (see start()/step())
 
-    Finish conditions (whichever fires first):
+
+class TrialActivity(Activity):
+    """Wraps Trial with a pre-trial countdown, then 1-second continuous-
+    hold-to-register on top.
+
+    Finish conditions (whichever fires first, both measured from the END of
+    the countdown, not from start()):
       - hold_duration (default 1 s) of continuous match → achieved=True
       - Trial's 90 s timeout                            → achieved=False
+
+    start() does NOT start Trial's clock immediately -- it only stamps when
+    the countdown began. step() reports countdown_remaining (and leaves
+    elapsed/live_pose/etc at their "nothing happening yet" defaults) until
+    COUNTDOWN_SECONDS has elapsed, then calls self._trial.start() for real on
+    that exact tick. This is the single point where the trial clock and the
+    90s timeout window both begin -- see trial.py Trial.start()/step(). The
+    countdown is timed with time.perf_counter(), the same clock Trial itself
+    uses, so there's one continuous clock source across the handoff.
 
     hold_progress (0.0–1.0) is reported every step so a renderer can show a
     fill bar without any extra bookkeeping outside this class.
@@ -89,6 +103,7 @@ class TrialActivity(Activity):
         perceived_ms: float | None = None,
         precision_linear_mm: float | None = None,
         precision_angular_deg: float | None = None,
+        countdown_seconds: float = COUNTDOWN_SECONDS,
     ) -> None:
         # angular_tol defaults to 5° — matches trial.ANGULAR_TOLERANCE.
         self._trial = Trial(fetcher, target_pose, linear_tol=linear_tol, angular_tol=angular_tol)
@@ -96,6 +111,9 @@ class TrialActivity(Activity):
         self._hold_start: float | None = None
         self._achieved = False
         self._done = False
+        self._countdown_seconds = countdown_seconds
+        self._countdown_start: float | None = None
+        self._trial_started = False
         self.label = label  # e.g. "T5" for fixed study targets; None otherwise
         # Per-trial ramp metadata for the noise/latency/precision experiments'
         # scrambled blocks (see SequenceGenerator.make_block's trial_overrides).
@@ -113,7 +131,12 @@ class TrialActivity(Activity):
         return self._trial.target_pose
 
     def start(self) -> None:
-        self._trial.start()
+        # Trial's clock is deliberately NOT started here -- only once the
+        # countdown elapses, in step() below. Re-entering start() (e.g. a
+        # pause/resume rebuild) restarts the countdown from the top, which is
+        # correct: a fresh attempt gets its own full 3-2-1.
+        self._countdown_start = time.perf_counter()
+        self._trial_started = False
         self._hold_start = None
         self._achieved = False
         self._done = False
@@ -144,8 +167,33 @@ class TrialActivity(Activity):
                 "live_pose": None,
                 "target_pose": self.target_pose.tolist(),
                 "components": None,
+                "countdown_remaining": None,
                 **self._meta(),
             }
+
+        if not self._trial_started:
+            remaining = self._countdown_seconds - (time.perf_counter() - self._countdown_start)
+            if remaining > 0:
+                return {
+                    "done": False,
+                    "achieved": False,
+                    "hold_progress": 0.0,
+                    "linear": None,
+                    "angular": None,
+                    "matched": False,
+                    "timed_out": False,
+                    "elapsed": None,
+                    "live_pose": None,
+                    "target_pose": self.target_pose.tolist(),
+                    "components": None,
+                    "countdown_remaining": remaining,
+                    **self._meta(),
+                }
+            # Countdown just finished on this tick -- start the REAL clock
+            # now, at t=0. Both the time-to-match clock and the 90s timeout
+            # window (both owned by Trial, see trial.py) begin here.
+            self._trial.start()
+            self._trial_started = True
 
         state = self._trial.step()
         now = time.monotonic()
@@ -177,6 +225,7 @@ class TrialActivity(Activity):
             "live_pose": state["live_pose"],
             "target_pose": self.target_pose.tolist(),
             "components": state["components"],
+            "countdown_remaining": None,
             **self._meta(),
         }
 

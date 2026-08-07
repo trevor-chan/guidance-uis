@@ -858,7 +858,7 @@
         document.getElementById("s2-trial").style.display = "block";
         document.getElementById("btn-2d-pause").style.display = _pausable2d ? "block" : "none";
         if (d.trial_index !== null && d.trial_index !== undefined) {
-          window.ExperimentSession.maybeRunTrialCountdown(d.trial_index);
+          window.ExperimentSession.updateTrialCountdown(d.countdown_remaining);
         }
         const total = d.n_trials ?? 3;
         const label = d.target_label ? ` (${d.target_label})` : "";
