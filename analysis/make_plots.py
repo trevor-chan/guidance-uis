@@ -1254,26 +1254,30 @@ MODALITY_SUMMARY_HEADER = [
 ]
 
 
-def write_modality_summary_csv(stats: list[dict], meta: dict, suffix: str = "") -> None:
+def write_modality_summary_csv(
+    stats: list[dict], meta: dict, suffix: str = "", filename: str = "modality_summary.csv",
+) -> None:
     if not stats:
-        print("  modality_summary: no data, skipping")
+        print(f"  {filename}: no data, skipping")
         return
     paths = meta["paths"]
     meta_lines = [
-        "# modality_summary.csv -- per-modality summary statistics backing modality_figure.png",
-        "# every value here is read from the exact same computation modality_figure.png draws from",
+        f"# {filename} -- per-modality summary statistics backing the figure it pairs with",
+        "# every value here is read from the exact same computation the figure draws from",
         "# (see modality_figure_stats in analysis/make_plots.py); the two can never disagree.",
         f"# generated: {datetime.now().astimezone().isoformat(timespec='seconds')}",
         f"# source folder: {meta['folder']}",
         f"# source .sqlite files ({len(paths)}):",
         *(f"#   {p}" for p in paths),
         f"# participant filter: {meta.get('participant') or 'all'}",
-        "# threshold: re-derived @ 10mm/10deg (FIGURE_THRESHOLD), matching modality_figure.png",
+        "# threshold: re-derived @ 10mm/10deg (FIGURE_THRESHOLD), matching the paired figure",
         "# time_median/time_q1/time_q3 are the exact box-plot quartiles rendered in the figure "
         "(matplotlib boxplot_stats, whis=1.5); time_min/time_max are each modality's raw per-trial extremes",
+        f"# time-to-match values have COUNTDOWN_OFFSET_S ({COUNTDOWN_OFFSET_S:g}s) already subtracted "
+        "from matched trials (see load_data); timed-out trials are unaffected",
     ]
     rows = [[row[col] for col in MODALITY_SUMMARY_HEADER] for row in stats]
-    write_summary_csv("modality_summary.csv", meta_lines, MODALITY_SUMMARY_HEADER, rows, suffix)
+    write_summary_csv(filename, meta_lines, MODALITY_SUMMARY_HEADER, rows, suffix)
 
 
 def plot_modality_figure(
@@ -1507,35 +1511,39 @@ CONDITIONS_SUMMARY_HEADER = [
 ]
 
 
-def write_conditions_summary_csv(stats: dict[str, list[dict]], meta: dict, suffix: str = "") -> None:
+def write_conditions_summary_csv(
+    stats: dict[str, list[dict]], meta: dict, suffix: str = "", filename: str = "conditions_summary.csv",
+) -> None:
     missing = [experiment for experiment, entries in stats.items() if not entries]
     present = [experiment for experiment in CONDITIONS_MAGNITUDE_KEYS if stats.get(experiment)]
     if not present:
-        print(f"  conditions_summary: no data for {', '.join(missing)}, skipping")
+        print(f"  {filename}: no data for {', '.join(missing)}, skipping")
         return
     if missing:
-        print(f"  conditions_summary: no data for {', '.join(missing)}, writing remaining experiments only")
+        print(f"  {filename}: no data for {', '.join(missing)}, writing remaining experiments only")
     roots = meta["roots"]
     paths = meta["paths"]
     meta_lines = [
-        "# conditions_summary.csv -- per (experiment, series, x-value) summary statistics backing conditions_figure.png",
-        "# every value here is read from the exact same computation conditions_figure.png draws from",
+        f"# {filename} -- per (experiment, series, x-value) summary statistics backing the figure it pairs with",
+        "# every value here is read from the exact same computation the figure draws from",
         "# (see conditions_figure_stats in analysis/make_plots.py); the two can never disagree.",
         f"# generated: {datetime.now().astimezone().isoformat(timespec='seconds')}",
-        "# data pooled from practice + real bins (never trash):",
+        "# data pooled from these roots (never trash):",
         *([f"#   root: {r}" for r in roots] if roots else ["#   (no practice/real bin found)"]),
         f"# source .sqlite files ({len(paths)}):",
         *(f"#   {p}" for p in paths),
         f"# participant filter: {meta.get('participant') or 'all'}",
         "# threshold: recorded as-run, NOT re-derived -- noise/latency reflect the live 5mm/5deg matching",
         "# rule those trials actually ran under; precision reflects each trial's own per-trial threshold",
+        f"# time-to-match values have COUNTDOWN_OFFSET_S ({COUNTDOWN_OFFSET_S:g}s) already subtracted "
+        "from matched trials (see load_data); timed-out trials are unaffected",
     ]
     rows = [
         [row[col] for col in CONDITIONS_SUMMARY_HEADER]
         for experiment in CONDITIONS_MAGNITUDE_KEYS
         for row in stats.get(experiment, [])
     ]
-    write_summary_csv("conditions_summary.csv", meta_lines, CONDITIONS_SUMMARY_HEADER, rows, suffix)
+    write_summary_csv(filename, meta_lines, CONDITIONS_SUMMARY_HEADER, rows, suffix)
 
 
 def plot_conditions_figure(
@@ -2797,8 +2805,22 @@ def main() -> None:
         plot_modality_figure(
             expert_figure_trials, expert_preferences, filename="expert_modality_figure.png",
         )
+        expert_meta = {
+            "paths": expert_paths, "folder": expert_root,
+            "participant": "+".join(EXPERT_PARTICIPANT_IDS),
+        }
+        write_modality_summary_csv(
+            modality_figure_stats(expert_figure_trials, expert_preferences),
+            expert_meta, filename="expert_modality_summary.csv",
+        )
+
         plot_conditions_figure(
             expert_trials_raw, filename="expert_conditions_figure.png",
+        )
+        write_conditions_summary_csv(
+            conditions_figure_stats(expert_trials_raw),
+            {"roots": [expert_root], "paths": expert_paths, "participant": "+".join(EXPERT_PARTICIPANT_IDS)},
+            filename="expert_conditions_summary.csv",
         )
 
         # expert_learning_curve_figure.png: no P1/P2-style exclusion here --
