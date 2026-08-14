@@ -2485,6 +2485,124 @@ def plot_learning_curve_figure(
     save(fig, filename, suffix)
 
 
+LEARNING_CURVE_SUMMARY_HEADER = [
+    "cohort", "modality_label", "modality_id",
+    "n_participants", "n_trials", "n_timeouts",
+    "converged", "c_asymptote", "a_amplitude", "b_rate",
+    "fitted_y_trial1", "fitted_y_trial20",
+]
+
+
+def learning_curve_cohort_stats(
+    trials: list[dict], cohort: str, exclude_participants: list[str] | None,
+) -> list[dict]:
+    """Per-mode censored-fit summary for ONE cohort (e.g. "primary" /
+    "sensitivity"), backing learning_curve_summary.csv. Uses the exact same
+    learning_curve_individual_rows / trial_arrays / fit_curve_for_mode /
+    exp_decay calls as draw_learning_curve_averaged_panel(censored=True) --
+    same data, same fit, same exclusion semantics -- just summarized as
+    fitted-parameter rows instead of drawn. `trials` must be the corrected
+    (COUNTDOWN_OFFSET_S already applied by load_data) trial list, same as
+    what's passed to plot_learning_curve_figure."""
+    rows_out = []
+    for m in COMPARE_MODES:
+        rows = learning_curve_individual_rows(trials, m, exclude_participants=exclude_participants)
+        n_participants = len({r["participant_id"] for r in rows if r["participant_id"]})
+        n_trials = len(rows)
+        if not rows:
+            rows_out.append(dict(
+                cohort=cohort, modality_label=FIGURE_LABELS[m], modality_id=m,
+                n_participants=0, n_trials=0, n_timeouts=0, converged=False,
+                c_asymptote=None, a_amplitude=None, b_rate=None,
+                fitted_y_trial1=None, fitted_y_trial20=None,
+            ))
+            continue
+        trial_nums, achieved_flags, elapsed = trial_arrays(rows)
+        n_timeouts = int((~achieved_flags).sum())
+        fit = fit_curve_for_mode(trial_nums, achieved_flags, elapsed, censored=True)
+        if fit is None:
+            rows_out.append(dict(
+                cohort=cohort, modality_label=FIGURE_LABELS[m], modality_id=m,
+                n_participants=n_participants, n_trials=n_trials, n_timeouts=n_timeouts,
+                converged=False, c_asymptote=None, a_amplitude=None, b_rate=None,
+                fitted_y_trial1=None, fitted_y_trial20=None,
+            ))
+            continue
+        c, a, b = fit[0], fit[1], fit[2]
+        rows_out.append(dict(
+            cohort=cohort, modality_label=FIGURE_LABELS[m], modality_id=m,
+            n_participants=n_participants, n_trials=n_trials, n_timeouts=n_timeouts,
+            converged=True, c_asymptote=c, a_amplitude=a, b_rate=b,
+            fitted_y_trial1=float(exp_decay(1, c, a, b)),
+            fitted_y_trial20=float(exp_decay(20, c, a, b)),
+        ))
+    return rows_out
+
+
+def write_learning_curve_summary_csv(
+    trials: list[dict],
+    primary_exclude_participants: list[str],
+    meta: dict,
+    suffix: str = "",
+    filename: str = "learning_curve_summary.csv",
+) -> None:
+    """learning_curve_summary.csv: per-mode censored exp-decay fit (y = c +
+    a*exp(-b*x)) for two cohorts, one block each --
+
+    primary: primary_exclude_participants (main() passes the P1/P2
+    pattern-match exclusion) -- the exact data/fit backing
+    learning_curve_figure.png.
+    sensitivity: no exclusion, all participants -- same fit, same censoring,
+    just the full cohort, so a reader can see whether excluding P1/P2
+    changed the fitted curve much.
+
+    `meta` = {"paths": [...], "participant": str | None}."""
+    ids_present = sorted({
+        t["participant_id"] for t in trials
+        if t["experiment_condition"] == "learning_curve" and t["participant_id"]
+    })
+    exclude_patterns = [
+        re.compile(rf"^{re.escape(token)}($|[^0-9])", re.IGNORECASE)
+        for token in primary_exclude_participants
+    ]
+    matched_ids = [pid for pid in ids_present if any(p.match(pid) for p in exclude_patterns)]
+
+    stats = (
+        learning_curve_cohort_stats(trials, "primary", primary_exclude_participants)
+        + learning_curve_cohort_stats(trials, "sensitivity", None)
+    )
+    if not any(row["n_trials"] for row in stats):
+        print(f"  {filename}: no data, skipping")
+        return
+
+    paths = meta["paths"]
+    meta_lines = [
+        f"# {filename} -- per-mode censored exponential-decay fit (y = c + a*exp(-b*x)) "
+        "summarizing learning_curve_figure.png",
+        "# every value here is read from the exact same fit (fit_curve_for_mode, censored=True) "
+        "learning_curve_figure.png draws from; the two can never disagree for the primary cohort",
+        f"# generated: {datetime.now().astimezone().isoformat(timespec='seconds')}",
+        f"# source .sqlite files ({len(paths)}):",
+        *(f"#   {p}" for p in paths),
+        f"# participant filter: {meta.get('participant') or 'all'}",
+        "# cohort=primary: excludes participant_ids pattern-matching "
+        f"{primary_exclude_participants} (see learning_curve_individual_rows) -- "
+        f"present learning_curve ids={ids_present or '(none)'}, matched/excluded={matched_ids or '(none)'}",
+        "# cohort=sensitivity: same fit, same censoring, no participant exclusion (all participants)",
+        "# censoring: right-censored at 90s (TIMEOUT_SECONDS), matching the figure -- NOT altered by "
+        "the countdown correction below",
+        "# fitted_y_trial1/fitted_y_trial20 are exp_decay(1, c, a, b) / exp_decay(20, c, a, b) -- the "
+        "curve's value at the first and last trial, so the improvement across the block is readable "
+        "without re-deriving it from c/a/b",
+        "# converged=False rows have no fit (too little data or the optimizer didn't converge); "
+        "c/a/b/fitted_y_* are blank in that case, not zero",
+        f"# time-to-match values have COUNTDOWN_OFFSET_S ({COUNTDOWN_OFFSET_S:g}s) already subtracted "
+        "from matched trials (see load_data); timed-out trials are unaffected",
+    ]
+    rows = [[row[col] for col in LEARNING_CURVE_SUMMARY_HEADER] for row in stats]
+    write_summary_csv(filename, meta_lines, LEARNING_CURVE_SUMMARY_HEADER, rows, suffix)
+
+
 def plot_noise_time(trials: list[dict], suffix: str = "") -> None:
     rows = [
         t
@@ -2760,6 +2878,10 @@ def main() -> None:
     print(f"  learning_curve_figure: shared y_top (left panel) = {lc_avg_ex_y_top:.2f}")
     plot_learning_curve_figure(
         trials, suffix, exclude_participants=lc_exclude_requested, y_top=lc_avg_ex_y_top,
+    )
+    write_learning_curve_summary_csv(
+        trials, lc_exclude_requested, meta={"paths": paths, "participant": args.participant},
+        suffix=suffix,
     )
 
     plot_conditions_figure(
